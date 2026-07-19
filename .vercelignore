@@ -1,0 +1,5 @@
+server/
+*.md
+AGENTS.md
+.agents/
+skills-lock.json
