@@ -18,10 +18,12 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
 import { downloadAttendancePdf } from '../../lib/attendancePdf';
 import AttendanceFormModal from '../../components/attendance/AttendanceFormModal';
+import { TimeDisplay, isManualTime } from '../../components/common/TimeDisplay';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { deviceApi } from '../../api/deviceApi';
 import { resolveEmployeeSchedule } from '../../lib/appSettings';
 import { importAttendanceFromDeviceLogs } from '../../lib/deviceAttendanceSync';
+import { formatDateRangeBsPdf, formatDateBsPdf } from '../../lib/dateDisplay';
 import { fetchLogsWithCache } from '../../lib/deviceLogsCache';
 import CalendarDateInput from '../../components/ui/CalendarDateInput';
 
@@ -70,11 +72,12 @@ export default function AttendancePage() {
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [draftRecords, setDraftRecords] = useState<Attendance[]>([]);
   const [saving, setSaving] = useState(false);
+  const [cloudSyncing, setCloudSyncing] = useState(false);
 
   useEffect(() => {
     (async () => {
-      hydratePersistedStores();
-      // Load saved attendance first (includes machine imports from localStorage)
+      // 1. Fast load from localStorage
+      setCloudSyncing(true);
       const [a0, e0, d0, s0, l0] = await Promise.all([
         AttendanceAPI.getAll(),
         EmployeeAPI.getAll(),
@@ -89,6 +92,19 @@ export default function AttendancePage() {
       setLeaves(l0);
       setLoading(false);
 
+      // 2. Pull cloud data (merges localStorage + cloud DB), then refresh UI
+      try {
+        await hydratePersistedStores();
+        const [aCloud, eCloud] = await Promise.all([AttendanceAPI.getAll(), EmployeeAPI.getAll()]);
+        setRecords(aCloud);
+        setEmployees(eCloud);
+      } catch {
+        // Cloud unavailable — local data is already shown
+      } finally {
+        setCloudSyncing(false);
+      }
+
+      // 3. Sync device punch logs
       try {
         const manualRows = await AttendanceAPI.getManualOverrides();
         const { logs } = await fetchLogsWithCache(() => deviceApi.getLogs());
@@ -293,15 +309,29 @@ export default function AttendancePage() {
     {
       accessorKey: 'checkIn',
       header: 'Check In',
-      cell: ({ getValue }) => (
-        <span className="text-sm font-mono text-slate-700 dark:text-slate-300">{formatTime(getValue() as string)}</span>
+      cell: ({ row }) => (
+        <span className="text-sm font-mono text-slate-500">
+          <TimeDisplay
+            time={row.original.manualCheckIn || row.original.checkIn}
+            isManual={isManualTime(row.original, 'in')}
+            record={row.original}
+            type="in"
+          />
+        </span>
       ),
     },
     {
       accessorKey: 'checkOut',
       header: 'Check Out',
-      cell: ({ getValue }) => (
-        <span className="text-sm font-mono text-slate-700 dark:text-slate-300">{formatTime(getValue() as string)}</span>
+      cell: ({ row }) => (
+        <span className="text-sm font-mono text-slate-500">
+          <TimeDisplay
+            time={row.original.manualCheckOut || row.original.checkOut}
+            isManual={isManualTime(row.original, 'out')}
+            record={row.original}
+            type="out"
+          />
+        </span>
       ),
     },
     {
@@ -420,6 +450,8 @@ export default function AttendancePage() {
                   employeeId: editRecord.employeeId,
                   checkIn: data.checkIn || undefined,
                   checkOut: data.checkOut || undefined,
+                  manualCheckIn: data.manualCheckIn || undefined,
+                  manualCheckOut: data.manualCheckOut || undefined,
                   manualOverride: true,
                   updatedAt: new Date().toISOString(),
                 } as Attendance
@@ -438,6 +470,15 @@ export default function AttendancePage() {
           const patch = {
             checkIn: data.checkIn || undefined,
             checkOut: data.checkOut || undefined,
+            manualCheckIn: data.manualCheckIn || undefined,
+            manualCheckOut: data.manualCheckOut || undefined,
+            // Per-field edit markers drive the red star on each time
+            checkInEdited: data.checkInEdited,
+            checkOutEdited: data.checkOutEdited,
+            checkInEditedBy: data.checkInEditedBy,
+            checkOutEditedBy: data.checkOutEditedBy,
+            checkInEditedAt: data.checkInEditedAt,
+            checkOutEditedAt: data.checkOutEditedAt,
             breakMinutes: data.breakMinutes,
             workingHours: data.workingHours,
             lateMinutes: data.lateMinutes,
@@ -489,6 +530,14 @@ export default function AttendancePage() {
         shiftId: data.shiftId!,
         checkIn: data.checkIn || undefined,
         checkOut: data.checkOut || undefined,
+        manualCheckIn: data.manualCheckIn || undefined,
+        manualCheckOut: data.manualCheckOut || undefined,
+        checkInEdited: data.checkInEdited,
+        checkOutEdited: data.checkOutEdited,
+        checkInEditedBy: data.checkInEditedBy,
+        checkOutEditedBy: data.checkOutEditedBy,
+        checkInEditedAt: data.checkInEditedAt,
+        checkOutEditedAt: data.checkOutEditedAt,
         breakMinutes: data.breakMinutes ?? 60,
         workingHours: data.workingHours ?? 0,
         overtime: data.overtime ?? 0,
@@ -614,10 +663,9 @@ export default function AttendancePage() {
   })();
 
   const printDateLabel = (() => {
-    if (dateFrom && dateTo && dateFrom === dateTo) return formatDate(dateFrom);
-    if (dateFrom && dateTo) return `${formatDate(dateFrom)} – ${formatDate(dateTo)}`;
-    if (dateFrom) return formatDate(dateFrom);
-    if (dateTo) return formatDate(dateTo);
+    if (dateFrom && dateTo) return formatDateRangeBsPdf(dateFrom, dateTo);
+    if (dateFrom) return formatDateBsPdf(dateFrom);
+    if (dateTo) return formatDateBsPdf(dateTo);
     return '—';
   })();
 
@@ -633,7 +681,6 @@ export default function AttendancePage() {
       { employees: empMap, departments: deptMap, shifts: shiftMap },
       {
         employeeName: printEmployeeName,
-        monthLabel: printMonthLabel,
         dateLabel: printDateLabel,
         fileName: `attendance-${safeName}-${dateFrom}-to-${dateTo}.pdf`,
       }
@@ -679,7 +726,15 @@ export default function AttendancePage() {
       <div className="flex items-center justify-between no-print">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Attendance</h1>
-          <p className="text-sm text-slate-500 mt-0.5">{filtered.length} records</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-sm text-slate-500">{filtered.length} records</p>
+            {cloudSyncing && (
+              <span className="flex items-center gap-1 text-xs text-primary-500 font-medium animate-pulse">
+                <RefreshCw size={11} className="animate-spin" />
+                Syncing from cloud…
+              </span>
+            )}
+          </div>
         </div>
         <button onClick={() => { setEditRecord(null); setShowForm(true); }} className="btn-primary">
           <Plus size={16} /> Add Attendance

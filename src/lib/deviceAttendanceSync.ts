@@ -4,71 +4,38 @@ import type { AttendanceLogEntry } from '../types/device';
 import { getAppSettings, resolveEmployeeSchedule } from './appSettings';
 import { upsertEmployeesFromDeviceLogs } from './deviceEmployeeSync';
 import { saveDeviceLogsCache } from './deviceLogsCache';
-
-function toLocalDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function toLocalHm(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '00:00';
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
+import { punchCalendarDate, punchClockHm } from './punchTime';
 
 type TimedPunch = { time: string; checkType: string };
 
 /**
- * Pair punches into check-in / check-out using separate duplicate windows.
- * - First punch = check-in; punches within check-in window are ignored.
- * - First punch after check-in window = check-out.
- * - Later punches within check-out window keep the first check-out;
- *   a punch after the check-out window updates check-out (last session).
+ * Pair punches into check-in / check-out.
+ * - Earliest punch of the day = Check In
+ * - Latest punch of the day (if >= 1 min after Check In) = Check Out
  */
 function pairCheckInOut(
   sorted: TimedPunch[],
-  checkInWindowMinutes: number,
-  checkOutWindowMinutes: number,
+  _checkInWindowMinutes: number,
+  _checkOutWindowMinutes: number,
 ): { checkIn?: TimedPunch; checkOut?: TimedPunch } {
   if (!sorted.length) return {};
 
-  const inWindowMs = Math.max(0, checkInWindowMinutes) * 60_000;
-  const outWindowMs = Math.max(0, checkOutWindowMinutes) * 60_000;
+  const validPunches = sorted
+    .map((p) => ({ punch: p, ms: new Date(p.time).getTime() }))
+    .filter((p) => !Number.isNaN(p.ms))
+    .sort((a, b) => a.ms - b.ms);
 
-  const labeledIn = sorted.find((p) => p.checkType === 'check_in');
-  const labeledOut = [...sorted].reverse().find((p) => p.checkType === 'check_out');
-  if (labeledIn || labeledOut) {
-    return {
-      checkIn: labeledIn ?? sorted[0],
-      checkOut: labeledOut,
-    };
-  }
+  if (!validPunches.length) return {};
 
-  const checkIn = sorted[0];
-  const checkInAt = new Date(checkIn.time).getTime();
+  const checkIn = validPunches[0].punch;
+
   let checkOut: TimedPunch | undefined;
-
-  for (let i = 1; i < sorted.length; i++) {
-    const punch = sorted[i];
-    const at = new Date(punch.time).getTime();
-    if (Number.isNaN(at) || Number.isNaN(checkInAt)) continue;
-
-    if (!checkOut) {
-      if (at - checkInAt >= inWindowMs) checkOut = punch;
-      continue;
+  if (validPunches.length > 1) {
+    const last = validPunches[validPunches.length - 1];
+    // Check out is the last punch of the day (if at least 1 minute after check-in)
+    if (last.ms - validPunches[0].ms >= 60_000) {
+      checkOut = last.punch;
     }
-
-    const outAt = new Date(checkOut.time).getTime();
-    if (Number.isNaN(outAt)) {
-      checkOut = punch;
-      continue;
-    }
-    // Within check-out window → keep first check-out; after window → new check-out
-    if (at - outAt >= outWindowMs) checkOut = punch;
   }
 
   return { checkIn, checkOut };
@@ -76,12 +43,7 @@ function pairCheckInOut(
 
 /**
  * Import device attendance logs into the Attendance page store.
- *
- * Rules (from Settings → Attendance Rules):
- * - Duplicate check-ins within the check-in window keep the first check-in.
- * - Duplicate check-outs within the check-out window keep the first check-out.
- * - A single punch (morning or afternoon) with no later check-out → half_day
- *   with half of that day’s expected office hours.
+ * Dates/times use Asia/Kathmandu so they match Device Settings display.
  */
 export async function importAttendanceFromDeviceLogs(
   logs: AttendanceLogEntry[],
@@ -89,7 +51,18 @@ export async function importAttendanceFromDeviceLogs(
   if (logs.length) {
     saveDeviceLogsCache(logs);
   }
-  const employees = await upsertEmployeesFromDeviceLogs(logs);
+
+  const [employeesCount, allEmps] = await Promise.all([
+    upsertEmployeesFromDeviceLogs(logs),
+    EmployeeAPI.getAll(),
+  ]);
+
+  const empMap = new Map<string, (typeof allEmps)[0]>();
+  for (const e of allEmps) {
+    empMap.set(e.id, e);
+    empMap.set(e.employeeId, e);
+  }
+
   const rules = getAppSettings().attendanceRules;
   const checkInWindowMins = rules.duplicatePunchWindowMinutes ?? 10;
   const checkOutWindowMins = rules.duplicateCheckOutWindowMinutes ?? checkInWindowMins;
@@ -100,14 +73,16 @@ export async function importAttendanceFromDeviceLogs(
   for (const log of logs) {
     const employeeId = String(log.employeeId ?? '').trim();
     if (!employeeId || employeeId === '—' || employeeId.toLowerCase() === 'unknown') continue;
-    const date = toLocalDate(log.time);
+    const date = punchCalendarDate(log.time);
+    if (!date) continue;
     const key = `${employeeId}|${date}`;
     const existing = groups.get(key) ?? { employeeId, date, punches: [] };
     existing.punches.push({ time: log.time, checkType: String(log.checkType ?? 'punch') });
     groups.set(key, existing);
   }
 
-  let attendance = 0;
+  const upsertTasks: Array<Promise<unknown>> = [];
+
   for (const group of groups.values()) {
     const sorted = [...group.punches].sort(
       (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
@@ -115,8 +90,8 @@ export async function importAttendanceFromDeviceLogs(
     if (!sorted.length) continue;
 
     const paired = pairCheckInOut(sorted, checkInWindowMins, checkOutWindowMins);
-    let checkIn = paired.checkIn ? toLocalHm(paired.checkIn.time) : undefined;
-    let checkOut = paired.checkOut ? toLocalHm(paired.checkOut.time) : undefined;
+    let checkIn = paired.checkIn ? punchClockHm(paired.checkIn.time) : undefined;
+    let checkOut = paired.checkOut ? punchClockHm(paired.checkOut.time) : undefined;
 
     if (checkIn && checkOut && checkIn === checkOut) {
       checkOut = undefined;
@@ -125,25 +100,34 @@ export async function importAttendanceFromDeviceLogs(
     let status: AttendanceStatus = 'present';
     let workingHours: number | undefined;
 
-    if (!checkOut && checkIn && halfDayEnabled) {
+    if (checkIn && checkOut) {
+      const [hi, mi] = checkIn.split(':').map(Number);
+      const [ho, mo] = checkOut.split(':').map(Number);
+      if (!Number.isNaN(hi) && !Number.isNaN(ho)) {
+        workingHours = Math.max(0, Math.round(((ho * 60 + mo - (hi * 60 + mi)) / 60) * 100) / 100);
+      }
+    } else if (!checkOut && checkIn && halfDayEnabled) {
       status = 'half_day';
       const schedule = resolveEmployeeSchedule(group.employeeId, undefined, [], group.date);
       workingHours = Math.round((schedule.dayHours / 2) * 100) / 100;
     }
 
-    const emp = await EmployeeAPI.getById(group.employeeId);
-    await AttendanceAPI.upsertFromDevice({
-      employeeId: group.employeeId,
-      departmentId: emp?.departmentId ?? 'd0',
-      shiftId: emp?.shiftId ?? 's1',
-      date: group.date,
-      checkIn,
-      checkOut,
-      status,
-      workingHours,
-    });
-    attendance += 1;
+    const emp = empMap.get(group.employeeId);
+    upsertTasks.push(
+      AttendanceAPI.upsertFromDevice({
+        employeeId: group.employeeId,
+        departmentId: emp?.departmentId ?? 'd0',
+        shiftId: emp?.shiftId ?? 's1',
+        date: group.date,
+        checkIn,
+        checkOut,
+        status,
+        workingHours,
+      }),
+    );
   }
 
-  return { employees, attendance };
+  await Promise.all(upsertTasks);
+
+  return { employees: employeesCount, attendance: upsertTasks.length };
 }

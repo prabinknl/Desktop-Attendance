@@ -181,6 +181,27 @@ export function getBsMonthDayCount(year: number, month1to12: number): number {
   return 30;
 }
 
+/**
+ * PDF-safe Nepali (BS) date — Latin digits/month names so jsPDF Helvetica can render them.
+ * Example: `01 Asar 2083`
+ */
+export function formatDateBsPdf(date: string | Date): string {
+  const d = parseInputDate(typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? `${date}T12:00:00`
+    : date);
+  if (!d) return '—';
+  const bs = NepaliDate.fromAD(d).getBS();
+  const day = String(bs.date).padStart(2, '0');
+  return `${day} ${BS_MONTHS_EN[bs.month]} ${bs.year}`;
+}
+
+/** PDF-safe BS range, e.g. `01 Asar 2083 – 32 Asar 2083`. */
+export function formatDateRangeBsPdf(from: string, to: string): string {
+  const a = formatDateBsPdf(from);
+  const b = formatDateBsPdf(to);
+  return a === b ? a : `${a} – ${b}`;
+}
+
 export const BS_MONTH_OPTIONS = BS_MONTHS_EN.map((label, i) => ({
   value: i + 1,
   label: `${String(i + 1).padStart(2, '0')} · ${label}`,

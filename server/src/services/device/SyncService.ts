@@ -7,6 +7,7 @@ import {
 import { isMemoryMode, memoryStore } from '../../db/memoryStore.js';
 import { query } from '../../db/pool.js';
 import { logDeviceAction } from './deviceLogger.js';
+import { isDeviceUnreachableError } from './HikvisionService.js';
 import type { DeviceAttendanceEvent, SyncResult } from '../../types/index.js';
 
 /** Overlap window so events near the last sync boundary are not missed. */
@@ -28,13 +29,21 @@ const SYNC_OVERLAP_MS = 2 * 60 * 1000;
  * without this rule, and we never fabricate employee identities.
  */
 const ATTENDANCE_RULE = 'FIRST_LAST_PUNCH' as const;
+const ATTENDANCE_TZ = 'Asia/Kathmandu';
 
-function utcDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+/** Civil calendar day in Nepal — must match Device Settings / daily report. */
+function localDateStr(d: Date): string {
+  return d.toLocaleDateString('en-CA', { timeZone: ATTENDANCE_TZ });
 }
 
-function utcTimeStr(d: Date): string {
-  return d.toISOString().slice(11, 19);
+function localTimeStr(d: Date): string {
+  return d.toLocaleTimeString('en-GB', {
+    timeZone: ATTENDANCE_TZ,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 async function persistEvent(
@@ -106,8 +115,8 @@ async function persistEvent(
 }
 
 async function applyAttendanceRule(deviceId: string, event: DeviceAttendanceEvent): Promise<void> {
-  const dateStr = utcDateStr(event.eventTime);
-  const timeStr = utcTimeStr(event.eventTime);
+  const dateStr = localDateStr(event.eventTime);
+  const timeStr = localTimeStr(event.eventTime);
 
   if (event.checkType === 'check_in') {
     await query(
@@ -152,7 +161,7 @@ async function applyAttendanceRule(deviceId: string, event: DeviceAttendanceEven
          source = 'hikvision-device',
          source_device_id = EXCLUDED.source_device_id,
          updated_at = NOW()`,
-      [event.employeeId, dateStr, timeStr, deviceId, `rule=${ATTENDANCE_RULE}`],
+      [event.employeeId, dateStr, timeStr, deviceId, null],
     );
   } else {
     await query(
@@ -163,7 +172,7 @@ async function applyAttendanceRule(deviceId: string, event: DeviceAttendanceEven
          source = 'hikvision-device',
          source_device_id = EXCLUDED.source_device_id,
          updated_at = NOW()`,
-      [event.employeeId, dateStr, timeStr, deviceId, `rule=${ATTENDANCE_RULE}`],
+      [event.employeeId, dateStr, timeStr, deviceId, null],
     );
   }
 }
@@ -173,14 +182,29 @@ export interface SyncOptions {
   endTime?: Date;
 }
 
+/** Serialize syncs so an offline device is probed once, not in parallel storms. */
+let syncChain: Promise<unknown> = Promise.resolve();
+
 export async function syncDeviceAttendance(options: SyncOptions = {}): Promise<SyncResult> {
+  const run = syncChain.then(
+    () => runSyncDeviceAttendance(options),
+    () => runSyncDeviceAttendance(options),
+  );
+  syncChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function runSyncDeviceAttendance(options: SyncOptions = {}): Promise<SyncResult> {
   const device = await getActiveDeviceRecord();
   if (!device) throw new Error('No device configured');
 
   await updateDeviceStatus(device.id, 'syncing');
 
   const rangeEnd = options.endTime ?? new Date();
-  let rangeStart =
+  const rangeStart =
     options.startTime ??
     (device.last_sync
       ? new Date(new Date(device.last_sync).getTime() - SYNC_OVERLAP_MS)
@@ -202,14 +226,11 @@ export async function syncDeviceAttendance(options: SyncOptions = {}): Promise<S
     }
 
     const lastEvent = [...events].sort((a, b) => b.eventTime.getTime() - a.eventTime.getTime())[0];
-    const info = await adapter.getDeviceInfo().catch(() => null);
 
+    // Skip getDeviceInfo on every sync — that extra ISAPI round-trip slowed "Get records".
     await updateDeviceMeta(device.id, {
       lastSync: new Date(),
       lastAttendanceReceived: lastEvent?.eventTime,
-      deviceTime: info?.deviceTime,
-      model: info?.model,
-      macAddress: info?.macAddress,
       status: 'online',
     });
 
@@ -232,8 +253,11 @@ export async function syncDeviceAttendance(options: SyncOptions = {}): Promise<S
       rangeEnd: rangeEnd.toISOString(),
     };
   } catch (err) {
-    // Keep previous connectivity — a sync/query failure is not a disconnect
-    await updateDeviceStatus(device.id, device.status === 'syncing' ? 'online' : device.status);
+    const offline = isDeviceUnreachableError(err);
+    await updateDeviceStatus(
+      device.id,
+      offline ? 'offline' : device.status === 'syncing' ? 'online' : device.status,
+    );
     logDeviceAction({
       ip: device.ip_address,
       action: 'sync',

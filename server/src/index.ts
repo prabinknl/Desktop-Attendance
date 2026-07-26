@@ -3,6 +3,7 @@ import { env } from './config/env.js';
 import { runMigrations } from './db/migrate.js';
 import { setMemoryMode } from './models/DeviceModel.js';
 import { refreshSyncScheduler, startSyncSettingsWatcher } from './services/device/BackgroundSyncService.js';
+import { autoReconnectDevice } from './services/device/AutoReconnectService.js';
 
 async function start() {
   try {
@@ -16,6 +17,9 @@ async function start() {
 
   await refreshSyncScheduler();
   startSyncSettingsWatcher();
+
+  // Auto-reconnect saved attendance machine on startup (if network-reachable)
+  autoReconnectDevice();
 
   app.listen(env.port, () => {
     console.log(`[Server] API listening on http://localhost:${env.port}`);

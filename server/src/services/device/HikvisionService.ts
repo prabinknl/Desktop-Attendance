@@ -1,5 +1,6 @@
 import http from 'http';
 import https from 'https';
+import net from 'net';
 import crypto from 'crypto';
 import type { IDeviceAdapter, DeviceConnectionConfig } from './IDeviceAdapter.js';
 import { logDeviceAction } from './deviceLogger.js';
@@ -9,10 +10,67 @@ import type {
   DeviceInfo,
 } from '../../types/index.js';
 
-const REQUEST_TIMEOUT_MS = 15_000;
+const REQUEST_TIMEOUT_MS = 12_000;
+/** Fast TCP check before any AcsEvent variant probing. */
+const REACHABILITY_TIMEOUT_MS = 1_500;
 /** Many terminals cap AcsEvent maxResults at 10–30; keep pages small for compatibility. */
 const PAGE_SIZE = 20;
 const MAX_PAGES = 100;
+
+/** True when the physical device is offline / unreachable (do not probe more variants). */
+export function isDeviceUnreachableError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: string; message?: string };
+  if (e.code === 'DEVICE_UNREACHABLE') return true;
+  const msg = String(e.message ?? '');
+  if (/Request timeout|did not respond/i.test(msg)) return true;
+  if (
+    e.code === 'ECONNREFUSED' ||
+    e.code === 'ENOTFOUND' ||
+    e.code === 'EHOSTUNREACH' ||
+    e.code === 'ENETUNREACH' ||
+    e.code === 'ETIMEDOUT' ||
+    e.code === 'ECONNRESET' ||
+    e.code === 'EPIPE'
+  ) {
+    return true;
+  }
+  return /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|ECONNRESET/i.test(msg);
+}
+
+function deviceUnreachableError(message: string, cause?: unknown): Error {
+  return Object.assign(new Error(message), {
+    code: 'DEVICE_UNREACHABLE' as const,
+    cause,
+  });
+}
+
+/** Quick TCP connect — fails in ~1.5s when the machine is off the network. */
+function probeTcpPort(host: string, port: number, timeoutMs = REACHABILITY_TIMEOUT_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, host);
+  });
+}
+
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 4, keepAliveMsecs: 30_000 });
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 4,
+  keepAliveMsecs: 30_000,
+  rejectUnauthorized: false,
+});
 
 /** Parse WWW-Authenticate header for digest auth parameters. */
 function parseDigestHeader(header: string): Record<string, string> {
@@ -34,6 +92,12 @@ function pickWwwAuthenticate(headers: http.IncomingHttpHeaders): string | undefi
 
 type DigestEncoding = 'utf8' | 'latin1';
 type DigestAlgMode = 'omit' | 'raw' | 'quoted';
+
+/** Cache which Digest auth variant works per device so every ISAPI call is not a multi-try probe. */
+const digestVariantCache = new Map<
+  string,
+  { encoding: DigestEncoding; algorithmMode: DigestAlgMode; uriMode: 'path' | 'absolute'; label: string }
+>();
 
 /** Build digest authorization header (MD5 / MD5-sess). */
 function buildDigestAuth(
@@ -124,9 +188,10 @@ function rawIsapiRequest(
       path: apiPath,
       method,
       timeout: REQUEST_TIMEOUT_MS,
+      agent: useHttps ? httpsAgent : httpAgent,
       headers: {
         Accept: 'application/json, application/xml, */*',
-        Connection: 'close',
+        Connection: 'keep-alive',
         ...(body
           ? { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(body) }
           : {}),
@@ -144,10 +209,12 @@ function rawIsapiRequest(
         resolve({ status: res.statusCode ?? 0, body: data, headers: res.headers }),
       );
     });
-    req.on('error', reject);
+    req.on('error', (err) => {
+      reject(deviceUnreachableError(err.message || 'Device network error', err));
+    });
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error('Request timeout — device did not respond'));
+      reject(deviceUnreachableError('Request timeout — device did not respond'));
     });
     if (body) req.write(body);
     req.end();
@@ -168,6 +235,7 @@ async function isapiRequest(
   const start = Date.now();
   const username = String(config.username ?? '').trim() || 'admin';
   const password = String(config.password ?? '');
+  const cacheKey = `${config.ipAddress}:${config.port}`;
 
   let response = await rawIsapiRequest(config, method, apiPath, undefined, body, contentType);
 
@@ -188,16 +256,47 @@ async function isapiRequest(
       encoding: DigestEncoding;
       algorithmMode: DigestAlgMode;
       uri: string;
+      uriMode: 'path' | 'absolute';
     }> = [
-      { label: 'digest-utf8-omit-alg', encoding: 'utf8', algorithmMode: 'omit', uri: apiPath },
-      { label: 'digest-utf8-raw-alg', encoding: 'utf8', algorithmMode: 'raw', uri: apiPath },
-      { label: 'digest-latin1-omit-alg', encoding: 'latin1', algorithmMode: 'omit', uri: apiPath },
-      { label: 'digest-utf8-abs-uri', encoding: 'utf8', algorithmMode: 'omit', uri: absoluteUri },
-      { label: 'digest-utf8-quoted-alg', encoding: 'utf8', algorithmMode: 'quoted', uri: apiPath },
+      { label: 'digest-utf8-omit-alg', encoding: 'utf8', algorithmMode: 'omit', uri: apiPath, uriMode: 'path' },
+      { label: 'digest-utf8-raw-alg', encoding: 'utf8', algorithmMode: 'raw', uri: apiPath, uriMode: 'path' },
+      { label: 'digest-latin1-omit-alg', encoding: 'latin1', algorithmMode: 'omit', uri: apiPath, uriMode: 'path' },
+      { label: 'digest-utf8-abs-uri', encoding: 'utf8', algorithmMode: 'omit', uri: absoluteUri, uriMode: 'absolute' },
+      { label: 'digest-utf8-quoted-alg', encoding: 'utf8', algorithmMode: 'quoted', uri: apiPath, uriMode: 'path' },
     ];
 
+    const tryDigest = async (
+      variant: (typeof digestVariants)[number],
+      challengeHeader: string,
+    ): Promise<RequestResult> => {
+      const params = parseDigestHeader(challengeHeader);
+      const digest = buildDigestAuth(method, variant.uri, username, password, params, {
+        encoding: variant.encoding,
+        algorithmMode: variant.algorithmMode,
+      });
+      return rawIsapiRequest(config, method, apiPath, digest, body, contentType);
+    };
+
     if (/digest/i.test(firstChallenge)) {
+      const cached = digestVariantCache.get(cacheKey);
+      if (cached) {
+        const cachedVariant =
+          digestVariants.find((v) => v.label === cached.label) ??
+          ({
+            label: cached.label,
+            encoding: cached.encoding,
+            algorithmMode: cached.algorithmMode,
+            uri: cached.uriMode === 'absolute' ? absoluteUri : apiPath,
+            uriMode: cached.uriMode,
+          } as (typeof digestVariants)[number]);
+        response = await tryDigest(cachedVariant, firstChallenge);
+        if (response.status !== 401) {
+          return { ...response, latencyMs: Date.now() - start };
+        }
+      }
+
       for (const variant of digestVariants) {
+        if (cached?.label === variant.label) continue;
         const challengeRes = await rawIsapiRequest(config, method, apiPath, undefined, body, contentType);
         if (challengeRes.status !== 401) {
           response = challengeRes;
@@ -205,13 +304,14 @@ async function isapiRequest(
         }
         const challenge = pickWwwAuthenticate(challengeRes.headers);
         if (!challenge || !/digest/i.test(challenge)) break;
-        const params = parseDigestHeader(challenge);
-        const digest = buildDigestAuth(method, variant.uri, username, password, params, {
-          encoding: variant.encoding,
-          algorithmMode: variant.algorithmMode,
-        });
-        response = await rawIsapiRequest(config, method, apiPath, digest, body, contentType);
+        response = await tryDigest(variant, challenge);
         if (response.status !== 401) {
+          digestVariantCache.set(cacheKey, {
+            encoding: variant.encoding,
+            algorithmMode: variant.algorithmMode,
+            uriMode: variant.uriMode,
+            label: variant.label,
+          });
           logDeviceAction({
             ip: config.ipAddress,
             action: 'isapiAuth',
@@ -243,6 +343,7 @@ async function isapiRequest(
     }
 
     if (response.status === 401) {
+      digestVariantCache.delete(cacheKey);
       throw Object.assign(
         new Error(
           'Authentication failed — invalid username or password. ' +
@@ -338,21 +439,44 @@ function extractIsapiError(body: string): string | undefined {
 function parseDeviceTime(value?: string): Date | undefined {
   if (!value) return undefined;
   // Hikvision localTime often looks like 2026-07-15T14:30:00+05:45 or without offset
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const normalized = (value.includes('T') ? value : value.replace(' ', 'T')).trim();
+
+  // Explicit timezone / Z — trust the device string
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(normalized)) {
+    const d = new Date(normalized);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  }
+
+  // No timezone: device wall-clock in Nepal (attendance machines are local).
+  // Parsing as UTC on the server previously shifted punches onto the wrong BS day.
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(normalized);
+  if (m) {
+    const withOffset = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] ?? '00'}+05:45`;
+    const d = new Date(withOffset);
+    return Number.isNaN(d.getTime()) ? undefined : d;
+  }
+
   const d = new Date(normalized);
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
 /**
  * Map machine attendanceStatus to check type.
- * Only returns check_in/check_out when the device itself supplies that status.
- * Otherwise returns 'punch' — never invent alternating in/out.
+ * Hikvision ISAPI uses strings (checkIn/checkOut/…) or numeric statusValue:
+ * 0=checkIn, 1=checkOut, 2=breakOut, 3=breakIn, 4=overtimeIn, 5=overTimeOut.
+ * Never treat bare "1" as check-in — that dropped morning punches when evening was "1".
  */
 function mapAttendanceStatus(status?: string | number): DeviceAttendanceEvent['checkType'] {
   if (status === undefined || status === null || status === '') return 'punch';
   const s = String(status).toLowerCase().trim();
+  if (s === 'undefined' || s === 'unknown') return 'punch';
+
+  // Numeric attendanceStatusValue (Hikvision T&A)
+  if (s === '0') return 'check_in';
+  if (s === '1') return 'check_out';
+  if (s === '2' || s === '3' || s === '4' || s === '5') return 'punch';
+
   if (
-    s === '1' ||
     s === 'checkin' ||
     s === 'check_in' ||
     s.includes('checkin') ||
@@ -362,7 +486,6 @@ function mapAttendanceStatus(status?: string | number): DeviceAttendanceEvent['c
     return 'check_in';
   }
   if (
-    s === '2' ||
     s === 'checkout' ||
     s === 'check_out' ||
     s.includes('checkout') ||
@@ -603,11 +726,27 @@ export class HikvisionService implements IDeviceAdapter {
     const end = until ?? new Date();
     const all: DeviceAttendanceEvent[] = [];
 
+    // Fail fast when the machine is off the LAN — never walk AcsEvent variants.
+    const reachable = await probeTcpPort(this.config.ipAddress, this.config.port);
+    if (!reachable) {
+      const err = deviceUnreachableError(
+        `Device ${this.config.ipAddress}:${this.config.port} is not reachable on the network`,
+      );
+      logDeviceAction({
+        ip: this.config.ipAddress,
+        action: 'syncAttendance',
+        result: 'error',
+        message: err.message,
+      });
+      throw err;
+    }
+
     if (!this.deviceSerial) {
       try {
         const info = await this.getDeviceInfo();
         this.deviceSerial = info.serialNumber;
-      } catch {
+      } catch (err) {
+        if (isDeviceUnreachableError(err)) throw err;
         // continue without serial
       }
     }
@@ -846,6 +985,8 @@ export class HikvisionService implements IDeviceAdapter {
           status: 0,
           error: err instanceof Error ? err.message : 'request failed',
         });
+        // Device offline — stop probing variants
+        if (isDeviceUnreachableError(err)) break;
       }
     }
     return results;
@@ -858,10 +999,11 @@ export class HikvisionService implements IDeviceAdapter {
   ): Promise<{ events: DeviceAttendanceEvent[]; totalMatches?: number; responseStatus?: string }> {
     const attempts = this.buildAcsAttempts(start, end, position);
 
-    // Prefer the strategy that already worked for this session
+    // Prefer the strategy that already worked for this session — try only that first.
     const ordered = this.acsEventStrategy
       ? [
           ...attempts.filter((a) => a.name === this.acsEventStrategy!.name),
+          // Fall back only if the known shape fails (firmware change / stale cache)
           ...attempts.filter((a) => a.name !== this.acsEventStrategy!.name),
         ]
       : attempts;
@@ -869,6 +1011,7 @@ export class HikvisionService implements IDeviceAdapter {
     let lastStatus = 0;
     let lastBody = '';
     let lastName = '';
+    const preferredName = this.acsEventStrategy?.name;
 
     for (const attempt of ordered) {
       try {
@@ -917,14 +1060,45 @@ export class HikvisionService implements IDeviceAdapter {
           status: res.status,
           message: `variant=${attempt.name} ${extractIsapiError(res.body) ?? ''}`.trim(),
         });
+
+        // Known-good strategy failed — clear it and continue probing once.
+        if (preferredName && attempt.name === preferredName) {
+          this.acsEventStrategy = undefined;
+        } else if (preferredName && attempt.name !== preferredName) {
+          // After a failed preferred attempt we already cleared; keep probing.
+        } else if (!preferredName && lastStatus >= 500) {
+          // Device error — don't burn through every variant on 5xx
+          break;
+        }
       } catch (err) {
         if ((err as { code?: string }).code === 'AUTH_FAILED') throw err;
+
+        // Device offline / timeout — stop immediately (do not walk every variant).
+        if (isDeviceUnreachableError(err)) {
+          this.acsEventStrategy = undefined;
+          logDeviceAction({
+            ip: this.config.ipAddress,
+            action: 'AcsEvent',
+            result: 'error',
+            message: `device unreachable — stopped after variant=${attempt.name}`,
+          });
+          throw deviceUnreachableError(
+            err instanceof Error
+              ? err.message
+              : 'Device is not reachable on the network',
+            err,
+          );
+        }
+
         logDeviceAction({
           ip: this.config.ipAddress,
           action: 'AcsEvent',
           result: 'error',
           message: `variant=${attempt.name} ${err instanceof Error ? err.message : 'request failed'}`,
         });
+        if (preferredName && attempt.name === preferredName) {
+          this.acsEventStrategy = undefined;
+        }
       }
     }
 

@@ -4,8 +4,9 @@ import { motion } from 'framer-motion';
 import {
   Users, UserCheck, UserX, Clock, CalendarOff, TrendingUp,
   Plus, ClipboardList, CheckSquare, FileText, ArrowRight,
-  AlertCircle
+  AlertCircle, UserPlus,
 } from 'lucide-react';
+import InviteModal from '../../components/InviteModal';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -16,6 +17,7 @@ import type { DashboardStats } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDate, formatTime, attendanceStatusLabel, cn } from '../../lib/utils';
+import { TimeDisplay, isManualTime } from '../../components/common/TimeDisplay';
 
 const pieColors = ['#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4'];
 
@@ -56,6 +58,7 @@ export default function DashboardPage() {
   const [recentAtt, setRecentAtt] = useState<any[]>([]);
   const [lateEmployees, setLateEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
   const upcomingHolidays = mockHolidays.filter(h => h.date >= today).slice(0, 5);
@@ -141,6 +144,15 @@ export default function DashboardPage() {
               <span className="hidden xl:inline">{a.label}</span>
             </button>
           ))}
+          {user?.role === 'admin' && (
+            <button
+              onClick={() => setInviteOpen(true)}
+              className="btn bg-indigo-500 hover:bg-indigo-600 text-white text-xs px-3 py-2 flex items-center gap-1.5"
+            >
+              <UserPlus size={14} />
+              <span className="hidden xl:inline">Invite</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -392,8 +404,12 @@ export default function DashboardPage() {
                   <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">
                     {(a.employee as any)?.departmentId}
                   </td>
-                  <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">{formatTime(a.checkIn)}</td>
-                  <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">{formatTime(a.checkOut)}</td>
+                  <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">
+                    <TimeDisplay time={a.manualCheckIn || a.checkIn} isManual={isManualTime(a, 'in')} record={a} type="in" />
+                  </td>
+                  <td className="py-2.5 px-3 font-mono text-slate-600 dark:text-slate-300">
+                    <TimeDisplay time={a.manualCheckOut || a.checkOut} isManual={isManualTime(a, 'out')} record={a} type="out" />
+                  </td>
                   <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">{a.workingHours}h</td>
                   <td className="py-2.5 px-3">
                     <span className={`badge-${a.status}`}>
@@ -419,7 +435,19 @@ export default function DashboardPage() {
             <span className="text-sm font-semibold">{a.label}</span>
           </button>
         ))}
+        {user?.role === 'admin' && (
+          <button
+            onClick={() => setInviteOpen(true)}
+            className="btn bg-indigo-500 hover:bg-indigo-600 text-white py-4 flex-col gap-2 rounded-2xl"
+          >
+            <UserPlus size={22} />
+            <span className="text-sm font-semibold">Invite</span>
+          </button>
+        )}
       </div>
+
+      {/* ── Invite modal ─────────────────────────────────────────────────── */}
+      <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} />
     </div>
   );
 }

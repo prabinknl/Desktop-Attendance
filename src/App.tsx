@@ -4,12 +4,14 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { DateSettingsProvider } from './contexts/DateSettingsContext';
+import { InvitationProvider } from './contexts/InvitationContext';
 import ProtectedRoute from './routes/ProtectedRoute';
 import AppShell from './components/layout/AppShell';
 
 // Auth pages
 import LoginPage from './pages/auth/LoginPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
+import InviteSignupPage from './pages/auth/InviteSignupPage';
 
 // App pages
 import DashboardEntry from './pages/dashboard/DashboardEntry';
@@ -31,38 +33,41 @@ export default function App() {
       <DateSettingsProvider>
         <AuthProvider>
           <NotificationProvider>
-            <BrowserRouter>
-              <Routes>
-                {/* Public routes */}
-                <Route path="/login" element={<LoginPage />} />
-                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <InvitationProvider>
+              <BrowserRouter>
+                <Routes>
+                  {/* Public routes */}
+                  <Route path="/login" element={<LoginPage />} />
+                  <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                  <Route path="/invite/:token" element={<InviteSignupPage />} />
 
-                {/* Protected app routes */}
-                <Route element={<ProtectedRoute />}>
-                  <Route element={<AppShell />}>
-                    <Route index element={<Navigate to="/dashboard" replace />} />
-                    <Route path="/dashboard" element={<DashboardEntry />} />
-                    <Route path="/leave" element={<LeavePage />} />
-                    <Route path="/notifications" element={<NotificationsPage />} />
-                    <Route path="/profile" element={<ProfilePage />} />
+                  {/* Protected app routes */}
+                  <Route element={<ProtectedRoute />}>
+                    <Route element={<AppShell />}>
+                      <Route index element={<Navigate to="/dashboard" replace />} />
+                      <Route path="/dashboard" element={<DashboardEntry />} />
+                      <Route path="/leave" element={<LeavePage />} />
+                      <Route path="/notifications" element={<NotificationsPage />} />
+                      <Route path="/profile" element={<ProfilePage />} />
 
-                    {/* Staff-only routes */}
-                    <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'dept_manager']} />}>
-                      <Route path="/attendance" element={<AttendancePage />} />
-                      <Route path="/employees" element={<EmployeesPage />} />
-                      <Route path="/employees/:employeeId/report" element={<EmployeeAttendanceReportPage />} />
-                      <Route path="/departments" element={<DepartmentsPage />} />
-                      <Route path="/shifts" element={<ShiftsPage />} />
-                      <Route path="/reports" element={<ReportsPage />} />
-                      <Route path="/settings" element={<SettingsPage />} />
-                      <Route path="/device-settings" element={<DeviceSettingsPage />} />
+                      {/* Staff-only routes */}
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'dept_manager']} />}>
+                        <Route path="/attendance" element={<AttendancePage />} />
+                        <Route path="/employees" element={<EmployeesPage />} />
+                        <Route path="/employees/:employeeId/report" element={<EmployeeAttendanceReportPage />} />
+                        <Route path="/departments" element={<DepartmentsPage />} />
+                        <Route path="/shifts" element={<ShiftsPage />} />
+                        <Route path="/reports" element={<ReportsPage />} />
+                        <Route path="/settings" element={<SettingsPage />} />
+                        <Route path="/device-settings" element={<DeviceSettingsPage />} />
+                      </Route>
+
+                      <Route path="*" element={<Navigate to="/dashboard" replace />} />
                     </Route>
-
-                    <Route path="*" element={<Navigate to="/dashboard" replace />} />
                   </Route>
-                </Route>
-              </Routes>
-            </BrowserRouter>
+                </Routes>
+              </BrowserRouter>
+            </InvitationProvider>
           </NotificationProvider>
         </AuthProvider>
       </DateSettingsProvider>

@@ -11,24 +11,29 @@ import type { Attendance, LeaveRequest, Shift, Employee } from '../../types';
 import {
   cn, formatDate, formatTime, attendanceStatusLabel, leaveStatusLabel,
   calcOtLtHours, formatOtLt, formatHoursMinutes, isApprovedLeaveDay,
+  getEffectiveAttendanceTimes,
 } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
 import { downloadAttendancePdf } from '../../lib/attendancePdf';
 import CalendarDateInput from '../../components/ui/CalendarDateInput';
+import { TimeDisplay, isManualTime } from '../../components/common/TimeDisplay';
 import { deviceApi } from '../../api/deviceApi';
-import { resolveEmployeeSchedule } from '../../lib/appSettings';
+import { getAppSettings, resolveEmployeeSchedule } from '../../lib/appSettings';
 import { importAttendanceFromDeviceLogs } from '../../lib/deviceAttendanceSync';
+import { loadDeviceLogsCache } from '../../lib/deviceLogsCache';
+import { punchCalendarDate } from '../../lib/punchTime';
+import { formatDateRangeBsPdf } from '../../lib/dateDisplay';
 import type { AttendanceLogEntry } from '../../types/device';
 
+/** Synthetic rows for dates with no punch/leave — do not count toward OT/LT. */
+function isGapAttendanceRow(record: Attendance): boolean {
+  return String(record.id).startsWith('gap-row-');
+}
+
 function logLocalDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return punchCalendarDate(iso);
 }
 
 function formatWeekday(date: string): string {
@@ -83,22 +88,28 @@ export default function EmployeeAttendanceReportPage() {
       return [];
     }
     if (!opts?.quiet) setLoading(true);
-    const [emps, attAll, leaveList, shiftList] = await Promise.all([
+    const [emps, , leaveList, shiftList] = await Promise.all([
       EmployeeAPI.getAll(),
       AttendanceAPI.getAll(),
       LeaveAPI.getAll(),
       ShiftAPI.getAll(),
     ]);
+    // Remove stale duplicate days left by older sync/import bugs
+    await AttendanceAPI.purgeDuplicateDays();
+    const attFresh = await AttendanceAPI.getAll();
     const emp = emps.find(e => e.id === employeeId || e.employeeId === employeeId) ?? null;
-    const att = attAll.filter(
-      (a) =>
-        a.employeeId === employeeId ||
-        (emp != null && (a.employeeId === emp.id || a.employeeId === emp.employeeId)),
+    const aliases = [employeeId, emp?.id, emp?.employeeId].filter(
+      (id): id is string => Boolean(id),
     );
-    const empLeaves = leaveList.filter(
-      (l) =>
-        l.employeeId === employeeId ||
-        (emp != null && (l.employeeId === emp.id || l.employeeId === emp.employeeId)),
+    const sameId = (a: string, b: string) =>
+      String(a) === String(b) ||
+      String(a).replace(/\D/g, '').replace(/^0+/, '') ===
+        String(b).replace(/\D/g, '').replace(/^0+/, '');
+    const att = attFresh.filter((a) =>
+      aliases.some((id) => sameId(a.employeeId, id)),
+    );
+    const empLeaves = leaveList.filter((l) =>
+      aliases.some((id) => sameId(l.employeeId, id)),
     );
     setEmployee(emp);
     setAttendance(att);
@@ -108,54 +119,110 @@ export default function EmployeeAttendanceReportPage() {
     return att;
   };
 
-  const refreshDailyByDateRange = async () => {
+  const [dateSortDir, setDateSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const refreshDailyByDateRange = async (opts?: { quiet?: boolean }) => {
     if (!dateFrom || !dateTo) {
-      toast('error', 'Date required', 'Select both From and To dates.');
+      if (!opts?.quiet) toast('error', 'Date required', 'Select both From and To dates.');
       return;
     }
     if (dateFrom > dateTo) {
-      toast('error', 'Invalid range', 'From date must be on or before To date.');
+      if (!opts?.quiet) toast('error', 'Invalid range', 'From date must be on or before To date.');
       return;
     }
+    if (!employeeId) return;
+
     setRefreshingDaily(true);
     try {
-      // Keep manual Edit Attendance changes even if device re-import runs
       const manualRows = await AttendanceAPI.getManualOverrides();
+      const emp =
+        employee ??
+        (await EmployeeAPI.getAll()).find(
+          (e) => e.id === employeeId || e.employeeId === employeeId,
+        ) ??
+        null;
+      const empAliases = [emp?.id, emp?.employeeId, employeeId].filter(
+        (id): id is string => Boolean(id),
+      );
 
-      const startTime = new Date(`${dateFrom}T00:00:00`).toISOString();
-      const endTime = new Date(`${dateTo}T23:59:59.999`).toISOString();
-      const result = await deviceApi.sync({ startTime, endTime });
-      const logs = await deviceApi.getLogs(undefined, { from: dateFrom, to: dateTo });
-      const logsInRange = logs.filter((log: AttendanceLogEntry) => {
-        const d = logLocalDate(log.time);
-        return d >= dateFrom && d <= dateTo;
-      });
-      await importAttendanceFromDeviceLogs(logsInRange);
-      const kept = await AttendanceAPI.restoreManualOverrides(manualRows);
-      const att = await load();
-      const inRangeCount = att.filter(
-        (a) => a.date >= dateFrom && a.date <= dateTo,
-      ).length;
-      toast(
-        'success',
-        'Attendance refreshed',
-        `Downloaded ${result.downloaded} punch(es); ${inRangeCount} day(s) in range` +
-          (kept ? ` · ${kept} manual edit(s) kept` : '') +
-          '.',
-      );
+      const rebuildFromLogs = async (logs: AttendanceLogEntry[]) => {
+        const inRange = logs.filter((log) => {
+          const d = logLocalDate(log.time);
+          if (!d || d < dateFrom || d > dateTo) return false;
+          if (!empAliases.length) return true;
+          const logEmp = String(log.employeeId ?? '').trim();
+          return empAliases.some(
+            (id) =>
+              String(id) === logEmp ||
+              String(id).replace(/^0+/, '') === logEmp.replace(/^0+/, ''),
+          );
+        });
+
+        // Drop stale device rows first (wrong calendar day from UTC shift).
+        await AttendanceAPI.clearDeviceRowsInRange(empAliases, dateFrom, dateTo);
+        if (!inRange.length) {
+          await AttendanceAPI.restoreManualOverrides(manualRows);
+          await load({ quiet: true });
+          return 0;
+        }
+        await importAttendanceFromDeviceLogs(inRange);
+        await AttendanceAPI.restoreManualOverrides(manualRows);
+        await load({ quiet: true });
+        return inRange.length;
+      };
+
+      // 1. Stored device logs (same source as Device Settings) — instant, no machine wait.
+      let importedCount = 0;
+      try {
+        const storedLogs = await deviceApi.getLogs(undefined, { from: dateFrom, to: dateTo });
+        importedCount = await rebuildFromLogs(storedLogs);
+      } catch {
+        /* API offline */
+      }
+
+      if (importedCount === 0) {
+        importedCount = await rebuildFromLogs(loadDeviceLogsCache());
+      }
+
+      // 2. Optional background machine refresh — only when the device is online.
+      void (async () => {
+        try {
+          const st = await deviceApi.getStatus();
+          if (st?.status !== 'online') return;
+          const startTime = new Date(`${dateFrom}T00:00:00`).toISOString();
+          const endTime = new Date(`${dateTo}T23:59:59.999`).toISOString();
+          await deviceApi.sync({ startTime, endTime });
+          const freshLogs = await deviceApi.getLogs(undefined, { from: dateFrom, to: dateTo });
+          await rebuildFromLogs(freshLogs);
+        } catch {
+          /* machine offline — stored logs already applied */
+        }
+      })();
+
+      if (!opts?.quiet) {
+        toast(
+          'success',
+          'Attendance refreshed',
+          importedCount > 0
+            ? `Daily attendance rebuilt from ${importedCount} device punch(es).`
+            : 'No device punches found for this employee in the date range.',
+        );
+      }
     } catch (err) {
-      toast(
-        'error',
-        'Refresh failed',
-        err instanceof Error ? err.message : 'Could not update attendance for this date range.',
-      );
+      if (!opts?.quiet) {
+        toast('error', 'Refresh failed', err instanceof Error ? err.message : 'Could not update attendance.');
+      }
     } finally {
       setRefreshingDaily(false);
     }
   };
 
   useEffect(() => {
-    void load();
+    void load().then(() => {
+      // Rebuild from saved device punches so daily rows match Device Settings.
+      if (dateFrom && dateTo) void refreshDailyByDateRange({ quiet: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeId, location.key]);
 
   // Live-update when Edit Attendance saves (same browser session)
@@ -185,23 +252,130 @@ export default function EmployeeAttendanceReportPage() {
 
   const rangedAttendance = useMemo(
     () => {
-      // Extra safety: one row per date on the report
+      // One row per calendar day — pick the most complete punch record
+      const score = (a: Attendance) => {
+        let s = 0;
+        if (a.manualOverride) s += 10_000;
+        if (a.manualCheckIn || a.manualCheckOut) s += 5_000;
+        if (a.checkIn || a.manualCheckIn) s += 100;
+        if (a.checkOut || a.manualCheckOut) s += 200;
+        if (a.status === 'present' || a.status === 'late' || a.status === 'work_from_home') s += 50;
+        else if (a.status === 'half_day') s += 20;
+        else if (a.status === 'on_leave') s += 10;
+        s += Math.min(80, Math.round((a.workingHours || 0) * 10));
+        const t = Date.parse(a.updatedAt || a.createdAt || '');
+        if (!Number.isNaN(t)) s += Math.min(99, Math.floor(t / 1e11));
+        return s;
+      };
+
       const byDate = new Map<string, Attendance>();
       for (const a of attendance) {
-        if (a.date < dateFrom || a.date > dateTo) continue;
-        const prev = byDate.get(a.date);
-        if (!prev) {
-          byDate.set(a.date, a);
-          continue;
-        }
-        if (a.manualOverride && !prev.manualOverride) byDate.set(a.date, a);
-        else if (a.manualOverride === prev.manualOverride && (a.updatedAt || '') > (prev.updatedAt || '')) {
-          byDate.set(a.date, a);
+        const date = String(a.date || '').slice(0, 10);
+        if (!date || date < dateFrom || date > dateTo) continue;
+        const row = date === a.date ? a : { ...a, date };
+        const prev = byDate.get(date);
+        if (!prev || score(row) > score(prev)) {
+          byDate.set(date, row);
         }
       }
-      return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+      // Merge leave by its exact AD date range.
+      // - Approved: leave is authoritative and replaces punches for every date.
+      // - Conditional: keep punches/OT-LT, but clearly mark the day Unpaid Leave.
+      // - Pending: show only when there is no attendance row.
+      for (const l of leaves) {
+        if (l.status !== 'approved' && l.status !== 'conditional_approved' && l.status !== 'pending') continue;
+        const leaveFrom = String(l.fromDate).slice(0, 10);
+        const leaveTo = String(l.toDate).slice(0, 10);
+        const from = leaveFrom < dateFrom ? dateFrom : leaveFrom;
+        const to = leaveTo > dateTo ? dateTo : leaveTo;
+        if (from > dateTo || to < dateFrom) continue;
+
+        const cur = new Date(`${from}T12:00:00`);
+        const end = new Date(`${to}T12:00:00`);
+        while (cur <= end) {
+          const y = cur.getFullYear();
+          const m = String(cur.getMonth() + 1).padStart(2, '0');
+          const d = String(cur.getDate()).padStart(2, '0');
+          const date = `${y}-${m}-${d}`;
+          const existing = byDate.get(date);
+          const leaveType = l.leaveType ? l.leaveType.replace('_', ' ') : 'leave';
+
+          if (l.status === 'conditional_approved' && existing) {
+            byDate.set(date, {
+              ...existing,
+              remarks: 'Unpaid Leave',
+            });
+          } else if (l.status === 'approved' || !existing) {
+            const isConditional = l.status === 'conditional_approved';
+            const isApproved = l.status === 'approved';
+            byDate.set(date, {
+              id: `leave-row-${l.id}-${date}`,
+              employeeId: l.employeeId,
+              departmentId: employee?.departmentId || '',
+              date,
+              shiftId: employee?.shiftId || 's1',
+              workingHours: 0,
+              overtime: 0,
+              lateMinutes: 0,
+              breakMinutes: 0,
+              status: 'on_leave',
+              location: '',
+              remarks: isConditional
+                ? 'Unpaid Leave'
+                : isApproved
+                  ? `Approved Leave: ${leaveType}`
+                  : `Pending Leave: ${leaveType}`,
+              createdBy: 'u1',
+              createdAt: l.createdAt || new Date().toISOString(),
+              updatedAt: l.updatedAt || new Date().toISOString(),
+            });
+          }
+          cur.setDate(cur.getDate() + 1);
+        }
+      }
+
+      // Fill every calendar day in range (including Sat weekly off & Sun office days)
+      if (dateFrom && dateTo && dateFrom <= dateTo) {
+        // Company office days are the source of truth (Sunday is an office day)
+        const workingDays = getAppSettings().officeHours.workingDays;
+        const cur = new Date(`${dateFrom}T12:00:00`);
+        const end = new Date(`${dateTo}T12:00:00`);
+        while (cur <= end) {
+          const y = cur.getFullYear();
+          const m = String(cur.getMonth() + 1).padStart(2, '0');
+          const d = String(cur.getDate()).padStart(2, '0');
+          const date = `${y}-${m}-${d}`;
+          if (!byDate.has(date)) {
+            const isWorking = workingDays.includes(cur.getDay());
+            byDate.set(date, {
+              id: `gap-row-${date}`,
+              employeeId: employee?.id || '',
+              departmentId: employee?.departmentId || '',
+              date,
+              shiftId: employee?.shiftId || 's1',
+              workingHours: 0,
+              overtime: 0,
+              lateMinutes: 0,
+              breakMinutes: 0,
+              status: isWorking ? 'absent' : 'holiday',
+              location: '',
+              remarks: isWorking ? '' : 'Weekly off',
+              createdBy: 'system',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+          }
+          cur.setDate(cur.getDate() + 1);
+        }
+      }
+
+      return Array.from(byDate.values()).sort((a, b) => {
+        const cmp = a.date.localeCompare(b.date);
+        return dateSortDir === 'asc' ? cmp : -cmp;
+      });
     },
-    [attendance, dateFrom, dateTo]
+    [attendance, leaves, dateFrom, dateTo, employee, dateSortDir]
   );
 
   const getSchedule = (record: Attendance) => {
@@ -214,6 +388,8 @@ export default function EmployeeAttendanceReportPage() {
   };
 
   const getOtLt = (record: Attendance) => {
+    // Weekly-off placeholder rows — no OT/LT
+    if (isGapAttendanceRow(record) && record.status === 'holiday') return 0;
     const aliases = [employee?.id, employee?.employeeId].filter(
       (id): id is string => Boolean(id),
     );
@@ -221,9 +397,11 @@ export default function EmployeeAttendanceReportPage() {
       return 0;
     }
     const schedule = getSchedule(record);
+    const eff = getEffectiveAttendanceTimes(record);
+    // Office day with no punch (incl. Sunday) → full day deduction
     return calcOtLtHours({
-      checkIn: record.checkIn,
-      workingHours: record.workingHours,
+      checkIn: eff.effectiveIn,
+      workingHours: eff.workingHours,
       overtime: record.overtime,
       lateMinutes: record.lateMinutes,
       shiftStart: schedule.shiftStart,
@@ -256,16 +434,20 @@ export default function EmployeeAttendanceReportPage() {
       if (a.status === 'work_from_home') wfhDays += 1;
     }
 
-    const approvedLeaves = leaves.filter(
-      l =>
-        (l.status === 'approved' || l.status === 'conditional_approved') &&
-        l.fromDate <= dateTo &&
-        l.toDate >= dateFrom
+    const rangedLeaves = leaves.filter(
+      l => String(l.fromDate).slice(0, 10) <= dateTo && String(l.toDate).slice(0, 10) >= dateFrom
     );
+
+    const approvedLeaves = rangedLeaves.filter(
+      l => l.status === 'approved'
+    );
+
     const approvedLeaveDays = approvedLeaves.reduce((s, l) => {
       // Count overlapping days within range (simple: use totalDays when fully inside)
-      const from = l.fromDate < dateFrom ? dateFrom : l.fromDate;
-      const to = l.toDate > dateTo ? dateTo : l.toDate;
+      const leaveFrom = String(l.fromDate).slice(0, 10);
+      const leaveTo = String(l.toDate).slice(0, 10);
+      const from = leaveFrom < dateFrom ? dateFrom : leaveFrom;
+      const to = leaveTo > dateTo ? dateTo : leaveTo;
       const days =
         Math.max(
           1,
@@ -286,6 +468,7 @@ export default function EmployeeAttendanceReportPage() {
       wfhDays,
       approvedLeaveDays,
       approvedLeaves,
+      rangedLeaves,
       otLtNet: Math.round((overtimeHours - lateHours) * 100) / 100,
       records: rangedAttendance.length,
     };
@@ -315,11 +498,11 @@ export default function EmployeeAttendanceReportPage() {
         employees: { [employee.id]: employee },
         departments: {},
         shifts: shiftMap,
+        leaves,
       },
       {
         employeeName: `${employee.firstName} ${employee.lastName}`,
-        monthLabel,
-        dateLabel: `${formatDate(dateFrom)} – ${formatDate(dateTo)}`,
+        dateLabel: formatDateRangeBsPdf(dateFrom, dateTo),
         fileName: `my-attendance-${dateFrom}-to-${dateTo}.pdf`,
       }
     );
@@ -494,28 +677,50 @@ export default function EmployeeAttendanceReportPage() {
         </motion.div>
       )}
 
-      {/* Approved leave list */}
+      {/* Leave in range list */}
       <div className="card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white">Approved leave in range</h2>
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-slate-900 dark:text-white">Leave in range</h2>
+          <span className="text-xs text-slate-400 font-medium">{summary.rangedLeaves.length} record(s)</span>
         </div>
-        {summary.approvedLeaves.length === 0 ? (
-          <p className="p-6 text-sm text-slate-400 text-center">No approved leave in this date range.</p>
+        {summary.rangedLeaves.length === 0 ? (
+          <p className="p-6 text-sm text-slate-400 text-center">No leave requests in this date range.</p>
         ) : (
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
-            {summary.approvedLeaves.map(l => (
+            {summary.rangedLeaves.map(l => (
               <div key={l.id} className="px-4 py-3 flex items-center justify-between gap-3">
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-medium text-slate-800 dark:text-slate-200 capitalize">{l.leaveType.replace('_', ' ')}</p>
-                    <span className={`badge-${l.status}`}>{leaveStatusLabel[l.status]}</span>
+                    <p className="text-sm font-medium text-slate-800 dark:text-slate-200 capitalize">
+                      {l.leaveType ? l.leaveType.replace('_', ' ') : 'Leave'}
+                    </p>
+                    <span className={`badge-${l.status}`}>{leaveStatusLabel[l.status] || l.status}</span>
                   </div>
-                  <p className="text-xs text-slate-500">{l.reason}</p>
+                  {l.reason && <p className="text-xs text-slate-500">{l.reason}</p>}
                   {l.status === 'approved' && (
-                    <p className="text-[11px] text-emerald-600 mt-0.5">OT/LT (+/−) hidden on attendance for these days</p>
+                    <p className="text-[11px] text-emerald-600 mt-0.5 font-medium">
+                      Approved — OT/LT (+/−) hidden on attendance (not counted in late hours)
+                    </p>
                   )}
                   {l.status === 'conditional_approved' && (
-                    <p className="text-[11px] text-indigo-600 mt-0.5">Conditional — OT/LT (+/−) still shown on attendance</p>
+                    <p className="text-[11px] text-indigo-600 mt-0.5 font-medium">
+                      Conditional Approved — OT/LT (+/−) shown on attendance & counted in late hours
+                    </p>
+                  )}
+                  {l.status === 'pending' && (
+                    <p className="text-[11px] text-amber-600 mt-0.5">
+                      Pending manager approval
+                    </p>
+                  )}
+                  {l.status === 'rejected' && (
+                    <p className="text-[11px] text-rose-500 mt-0.5">
+                      Leave request rejected
+                    </p>
+                  )}
+                  {l.status === 'cancelled' && (
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Leave request cancelled
+                    </p>
                   )}
                 </div>
                 <p className="text-xs font-medium text-slate-600 dark:text-slate-300 whitespace-nowrap">
@@ -530,9 +735,21 @@ export default function EmployeeAttendanceReportPage() {
       {/* Attendance detail table */}
       <div className="card overflow-hidden max-w-5xl mx-auto w-full">
         <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 space-y-3">
-          <div className="flex items-center justify-between gap-3">
+          <div className="grid grid-cols-3 items-center gap-2">
             <h2 className="text-sm font-bold text-slate-900 dark:text-white">Daily attendance</h2>
-            <span className="text-xs text-slate-400">{rangedAttendance.length} records</span>
+            <p className="text-center text-sm font-semibold text-slate-900 dark:text-white truncate px-2">
+              {employee
+                ? `${employee.firstName} ${employee.lastName}`.trim()
+                : '—'}
+              {employee?.employeeId ? (
+                <span className="ml-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                  ({employee.employeeId})
+                </span>
+              ) : null}
+            </p>
+            <span className="text-xs text-slate-400 text-right">
+              {rangedAttendance.length} record{rangedAttendance.length === 1 ? '' : 's'}
+            </span>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div>
@@ -600,8 +817,16 @@ export default function EmployeeAttendanceReportPage() {
             <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700">
               <tr>
                 {['Date', 'Day', 'Check In', 'Check Out', 'Hours', 'Dayhour', 'OT/LT', 'Status', 'Remarks'].map(h => (
-                  <th key={h} className="text-left py-2.5 px-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">
-                    {h}
+                  <th
+                    key={h}
+                    onClick={h === 'Date' ? () => setDateSortDir(d => (d === 'asc' ? 'desc' : 'asc')) : undefined}
+                    className={cn(
+                      'text-left py-2.5 px-2 text-[11px] font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap',
+                      h === 'Date' && 'cursor-pointer hover:text-primary-600 dark:hover:text-primary-400 select-none'
+                    )}
+                    title={h === 'Date' ? 'Click to toggle date sort order' : undefined}
+                  >
+                    {h === 'Date' ? `Date ${dateSortDir === 'asc' ? '↑' : '↓'}` : h}
                   </th>
                 ))}
               </tr>
@@ -611,7 +836,7 @@ export default function EmployeeAttendanceReportPage() {
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 9 }).map((_, j) => (
-                      <td key={j} className="py-2.5 px-2.5"><div className="skeleton h-4 rounded" /></td>
+                      <td key={j} className="py-2.5 px-2"><div className="skeleton h-4 rounded" /></td>
                     ))}
                   </tr>
                 ))
@@ -624,26 +849,33 @@ export default function EmployeeAttendanceReportPage() {
               ) : (
                 rangedAttendance.map(a => {
                   const schedule = getSchedule(a);
+                  const dayHours =
+                    isGapAttendanceRow(a) && a.status === 'holiday' ? 0 : schedule.dayHours;
                   const otLt = getOtLt(a);
+                  const eff = getEffectiveAttendanceTimes(a);
                   const displayedRemark =
-                    a.remarks && !a.remarks.startsWith('source=')
+                    a.remarks && !a.remarks.startsWith('source=') && !a.remarks.startsWith('rule=')
                       ? a.remarks
                       : a.location && a.location !== 'Device Sync'
                         ? a.location
                         : '';
                   return (
-                    <tr key={a.id} className="table-row-hover">
-                      <td className="py-2.5 px-2.5 whitespace-nowrap">{formatDate(a.date)}</td>
-                      <td className="py-2.5 px-2.5">
+                    <tr key={`${a.date}-${a.employeeId}`} className="table-row-hover">
+                      <td className="py-2.5 px-2 whitespace-nowrap">{formatDate(a.date)}</td>
+                      <td className="py-2.5 px-2">
                         <span className="text-xs font-medium px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
                           {formatWeekday(a.date)}
                         </span>
                       </td>
-                      <td className="py-2.5 px-2.5 font-mono">{formatTime(a.checkIn)}</td>
-                      <td className="py-2.5 px-2.5 font-mono">{formatTime(a.checkOut)}</td>
-                      <td className="py-2.5 px-2.5 font-semibold">{formatHoursMinutes(a.workingHours || 0)}</td>
-                      <td className="py-2.5 px-2.5">{formatHoursMinutes(schedule.dayHours)}</td>
-                      <td className="py-2.5 px-2.5">
+                      <td className="py-2.5 px-2 font-mono text-slate-500">
+                        <TimeDisplay time={eff.effectiveIn} isManual={isManualTime(a, 'in')} record={a} type="in" />
+                      </td>
+                      <td className="py-2.5 px-2 font-mono text-slate-500">
+                        <TimeDisplay time={eff.effectiveOut} isManual={isManualTime(a, 'out')} record={a} type="out" />
+                      </td>
+                      <td className="py-2.5 px-2 font-semibold">{formatHoursMinutes(eff.workingHours)}</td>
+                      <td className="py-2.5 px-2">{formatHoursMinutes(dayHours)}</td>
+                      <td className="py-2.5 px-2">
                         {!otLt ? (
                           <span className="text-slate-300">—</span>
                         ) : (
@@ -652,11 +884,11 @@ export default function EmployeeAttendanceReportPage() {
                           </span>
                         )}
                       </td>
-                      <td className="py-2.5 px-2.5">
+                      <td className="py-2.5 px-2">
                         <span className={`badge-${a.status}`}>{attendanceStatusLabel[a.status]}</span>
                       </td>
                       <td
-                        className="py-2.5 px-2.5 text-xs text-slate-500 max-w-36 truncate"
+                        className="py-2.5 px-2 text-xs text-slate-500 max-w-36 truncate"
                         title={displayedRemark}
                       >
                         {displayedRemark}

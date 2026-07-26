@@ -5,6 +5,7 @@ import {
   sendAdminVerificationEmail,
   storeVerificationCode,
   verifyStoredCode,
+  sendInvitationEmail,
 } from '../services/auth/adminVerification.js';
 
 const ALLOWED_ADMIN_EMAIL = env.adminSignupEmail;
@@ -42,11 +43,16 @@ export async function sendAdminCode(req: Request, res: Response) {
       });
     }
 
+    const responseMsg = mail.devFallback
+      ? `SMTP not configured. Dev Mode code generated: ${code}`
+      : `Verification code sent to ${email}`;
+
     return res.json({
       success: true,
-      message: `Verification code sent to ${email}`,
+      message: responseMsg,
       emailSent: true,
       email,
+      devCode: mail.devFallback ? code : undefined,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to send verification code';
@@ -88,3 +94,78 @@ export async function verifyAdminCode(req: Request, res: Response) {
     return res.status(500).json({ success: false, message });
   }
 }
+
+export async function sendInviteEmail(req: Request, res: Response) {
+  try {
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const role = String(req.body?.role ?? '').trim();
+    const inviteLink = String(req.body?.inviteLink ?? '').trim();
+
+    if (!email || !role || !inviteLink) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, role, and inviteLink are required.',
+      });
+    }
+
+    const mail = await sendInvitationEmail({ to: email, role, inviteLink });
+
+    if (!mail.sent) {
+      return res.status(503).json({
+        success: false,
+        emailSent: false,
+        message:
+          mail.error ||
+          'Could not send invitation email. Configure SMTP_* in server/.env and try again.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Invitation email sent to ${email}`,
+      emailSent: true,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to send invitation email';
+    console.error('[Auth] sendInviteEmail failed:', message);
+    return res.status(500).json({ success: false, message });
+  }
+}
+
+export async function getUsers(_req: Request, res: Response) {
+  try {
+    const { UserModel } = await import('../models/UserModel.js');
+    const users = await UserModel.getAll();
+    return res.json({ success: true, data: users });
+  } catch (err) {
+    console.error('[Auth] getUsers error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to fetch users' });
+  }
+}
+
+export async function syncUser(req: Request, res: Response) {
+  try {
+    const user = req.body;
+    if (!user || !user.email || !user.role || !user.password) {
+      return res.status(400).json({ success: false, message: 'email, role, and password are required' });
+    }
+    const { UserModel } = await import('../models/UserModel.js');
+    const saved = await UserModel.upsert({
+      id: user.id || `u-${Date.now()}`,
+      name: user.name || 'User',
+      email: user.email,
+      role: user.role,
+      password: user.password,
+      avatar: user.avatar,
+      phone: user.phone,
+      timezone: user.timezone,
+      employeeId: user.employeeId,
+      departmentId: user.departmentId,
+    });
+    return res.json({ success: true, data: saved });
+  } catch (err) {
+    console.error('[Auth] syncUser error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to sync user' });
+  }
+}
+

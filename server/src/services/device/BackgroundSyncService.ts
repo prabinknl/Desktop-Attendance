@@ -25,7 +25,7 @@ export async function refreshSyncScheduler(): Promise<void> {
     syncInFlight = true;
     try {
       const current = await getActiveDeviceRecord();
-      if (!current?.auto_sync_enabled) {
+      if (!current?.auto_sync_enabled || current.status === 'offline') {
         stopSyncScheduler();
         return;
       }
@@ -35,6 +35,9 @@ export async function refreshSyncScheduler(): Promise<void> {
       );
     } catch (err) {
       console.error('[SyncService] Auto-sync failed:', err instanceof Error ? err.message : err);
+      // If the machine went offline, stop hammering until settings watcher re-enables.
+      const current = await getActiveDeviceRecord().catch(() => null);
+      if (current?.status === 'offline') stopSyncScheduler();
     } finally {
       syncInFlight = false;
     }

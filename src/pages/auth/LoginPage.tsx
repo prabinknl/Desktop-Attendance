@@ -7,7 +7,7 @@ import { z } from 'zod';
 import {
   Eye, EyeOff, ArrowRight, Clock, Users, BarChart3, Lock, ArrowLeft, Search, Check,
 } from 'lucide-react';
-import { useAuth, ALLOWED_ADMIN_EMAIL } from '../../contexts/AuthContext';
+import { useAuth, ALLOWED_ADMIN_EMAIL, hydrateCloudAuthUsers } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { EmployeeAPI } from '../../data/store';
 import { deviceApi } from '../../api/deviceApi';
@@ -137,6 +137,10 @@ export default function LoginPage() {
     const admin = getAuthUsers().find((u) => u.role === 'admin');
     return admin?.name?.trim() || '';
   }, [getAuthUsers, createdAdmin, mode, selectedRole]);
+
+  useEffect(() => {
+    hydrateCloudAuthUsers();
+  }, []);
 
   useEffect(() => {
     if (selectedRole === 'admin' && mode === 'login') {
@@ -322,7 +326,12 @@ export default function LoginPage() {
       }
       setOtpEmailSent(true);
       setOtpSendError(null);
-      toast('success', 'Code sent', `Check ${signupEmail} for the verification code.`);
+      if (res.devCode) {
+        setVerificationCode(res.devCode);
+        toast('info', 'Dev Mode: Code Generated', `Code auto-filled: ${res.devCode}. Click Verify & Sign Up.`);
+      } else {
+        toast('success', 'Code sent', `Check ${signupEmail} for the verification code.`);
+      }
     } catch (err) {
       const message =
         err instanceof Error

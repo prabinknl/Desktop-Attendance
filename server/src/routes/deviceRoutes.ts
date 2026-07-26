@@ -16,6 +16,7 @@ router.get('/diagnostics', deviceController.diagnostics);
 router.post('/sync', deviceController.sync);
 router.post('/scan', deviceController.scan);
 router.patch('/sync-settings', deviceController.updateSyncSettings);
+router.post('/reconnect', deviceController.reconnect);
 // Parametric routes last
 router.get('/:id/attendance', deviceController.logs);
 

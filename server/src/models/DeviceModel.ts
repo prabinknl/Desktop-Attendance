@@ -1,7 +1,7 @@
 import { query } from '../db/pool.js';
 import { memoryStore, createMemoryRecord, isMemoryMode, setMemoryMode } from '../db/memoryStore.js';
 import { encryptPassword, decryptPassword } from '../services/crypto/passwordCrypto.js';
-import { createDeviceAdapter } from '../services/device/DeviceFactory.js';
+import { getOrCreateDeviceAdapter, clearDeviceAdapterCache } from '../services/device/DeviceSessionCache.js';
 import type {
   DeviceConnectPayload,
   DevicePublic,
@@ -79,6 +79,8 @@ export async function saveDevice(payload: DeviceConnectPayload): Promise<DeviceP
     throw new Error('Password is required');
   }
   const encrypted = encryptPassword(passwordPlain);
+  // Config may have changed — drop warm adapter so the next sync uses new credentials/host.
+  clearDeviceAdapterCache();
 
   if (isMemoryMode()) {
     const record = createMemoryRecord(payload, encrypted, existing);
@@ -191,15 +193,11 @@ export async function updateDeviceMeta(
 }
 
 export function getAdapterForDevice(device: DeviceRecord) {
-  const password = device.password_encrypted ? decryptPassword(device.password_encrypted) : '';
-  return createDeviceAdapter(device.brand, {
-    ipAddress: device.ip_address,
-    port: device.port,
-    username: device.username ?? 'admin',
-    password,
-    model: device.model ?? undefined,
-  });
+  // Reuse the live adapter so AcsEvent + digest strategies stay warm across syncs.
+  return getOrCreateDeviceAdapter(device);
 }
+
+export { clearDeviceAdapterCache };
 
 export interface DeviceLogsRange {
   from?: string;

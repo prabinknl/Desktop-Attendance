@@ -1,6 +1,6 @@
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-export type UserRole = 'admin' | 'hr' | 'dept_manager' | 'employee';
+export type UserRole = 'admin' | 'account' | 'hr' | 'dept_manager' | 'employee';
 
 export type AttendanceStatus =
   | 'present'
@@ -29,6 +29,10 @@ export type EmploymentType = 'full_time' | 'part_time' | 'contract' | 'intern';
 
 export type EmployeeStatus = 'active' | 'inactive' | 'on_leave' | 'terminated';
 
+export type PunchRequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
+
+export type PunchRequestKind = 'add' | 'edit';
+
 export type NotificationType =
   | 'attendance_saved'
   | 'attendance_updated'
@@ -38,6 +42,9 @@ export type NotificationType =
   | 'leave_request'
   | 'leave_approved'
   | 'leave_rejected'
+  | 'punch_request'
+  | 'punch_approved'
+  | 'punch_rejected'
   | 'employee_added'
   | 'employee_updated'
   | 'report_generated';
@@ -112,6 +119,14 @@ export interface Attendance {
   shiftId: string;
   checkIn?: string;  // "HH:mm"
   checkOut?: string; // "HH:mm"
+  manualCheckIn?: string;  // "HH:mm" - admin manual check in time override
+  manualCheckOut?: string; // "HH:mm" - admin manual check out time override
+  checkInEdited?: boolean;
+  checkOutEdited?: boolean;
+  checkInEditedBy?: string;
+  checkOutEditedBy?: string;
+  checkInEditedAt?: string;
+  checkOutEditedAt?: string;
   breakMinutes: number;
   workingHours: number;
   overtime: number;
@@ -121,6 +136,7 @@ export interface Attendance {
   remarks?: string;
   /** When true, device sync must not overwrite this row. */
   manualOverride?: boolean;
+  source?: string;
   createdBy: string;
   updatedBy?: string;
   createdAt: string;
@@ -137,6 +153,25 @@ export interface LeaveRequest {
   reason: string;
   attachmentUrl?: string;
   status: LeaveStatus;
+  comments?: string;
+  approvedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Pending add/edit of check-in / check-out until a manager approves. */
+export interface PunchTimeRequest {
+  id: string;
+  employeeId: string;
+  attendanceId?: string;
+  date: string;
+  kind: PunchRequestKind;
+  requestedCheckIn?: string;
+  requestedCheckOut?: string;
+  previousCheckIn?: string;
+  previousCheckOut?: string;
+  reason: string;
+  status: PunchRequestStatus;
   comments?: string;
   approvedBy?: string;
   createdAt: string;

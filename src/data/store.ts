@@ -1,6 +1,9 @@
 /**
- * Mock data store — simulates a real API with in-memory state.
- * All operations are synchronous and return a Promise for easy future swap to fetch().
+ * Data store — in-memory + localStorage with cloud PostgreSQL sync.
+ * On every write: localStorage is updated immediately for responsiveness,
+ * then the same record is pushed to the cloud DB via the Express server.
+ * On load (hydratePersistedStores): cloud DB is tried first; localStorage is
+ * the offline fallback so the app still works without network.
  */
 import {
   mockAttendance,
@@ -11,14 +14,16 @@ import {
   mockHolidays,
 } from './mockData';
 import type {
-  Attendance, Department, Employee, LeaveRequest, Shift, Holiday,
-  AttendanceStatus, LeaveStatus,
+  Attendance, Department, Employee, LeaveRequest, PunchTimeRequest, Shift, Holiday,
+  AttendanceStatus, LeaveStatus, PunchRequestStatus,
 } from '../types';
 import { generateId } from '../lib/utils';
+import { cloudAttendanceApi } from '../api/attendanceApi';
 
 const ATTENDANCE_STORAGE_KEY = 'attendance-store-v1';
 const EMPLOYEE_STORAGE_KEY = 'employee-store-v1';
 const LEAVE_STORAGE_KEY = 'leave-store-v1';
+const PUNCH_REQUEST_STORAGE_KEY = 'punch-request-store-v1';
 
 type StoreListener = () => void;
 const attendanceListeners = new Set<StoreListener>();
@@ -49,9 +54,26 @@ function persistAttendanceStore() {
   try {
     localStorage.setItem(ATTENDANCE_STORAGE_KEY, JSON.stringify(attendanceStore));
   } catch (err) {
-    console.warn('[Store] Failed to save attendance:', err);
+    console.warn('[Store] Failed to save attendance to localStorage:', err);
   }
   notifyAttendanceListeners();
+}
+
+/**
+ * Fire-and-forget cloud sync for a single record.
+ * Silently ignored when the API server is offline.
+ */
+function syncRecordToCloud(record: Attendance) {
+  cloudAttendanceApi.upsert(record).catch(() => {
+    /* server offline — localStorage copy is the fallback */
+  });
+}
+
+/**
+ * Fire-and-forget cloud delete.
+ */
+function deleteRecordFromCloud(id: string) {
+  cloudAttendanceApi.delete(id).catch(() => { /* offline */ });
 }
 
 function loadEmployeeStore(): Employee[] {
@@ -110,23 +132,83 @@ function persistLeaveStore() {
   }
 }
 
+function loadPunchRequestStore(): PunchTimeRequest[] {
+  try {
+    const raw = localStorage.getItem(PUNCH_REQUEST_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as PunchTimeRequest[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistPunchRequestStore() {
+  try {
+    localStorage.setItem(PUNCH_REQUEST_STORAGE_KEY, JSON.stringify(punchRequestStore));
+  } catch {
+    /* ignore */
+  }
+}
+
 // ─── Mutable stores ───────────────────────────────────────────────────────────
 let attendanceStore: Attendance[] = loadAttendanceStore();
 let employeeStore: Employee[] = loadEmployeeStore();
 let departmentStore: Department[] = [...mockDepartments];
 let leaveStore: LeaveRequest[] = loadLeaveStore();
+let punchRequestStore: PunchTimeRequest[] = loadPunchRequestStore();
 let shiftStore: Shift[] = [...mockShifts];
 let holidayStore: Holiday[] = [...mockHolidays];
 
 /**
- * Reload employees / attendance / leave from localStorage.
- * Call after login so previous machine records appear again.
+ * Reload employees / attendance / leave from localStorage first, then from
+ * the cloud database. Cloud records overwrite local ones so that data added
+ * on any device is always visible after this call.
+ * Call after login or on app start.
  */
-export function hydratePersistedStores() {
+export async function hydratePersistedStores() {
+  // 1. Fast local load so the UI isn't blank
   attendanceStore = loadAttendanceStore();
   employeeStore = loadEmployeeStore();
   leaveStore = loadLeaveStore();
+  punchRequestStore = loadPunchRequestStore();
   notifyAttendanceListeners();
+
+  // 2. Pull cloud records and merge (cloud wins for non-manual rows)
+  try {
+    const cloudRecords = await cloudAttendanceApi.getAll();
+    if (cloudRecords.length > 0) {
+      // Merge: keep manual-override local edits if newer, else use cloud
+      const byKey = new Map<string, Attendance>();
+      // Seed with current local store
+      for (const r of attendanceStore) {
+        byKey.set(`${r.employeeId}|${r.date}`, r);
+      }
+      // Overwrite with cloud records (cloud is source of truth for non-manual)
+      for (const r of cloudRecords) {
+        const key = `${r.employeeId}|${r.date}`;
+        const local = byKey.get(key);
+        if (!local) {
+          byKey.set(key, r);
+        } else if (r.manualOverride && !local.manualOverride) {
+          byKey.set(key, r);
+        } else if (!local.manualOverride) {
+          byKey.set(key, r);
+        } else if ((r.updatedAt || '') > (local.updatedAt || '')) {
+          byKey.set(key, r);
+        }
+      }
+      attendanceStore = Array.from(byKey.values());
+      // Persist merged result back to localStorage
+      try {
+        localStorage.setItem(ATTENDANCE_STORAGE_KEY, JSON.stringify(attendanceStore));
+      } catch { /* quota */ }
+      notifyAttendanceListeners();
+    }
+  } catch {
+    // Server offline — local data is used as-is
+    console.info('[Store] Cloud sync unavailable — using local attendance data');
+  }
 }
 
 /** Subscribe to attendance changes (Edit Attendance → Report live update). */
@@ -137,8 +219,17 @@ export function subscribeAttendance(listener: StoreListener): () => void {
   };
 }
 
+function normalizeEmpId(id: string | number): string {
+  const s = String(id || '').trim().toLowerCase();
+  const digits = s.replace(/\D/g, '').replace(/^0+/, '');
+  return digits || s;
+}
+
 function sameEmployeeRef(a: string, b: string) {
-  return String(a) === String(b);
+  if (String(a) === String(b)) return true;
+  const na = normalizeEmpId(a);
+  const nb = normalizeEmpId(b);
+  return Boolean(na) && na === nb;
 }
 
 function employeeIdAliases(employeeId: string): string[] {
@@ -173,23 +264,50 @@ function findAttendanceForDeviceDay(employeeId: string, date: string) {
   return matches.find((a) => a.manualOverride) ?? matches[0];
 }
 
-/** One row per employee+date — prefer manual edits, then newest update. */
+/** One row per employee+date — prefer complete punches / manual edits. */
+function attendanceQualityScore(row: Attendance): number {
+  let score = 0;
+  if (row.manualOverride) score += 10_000;
+  if (row.manualCheckIn || row.manualCheckOut) score += 5_000;
+  if (row.checkIn || row.manualCheckIn) score += 100;
+  if (row.checkOut || row.manualCheckOut) score += 200;
+  if (row.status === 'present' || row.status === 'late' || row.status === 'work_from_home') score += 50;
+  else if (row.status === 'half_day') score += 20;
+  else if (row.status === 'on_leave') score += 10;
+  score += Math.min(80, Math.round((row.workingHours || 0) * 10));
+  // Prefer newer updates as a weak tie-breaker
+  const t = Date.parse(row.updatedAt || row.createdAt || '');
+  if (!Number.isNaN(t)) score += Math.min(99, Math.floor(t / 1e11));
+  return score;
+}
+
+function normalizeAttendanceDate(date: string): string {
+  const raw = String(date || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** One row per employee+date — prefer manual edits, then most complete punch day. */
 function dedupeAttendanceRows(rows: Attendance[]): Attendance[] {
   const best = new Map<string, Attendance>();
   for (const row of rows) {
-    const key = `${String(row.employeeId)}|${row.date}`;
+    const date = normalizeAttendanceDate(row.date);
+    const normalized = date === row.date ? row : { ...row, date };
+    // Collapse machine id / internal id onto one bucket using numeric alias when possible
+    const empKey = normalizeEmpId(normalized.employeeId) || String(normalized.employeeId);
+    const key = `${empKey}|${date}`;
     const prev = best.get(key);
     if (!prev) {
-      best.set(key, row);
+      best.set(key, normalized);
       continue;
     }
-    if (row.manualOverride && !prev.manualOverride) {
-      best.set(key, row);
-      continue;
-    }
-    if (prev.manualOverride && !row.manualOverride) continue;
-    if ((row.updatedAt || '') > (prev.updatedAt || '')) {
-      best.set(key, row);
+    if (attendanceQualityScore(normalized) > attendanceQualityScore(prev)) {
+      best.set(key, normalized);
     }
   }
   return Array.from(best.values());
@@ -235,6 +353,7 @@ export const AttendanceAPI = {
       ),
     ];
     persistAttendanceStore();
+    syncRecordToCloud(record);
     return Promise.resolve(record);
   },
 
@@ -266,6 +385,7 @@ export const AttendanceAPI = {
         !(sameEmployeeRef(a.employeeId, empId) && a.date === date),
     );
     persistAttendanceStore();
+    syncRecordToCloud(updated);
     return Promise.resolve(updated);
   },
 
@@ -298,6 +418,8 @@ export const AttendanceAPI = {
       return !blocked.has(`${a.employeeId}|${a.date}`);
     });
     persistAttendanceStore();
+    // Sync all touched rows to cloud
+    touched.forEach(syncRecordToCloud);
     return Promise.resolve(touched);
   },
 
@@ -322,12 +444,15 @@ export const AttendanceAPI = {
       restored += 1;
     }
     persistAttendanceStore();
+    // Re-push manual rows to cloud so they win over device imports
+    rows.filter(r => r.manualOverride).forEach(syncRecordToCloud);
     return Promise.resolve(restored);
   },
 
   delete: (id: string) => {
     attendanceStore = attendanceStore.filter(a => a.id !== id);
     persistAttendanceStore();
+    deleteRecordFromCloud(id);
     return Promise.resolve();
   },
 
@@ -340,7 +465,59 @@ export const AttendanceAPI = {
     }));
     attendanceStore = [...created, ...attendanceStore];
     persistAttendanceStore();
+    // Sync all new records to cloud
+    created.forEach(syncRecordToCloud);
     return Promise.resolve(created);
+  },
+
+  /**
+   * Remove non-manual device-sourced rows for an employee in a date range
+   * so a rebuild from punch logs cannot leave punches on the wrong day.
+   */
+  clearDeviceRowsInRange: (employeeIds: string[], from: string, to: string) => {
+    const idSet = new Set(employeeIds.map(String));
+    const aliases = new Set<string>();
+    for (const id of idSet) {
+      for (const a of employeeIdAliases(id)) aliases.add(a);
+    }
+    const before = attendanceStore.length;
+    const aliasList = [...aliases];
+    attendanceStore = attendanceStore.filter((a) => {
+      if (a.date < from || a.date > to) return true;
+      if (!aliasList.some((id) => sameEmployeeRef(a.employeeId, id))) return true;
+      if (a.manualOverride) return true;
+      // Keep human-created rows that were never from the device
+      if (a.location && a.location !== 'Device Sync' && a.createdBy !== 'device-sync') {
+        return true;
+      }
+      if (a.location === 'Device Sync' || a.createdBy === 'device-sync' || String(a.id).startsWith('att-dev-')) {
+        deleteRecordFromCloud(a.id);
+        return false;
+      }
+      // Legacy imported rows without clear markers — still replace on rebuild
+      if (!a.manualCheckIn && !a.manualCheckOut) {
+        deleteRecordFromCloud(a.id);
+        return false;
+      }
+      return true;
+    });
+    if (attendanceStore.length !== before) persistAttendanceStore();
+    return Promise.resolve(before - attendanceStore.length);
+  },
+
+  /**
+   * Permanently collapse duplicate employee+date rows in the local store
+   * (keeps the best row). Used by the daily report to stop mismatch rows.
+   */
+  purgeDuplicateDays: () => {
+    const kept = dedupeAttendanceRows([...attendanceStore]);
+    const keepIds = new Set(kept.map((r) => r.id));
+    const removed = attendanceStore.filter((a) => !keepIds.has(a.id));
+    if (!removed.length) return Promise.resolve(0);
+    attendanceStore = kept;
+    persistAttendanceStore();
+    removed.forEach((r) => deleteRecordFromCloud(r.id));
+    return Promise.resolve(removed.length);
   },
 
   /**
@@ -365,8 +542,8 @@ export const AttendanceAPI = {
       return Promise.resolve(existing);
     }
 
-    const checkIn = data.checkIn;
-    const checkOut = data.checkOut;
+    const checkIn = data.checkIn?.slice(0, 5);
+    const checkOut = data.checkOut?.slice(0, 5);
     let workingHours = 0;
     if (typeof data.workingHours === 'number' && data.workingHours >= 0) {
       workingHours = data.workingHours;
@@ -379,26 +556,31 @@ export const AttendanceAPI = {
     if (existing) {
       const updated: Attendance = {
         ...existing,
-        checkIn: checkIn ?? existing.checkIn,
-        checkOut: checkOut ?? existing.checkOut,
+        // Always replace times from this day's punch rebuild (do not keep a stale
+        // check-out via ?? — that produced 17:20/17:20 when morning was dropped).
+        checkIn,
+        checkOut,
         workingHours:
           typeof data.workingHours === 'number'
             ? data.workingHours
             : checkIn && checkOut
               ? workingHours
-              : existing.workingHours,
+              : checkIn
+                ? 0
+                : existing.workingHours,
         status: data.status ?? existing.status,
         location: existing.location === 'Device Sync' || !existing.location
           ? 'Device Sync'
           : existing.location,
         remarks:
-          existing.manualOverride && existing.remarks && !existing.remarks.startsWith('source=')
+          existing.manualOverride && existing.remarks && !existing.remarks.startsWith('source=') && !existing.remarks.startsWith('rule=')
             ? existing.remarks
             : undefined,
         updatedAt: now,
       };
       attendanceStore = attendanceStore.map((a) => (a.id === existing.id ? updated : a));
       persistAttendanceStore();
+      syncRecordToCloud(updated);
       return Promise.resolve(updated);
     }
 
@@ -428,6 +610,7 @@ export const AttendanceAPI = {
       ),
     ];
     persistAttendanceStore();
+    syncRecordToCloud(created);
     return Promise.resolve(created);
   },
 };
@@ -598,6 +781,49 @@ export const LeaveAPI = {
   delete: (id: string) => {
     leaveStore = leaveStore.filter(l => l.id !== id);
     persistLeaveStore();
+    return Promise.resolve();
+  },
+};
+
+// ─── Punch Time Request API ───────────────────────────────────────────────────
+export const PunchTimeRequestAPI = {
+  getAll: () => Promise.resolve([...punchRequestStore]),
+
+  getByEmployee: (employeeId: string) =>
+    Promise.resolve(punchRequestStore.filter(r => r.employeeId === employeeId)),
+
+  create: (data: Omit<PunchTimeRequest, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const req: PunchTimeRequest = {
+      ...data,
+      id: generateId('pr'),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    punchRequestStore = [req, ...punchRequestStore];
+    persistPunchRequestStore();
+    return Promise.resolve(req);
+  },
+
+  updateStatus: (id: string, status: PunchRequestStatus, approvedBy?: string, comments?: string) => {
+    const existing = punchRequestStore.find(r => r.id === id);
+    if (!existing) {
+      return Promise.reject(new Error('Punch request not found'));
+    }
+    const next = {
+      ...existing,
+      status,
+      approvedBy,
+      comments,
+      updatedAt: new Date().toISOString(),
+    };
+    punchRequestStore = punchRequestStore.map(r => (r.id === id ? next : r));
+    persistPunchRequestStore();
+    return Promise.resolve({ ...next });
+  },
+
+  delete: (id: string) => {
+    punchRequestStore = punchRequestStore.filter(r => r.id !== id);
+    persistPunchRequestStore();
     return Promise.resolve();
   },
 };

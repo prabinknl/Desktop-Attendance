@@ -124,4 +124,20 @@ export const deviceApi = {
     const { data } = await apiClient.get<ApiResponse<Record<string, unknown>>>('/devices/diagnostics');
     return data.data;
   },
+
+  /**
+   * Silently re-authenticate the saved device using its stored credentials.
+   * Always resolves — never throws — so it can safely be called fire-and-forget.
+   */
+  reconnect: async (): Promise<{ connected: boolean; data?: DevicePublic; reason?: string }> => {
+    try {
+      const { data } = await apiClient.post<{ success: boolean; connected: boolean; data?: DevicePublic; reason?: string }>(
+        '/devices/reconnect',
+        {},
+      );
+      return { connected: data.connected, data: data.data, reason: data.reason };
+    } catch {
+      return { connected: false, reason: 'api_unreachable' };
+    }
+  },
 };

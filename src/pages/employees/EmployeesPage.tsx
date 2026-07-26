@@ -8,8 +8,8 @@ import {
   UserCheck, UserX, Mail, Phone, Building2, X, Eye, FileText,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { EmployeeAPI, DepartmentAPI, ShiftAPI, hydratePersistedStores } from '../../data/store';
-import type { Employee, Department, Shift } from '../../types';
+import { EmployeeAPI, DepartmentAPI, ShiftAPI, LeaveAPI, hydratePersistedStores } from '../../data/store';
+import type { Employee, Department, Shift, LeaveRequest } from '../../types';
 import { formatDate, employmentTypeLabel, employeeStatusLabel, generateId, cn } from '../../lib/utils';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -18,6 +18,7 @@ import { deviceApi } from '../../api/deviceApi';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { fetchLogsWithCache } from '../../lib/deviceLogsCache';
 import { importAttendanceFromDeviceLogs } from '../../lib/deviceAttendanceSync';
+import { calcHouseLeaveRemainingMap } from '../../lib/leaveBalance';
 
 const schema = z.object({
   firstName: z.string().min(1, 'First name required'),
@@ -35,8 +36,9 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-function EmployeeCard({ emp, dept, onEdit, onDelete, onView, onReport }: {
+function EmployeeCard({ emp, dept, leaveRemaining, onEdit, onDelete, onView, onReport }: {
   emp: Employee; dept?: Department;
+  leaveRemaining?: number;
   onEdit: () => void; onDelete: () => void; onView: () => void; onReport: () => void;
 }) {
   return (
@@ -57,7 +59,24 @@ function EmployeeCard({ emp, dept, onEdit, onDelete, onView, onReport }: {
           )} />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-slate-900 dark:text-white">{emp.firstName} {emp.lastName}</h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-semibold text-slate-900 dark:text-white">
+              {emp.firstName} {emp.lastName}
+            </h3>
+            {typeof leaveRemaining === 'number' && (
+              <span
+                className={cn(
+                  'inline-flex items-center px-2 py-0.5 rounded-lg text-[11px] font-semibold',
+                  leaveRemaining > 0
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                    : 'bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
+                )}
+                title="Remaining house leave days this month (unused days carry over)"
+              >
+                {leaveRemaining}d leave
+              </span>
+            )}
+          </div>
           <p className="text-sm text-slate-500 dark:text-slate-400">{emp.designation}</p>
           <span className="inline-flex mt-1.5 items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-lg bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400">
             <Building2 size={10} /> {dept?.name ?? '—'}
@@ -119,6 +138,7 @@ export default function EmployeesPage() {
   const { can } = useAuth();
   const { toast } = useNotifications();
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [loading, setLoading] = useState(true);
@@ -140,14 +160,16 @@ export default function EmployeesPage() {
     (async () => {
       hydratePersistedStores();
       // Show previously saved employees immediately
-      const [e0, d0, s0] = await Promise.all([
+      const [e0, d0, s0, l0] = await Promise.all([
         EmployeeAPI.getAll(),
         DepartmentAPI.getAll(),
         ShiftAPI.getAll(),
+        LeaveAPI.getAll(),
       ]);
       setEmployees(e0);
       setDepartments(d0);
       setShifts(s0);
+      setLeaves(l0);
       setLoading(false);
 
       try {
@@ -165,6 +187,11 @@ export default function EmployeesPage() {
   }, []);
 
   const deptMap = useMemo(() => Object.fromEntries(departments.map(d => [d.id, d])), [departments]);
+
+  const leaveRemainingByEmp = useMemo(
+    () => calcHouseLeaveRemainingMap(employees, leaves),
+    [employees, leaves],
+  );
 
   const filtered = useMemo(() => employees.filter(e => {
     const q = search.toLowerCase();
@@ -280,6 +307,7 @@ export default function EmployeesPage() {
                 key={emp.id}
                 emp={emp}
                 dept={deptMap[emp.departmentId]}
+                leaveRemaining={leaveRemainingByEmp[emp.id]}
                 onEdit={() => openEdit(emp)}
                 onDelete={() => setDeleteId(emp.id)}
                 onView={() => setViewEmp(emp)}
@@ -305,7 +333,22 @@ export default function EmployeesPage() {
                     <div className="flex items-center gap-2.5">
                       <img src={emp.avatar} alt="" className="w-8 h-8 rounded-full" />
                       <div>
-                        <p className="font-medium text-slate-900 dark:text-white">{emp.firstName} {emp.lastName}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-medium text-slate-900 dark:text-white">
+                            {emp.firstName} {emp.lastName}
+                          </p>
+                          <span
+                            className={cn(
+                              'inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold',
+                              (leaveRemainingByEmp[emp.id] ?? 0) > 0
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                : 'bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
+                            )}
+                            title="Remaining house leave days"
+                          >
+                            {leaveRemainingByEmp[emp.id] ?? 0}d leave
+                          </span>
+                        </div>
                         <p className="text-xs text-slate-400">{emp.employeeId}</p>
                       </div>
                     </div>
@@ -471,7 +514,19 @@ export default function EmployeesPage() {
               </div>
               <div className="flex flex-col items-center mb-6">
                 <img src={viewEmp.avatar} alt="" className="w-20 h-20 rounded-3xl mb-3 bg-slate-200" />
-                <h3 className="text-xl font-bold text-slate-900 dark:text-white">{viewEmp.firstName} {viewEmp.lastName}</h3>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2 flex-wrap">
+                  <span>{viewEmp.firstName} {viewEmp.lastName}</span>
+                  <span
+                    className={cn(
+                      'inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-semibold',
+                      (leaveRemainingByEmp[viewEmp.id] ?? 0) > 0
+                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                        : 'bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
+                    )}
+                  >
+                    {leaveRemainingByEmp[viewEmp.id] ?? 0}d leave
+                  </span>
+                </h3>
                 <p className="text-sm text-slate-500">{viewEmp.designation}</p>
                 <span className="mt-2 badge bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400">
                   {viewEmp.employeeId}

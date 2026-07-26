@@ -23,10 +23,10 @@ export const mockDepartments: Department[] = [
 
 // ─── Shifts ───────────────────────────────────────────────────────────────────
 export const mockShifts: Shift[] = [
-  { id: 's1', name: 'Morning Shift', startTime: '09:00', endTime: '17:00', breakMinutes: 60, graceMinutes: 15, workingHours: 8, workingDays: [1,2,3,4,5], createdAt: '2023-01-01' },
-  { id: 's2', name: 'Evening Shift', startTime: '14:00', endTime: '22:00', breakMinutes: 60, graceMinutes: 15, workingHours: 8, workingDays: [1,2,3,4,5], createdAt: '2023-01-01' },
-  { id: 's3', name: 'Night Shift', startTime: '22:00', endTime: '06:00', breakMinutes: 30, graceMinutes: 10, workingHours: 7.5, workingDays: [1,2,3,4,5,6], createdAt: '2023-01-01' },
-  { id: 's4', name: 'General Shift', startTime: '10:00', endTime: '18:00', breakMinutes: 60, graceMinutes: 30, workingHours: 8, workingDays: [1,2,3,4,5], createdAt: '2023-01-01' },
+  { id: 's1', name: 'Morning Shift', startTime: '09:00', endTime: '17:00', breakMinutes: 60, graceMinutes: 15, workingHours: 8, workingDays: [0,1,2,3,4,5], createdAt: '2023-01-01' },
+  { id: 's2', name: 'Evening Shift', startTime: '14:00', endTime: '22:00', breakMinutes: 60, graceMinutes: 15, workingHours: 8, workingDays: [0,1,2,3,4,5], createdAt: '2023-01-01' },
+  { id: 's3', name: 'Night Shift', startTime: '22:00', endTime: '06:00', breakMinutes: 30, graceMinutes: 10, workingHours: 7.5, workingDays: [0,1,2,3,4,5,6], createdAt: '2023-01-01' },
+  { id: 's4', name: 'General Shift', startTime: '10:00', endTime: '18:00', breakMinutes: 60, graceMinutes: 30, workingHours: 8, workingDays: [0,1,2,3,4,5], createdAt: '2023-01-01' },
 ];
 
 // ─── Employees ────────────────────────────────────────────────────────────────

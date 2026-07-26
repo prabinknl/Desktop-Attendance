@@ -1,11 +1,11 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
   Plus, Search, CheckCircle, XCircle, Clock, X, Paperclip,
-  CalendarDays, Filter, BadgeCheck, Ban, Undo2,
+  CalendarDays, Filter, BadgeCheck, Ban, Undo2, ChevronDown, User as UserIcon, Trash2,
 } from 'lucide-react';
 import { LeaveAPI, EmployeeAPI, AttendanceAPI } from '../../data/store';
 import type { LeaveRequest, Employee, LeaveType, LeaveStatus } from '../../types';
@@ -14,6 +14,8 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import CalendarDateInput from '../../components/ui/CalendarDateInput';
+import { calcHouseLeaveRemainingMap } from '../../lib/leaveBalance';
+import PunchRequestPanel from '../../components/leave/PunchRequestPanel';
 
 const schema = z.object({
   employeeId: z.string().min(1, 'Employee required'),
@@ -24,6 +26,7 @@ const schema = z.object({
 }).refine(d => d.toDate >= d.fromDate, { message: 'To date must be after from date', path: ['toDate'] });
 
 type FormData = z.infer<typeof schema>;
+type PageTab = 'leave' | 'punch';
 
 const statusConfig: Record<LeaveStatus, { label: string; className: string; icon: React.ElementType }> = {
   pending:   { label: 'Pending',   className: 'badge-pending',  icon: Clock },
@@ -33,9 +36,18 @@ const statusConfig: Record<LeaveStatus, { label: string; className: string; icon
   cancelled: { label: 'Cancelled', className: 'badge-cancelled', icon: XCircle },
 };
 
+/** Keep leave attendance dates in local civil time; never shift via UTC ISO conversion. */
+function localYmd(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export default function LeavePage() {
   const { user, can, hasRole } = useAuth();
   const { toast, addNotification } = useNotifications();
+  const [tab, setTab] = useState<PageTab>('leave');
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,11 +55,24 @@ export default function LeavePage() {
   const [statusFilter, setStatusFilter] = useState<LeaveStatus | ''>('');
   const [typeFilter, setTypeFilter] = useState<LeaveType | ''>('');
   const [search, setSearch] = useState('');
+  const [empMenuOpen, setEmpMenuOpen] = useState(false);
+  const empMenuRef = useRef<HTMLDivElement>(null);
   const [approveId, setApproveId] = useState<string | null>(null);
   const [conditionalApproveId, setConditionalApproveId] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [revokeId, setRevokeId] = useState<string | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (empMenuRef.current && !empMenuRef.current.contains(e.target as Node)) {
+        setEmpMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   const { register, handleSubmit, watch, setValue, formState: { errors, isSubmitting }, reset } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -68,17 +93,39 @@ export default function LeavePage() {
 
   const empMap = useMemo(() => Object.fromEntries(employees.map(e => [e.id, e])), [employees]);
 
+  const leaveRemainingByEmp = useMemo(
+    () => calcHouseLeaveRemainingMap(employees, leaves),
+    [employees, leaves],
+  );
+
   const filtered = useMemo(() => leaves.filter(l => {
     if (user?.role === 'employee' && user.employeeId && l.employeeId !== user.employeeId) return false;
     const emp = empMap[l.employeeId];
-    const q = search.toLowerCase();
-    const matchSearch = !q || (emp && `${emp.firstName} ${emp.lastName}`.toLowerCase().includes(q));
+    const q = search.trim().toLowerCase();
+    const matchSearch = !q || (emp && (
+      `${emp.firstName} ${emp.lastName}`.toLowerCase().includes(q) ||
+      (emp.employeeId || '').toLowerCase().includes(q) ||
+      (emp.email || '').toLowerCase().includes(q) ||
+      (emp.designation || '').toLowerCase().includes(q)
+    ));
     const matchStatus = !statusFilter || l.status === statusFilter;
     const matchType = !typeFilter || l.leaveType === typeFilter;
     return matchSearch && matchStatus && matchType;
   }), [leaves, empMap, search, statusFilter, typeFilter, user]);
 
   const onSubmit = async (data: FormData) => {
+    if (data.leaveType === 'casual' || data.leaveType === 'unpaid') {
+      const emp = empMap[data.employeeId];
+      const remaining = leaveRemainingByEmp[data.employeeId] ?? 0;
+      if (totalDays > remaining) {
+        toast(
+          'error',
+          'Not enough house leave',
+          `${emp ? `${emp.firstName} ${emp.lastName}` : 'Employee'} has ${remaining} day(s) remaining this month (unused days carry over).`,
+        );
+        return;
+      }
+    }
     const req = await LeaveAPI.create({
       ...data,
       totalDays,
@@ -107,15 +154,10 @@ export default function LeavePage() {
     if (leave) {
       const emp = empMap[leave.employeeId];
       if (emp) {
-        const days: string[] = [];
-        const cur = new Date(leave.fromDate);
-        const end = new Date(leave.toDate);
+        const cur = new Date(`${leave.fromDate}T12:00:00`);
+        const end = new Date(`${leave.toDate}T12:00:00`);
         while (cur <= end) {
-          const dow = cur.getDay();
-          if (dow !== 0 && dow !== 6) days.push(cur.toISOString().split('T')[0]);
-          cur.setDate(cur.getDate() + 1);
-        }
-        for (const date of days) {
+          const date = localYmd(cur);
           await AttendanceAPI.create({
             employeeId: emp.id, departmentId: emp.departmentId, date,
             shiftId: emp.shiftId, checkIn: undefined, checkOut: undefined,
@@ -123,6 +165,7 @@ export default function LeavePage() {
             status: 'on_leave', location: '', remarks: `Leave approved: ${leave.leaveType}`,
             createdBy: user?.id ?? 'u1',
           });
+          cur.setDate(cur.getDate() + 1);
         }
       }
     }
@@ -148,6 +191,25 @@ export default function LeavePage() {
       'Conditionally approved — attendance OT/LT still counted',
     );
     setLeaves(l => l.map(x => x.id === conditionalApproveId ? updated : x));
+
+    if (leave) {
+      const emp = empMap[leave.employeeId];
+      if (emp) {
+        const cur = new Date(`${leave.fromDate}T12:00:00`);
+        const end = new Date(`${leave.toDate}T12:00:00`);
+        while (cur <= end) {
+          const date = localYmd(cur);
+          await AttendanceAPI.create({
+            employeeId: emp.id, departmentId: emp.departmentId, date,
+            shiftId: emp.shiftId, checkIn: undefined, checkOut: undefined,
+            breakMinutes: 0, workingHours: 0, overtime: 0, lateMinutes: 0,
+            status: 'on_leave', location: '', remarks: 'Unpaid Leave',
+            createdBy: user?.id ?? 'u1',
+          });
+          cur.setDate(cur.getDate() + 1);
+        }
+      }
+    }
 
     addNotification({
       type: 'leave_approved',
@@ -206,7 +268,7 @@ export default function LeavePage() {
       setLeaves(l => l.map(x => (x.id === id ? { ...updated, status: 'pending' } : x)));
 
       // Clear On Leave attendance rows created by a full approve (best-effort)
-      if (previousStatus === 'approved') {
+      if (previousStatus === 'approved' || previousStatus === 'conditional_approved') {
         try {
           const emp = empMap[leave.employeeId];
           const aliases = new Set(
@@ -242,6 +304,20 @@ export default function LeavePage() {
     void revokeToPending(revokeId);
   };
 
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    const id = deleteId;
+    try {
+      await LeaveAPI.delete(id);
+      setLeaves(current => current.filter(leave => leave.id !== id));
+      toast('success', 'Leave Request Deleted', 'The cancelled leave request was permanently deleted.');
+    } catch (err) {
+      toast('error', 'Delete failed', err instanceof Error ? err.message : 'Could not delete leave request.');
+    } finally {
+      setDeleteId(null);
+    }
+  };
+
   const statusSummary = useMemo(() => ({
     pending: leaves.filter(l => l.status === 'pending').length,
     approved: leaves.filter(l => l.status === 'approved').length,
@@ -251,22 +327,58 @@ export default function LeavePage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Leave Management</h1>
-          <p className="text-sm text-slate-500 mt-0.5">{leaves.length} total requests</p>
+          <p className="text-sm text-slate-500 mt-0.5">
+            {tab === 'leave' ? `${leaves.length} leave requests` : 'Punch add / edit requests for approval'}
+          </p>
         </div>
+        {tab === 'leave' && (
+          <button
+            onClick={() => {
+              const today = todayStr();
+              reset({ leaveType: 'annual', fromDate: today, toDate: today, employeeId: '', reason: '' });
+              setShowForm(true);
+            }}
+            className="btn-primary"
+          >
+            <Plus size={16} /> New Request
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 max-w-md">
         <button
-          onClick={() => {
-            const today = todayStr();
-            reset({ leaveType: 'annual', fromDate: today, toDate: today, employeeId: '', reason: '' });
-            setShowForm(true);
-          }}
-          className="btn-primary"
+          type="button"
+          onClick={() => setTab('leave')}
+          className={cn(
+            'py-2.5 rounded-lg text-sm font-semibold transition-all',
+            tab === 'leave'
+              ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+              : 'text-slate-600 dark:text-slate-300 hover:bg-white/60 dark:hover:bg-slate-700/60',
+          )}
         >
-          <Plus size={16} /> New Request
+          Leave Requests
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('punch')}
+          className={cn(
+            'py-2.5 rounded-lg text-sm font-semibold transition-all',
+            tab === 'punch'
+              ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+              : 'text-slate-600 dark:text-slate-300 hover:bg-white/60 dark:hover:bg-slate-700/60',
+          )}
+        >
+          Punch Time Requests
         </button>
       </div>
+
+      {tab === 'punch' ? (
+        <PunchRequestPanel />
+      ) : (
+      <>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -287,10 +399,121 @@ export default function LeavePage() {
 
       {/* Filters */}
       <div className="card p-4 flex flex-wrap gap-3">
-        <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex-1 min-w-48 max-w-xs">
-          <Search size={14} className="text-slate-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search employee..."
-            className="bg-transparent text-sm outline-none flex-1 text-slate-700 dark:text-slate-200 placeholder:text-slate-400" />
+        <div ref={empMenuRef} className="relative flex-1 min-w-56 max-w-xs">
+          <div
+            onClick={() => setEmpMenuOpen(v => !v)}
+            className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
+          >
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <Search size={14} className="text-slate-400 flex-shrink-0" />
+              <input
+                value={search}
+                onChange={e => {
+                  setSearch(e.target.value);
+                  setEmpMenuOpen(true);
+                }}
+                onFocus={() => setEmpMenuOpen(true)}
+                placeholder="Search or select employee..."
+                className="bg-transparent text-sm outline-none flex-1 text-slate-700 dark:text-slate-200 placeholder:text-slate-400 min-w-0"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSearch('');
+                  }}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            <ChevronDown size={14} className="text-slate-400 flex-shrink-0" />
+          </div>
+
+          <AnimatePresence>
+            {empMenuOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 6, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 6, scale: 0.98 }}
+                transition={{ duration: 0.15 }}
+                className="absolute left-0 right-0 top-full mt-1.5 z-40 card shadow-xl overflow-hidden max-h-72 flex flex-col"
+              >
+                <div className="p-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                    Select Employee ({employees.length})
+                  </span>
+                  {search && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch('')}
+                      className="text-[11px] text-primary-500 font-medium hover:underline"
+                    >
+                      Clear selection
+                    </button>
+                  )}
+                </div>
+
+                <div className="overflow-y-auto max-h-60 divide-y divide-slate-100 dark:divide-slate-800/60 py-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearch('');
+                      setEmpMenuOpen(false);
+                    }}
+                    className={cn(
+                      'w-full text-left px-3 py-2 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors',
+                      !search ? 'text-primary-600 dark:text-primary-400 font-bold bg-primary-50/50 dark:bg-primary-900/20' : 'text-slate-600 dark:text-slate-300'
+                    )}
+                  >
+                    All Employees
+                  </button>
+
+                  {employees
+                    .filter(e => {
+                      const q = search.trim().toLowerCase();
+                      if (!q) return true;
+                      const name = `${e.firstName} ${e.lastName}`.toLowerCase();
+                      const code = (e.employeeId || '').toLowerCase();
+                      return name.includes(q) || code.includes(q);
+                    })
+                    .map(emp => {
+                      const fullName = `${emp.firstName} ${emp.lastName}`;
+                      const isSelected = search.toLowerCase() === fullName.toLowerCase();
+                      return (
+                        <div
+                          key={emp.id}
+                          onClick={() => {
+                            setSearch(fullName);
+                            setEmpMenuOpen(false);
+                          }}
+                          className={cn(
+                            'flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors',
+                            isSelected && 'bg-primary-50 dark:bg-primary-900/30'
+                          )}
+                        >
+                          <img
+                            src={emp.avatar}
+                            alt=""
+                            className="w-7 h-7 rounded-full bg-slate-200 object-cover flex-shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className={cn('text-sm truncate', isSelected ? 'font-bold text-primary-600 dark:text-primary-400' : 'font-medium text-slate-800 dark:text-slate-200')}>
+                              {fullName}
+                            </p>
+                            <p className="text-[11px] text-slate-400 truncate">
+                              {emp.employeeId} {emp.designation ? `· ${emp.designation}` : ''}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="input py-2 w-auto min-w-32">
           <option value="">All Status</option>
@@ -335,9 +558,26 @@ export default function LeavePage() {
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-2.5">
                         <img src={emp?.avatar} alt="" className="w-8 h-8 rounded-full" />
-                        <span className="font-medium text-slate-900 dark:text-white">
-                          {emp ? `${emp.firstName} ${emp.lastName}` : '—'}
-                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-slate-900 dark:text-white">
+                              {emp ? `${emp.firstName} ${emp.lastName}` : '—'}
+                            </span>
+                            {emp && (
+                              <span
+                                className={cn(
+                                  'inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold',
+                                  (leaveRemainingByEmp[emp.id] ?? 0) > 0
+                                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                    : 'bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400',
+                                )}
+                                title="Remaining house leave days"
+                              >
+                                {leaveRemainingByEmp[emp.id] ?? 0}d leave
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td className="py-3 px-4">
@@ -415,6 +655,17 @@ export default function LeavePage() {
                           >
                             <Undo2 size={13} />
                             Revoke
+                          </button>
+                        )}
+                        {leave.status === 'cancelled' && (
+                          <button
+                            type="button"
+                            onClick={() => setDeleteId(leave.id)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-rose-700 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/30 transition-colors"
+                            title="Permanently delete request"
+                          >
+                            <Trash2 size={13} />
+                            Delete
                           </button>
                         )}
                       </div>
@@ -556,6 +807,17 @@ export default function LeavePage() {
         onConfirm={handleRevoke}
         onCancel={() => setRevokeId(null)}
       />
+      <ConfirmDialog
+        open={!!deleteId}
+        title="Delete Cancelled Leave"
+        message="Permanently delete this cancelled leave request? This action cannot be undone."
+        confirmLabel="Delete Request"
+        variant="danger"
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteId(null)}
+      />
+      </>
+      )}
     </div>
   );
 }

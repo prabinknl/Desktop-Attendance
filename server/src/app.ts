@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import deviceRoutes from './routes/deviceRoutes.js';
 import authRoutes from './routes/authRoutes.js';
+import attendanceRoutes from './routes/attendanceRoutes.js';
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.use('/api/auth', authRoutes);
 // Singular (legacy) and plural (preferred) mounts share the same controllers
 app.use('/api/device', deviceRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/attendance', attendanceRoutes);
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[API Error]', err.message);

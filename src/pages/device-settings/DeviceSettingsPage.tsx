@@ -39,6 +39,7 @@ import {
   useDeviceMutations,
   useDeviceStatus,
   deviceQueryKeys,
+  cachedLogsForRange,
 } from '../../hooks/useDeviceSettings';
 import { deviceApi } from '../../api/deviceApi';
 import {
@@ -55,6 +56,7 @@ import { formatDateTime } from '../../lib/utils';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { importAttendanceFromDeviceLogs } from '../../lib/deviceAttendanceSync';
 import { saveDeviceLogsCache } from '../../lib/deviceLogsCache';
+import { punchCalendarDate } from '../../lib/punchTime';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
 import CalendarDateInput from '../../components/ui/CalendarDateInput';
 
@@ -85,6 +87,8 @@ export default function DeviceSettingsPage() {
   const [scanMessage, setScanMessage] = useState<string | undefined>();
   const [connectProgress, setConnectProgress] = useState(0);
   const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
+  const [loadingSavedLogs, setLoadingSavedLogs] = useState(false);
+  const [deviceRefreshPending, setDeviceRefreshPending] = useState(false);
 
   const { dateRange, updateDateRange, settings: dateSettings, updateSettings } = useDateSettings();
   const logDateFrom = dateRange.from;
@@ -101,11 +105,10 @@ export default function DeviceSettingsPage() {
   const { connect, save, test, disconnect, sync, scan, updateSyncSettings } = useDeviceMutations();
 
   const isOnline = status?.status === 'online';
-  const isSyncing = status?.status === 'syncing' || sync.isPending;
+  const logsBusy = loadingSavedLogs || (logsLoading && logs.length === 0);
 
   const validLogs = useMemo(() => {
-    const fromMs = new Date(`${logDateFrom}T00:00:00`).getTime();
-    const toMs = new Date(`${logDateTo}T23:59:59.999`).getTime();
+    const seenKeys = new Set<string>();
 
     return logs.filter((row) => {
       const id = String(row.employeeId ?? '').trim().toLowerCase();
@@ -115,13 +118,47 @@ export default function DeviceSettingsPage() {
       const auth = String(row.authMethod ?? '').trim().toLowerCase();
       if (auth === 'invalid' || auth === 'none' || auth === 'unauthorized') return false;
 
-      const t = new Date(row.time).getTime();
-      if (Number.isNaN(t)) return false;
-      if (!Number.isNaN(fromMs) && t < fromMs) return false;
-      if (!Number.isNaN(toMs) && t > toMs) return false;
+      const day = punchCalendarDate(row.time);
+      if (!day) return false;
+      if (logDateFrom && day < logDateFrom) return false;
+      if (logDateTo && day > logDateTo) return false;
+
+      // Deduplicate: same employee + same minute timestamp
+      const d = new Date(row.time);
+      const minuteKey = `${id}_${day}_${d.getHours()}:${d.getMinutes()}`;
+      if (seenKeys.has(minuteKey)) return false;
+      seenKeys.add(minuteKey);
+
       return true;
     });
   }, [logs, logDateFrom, logDateTo]);
+
+  const [logEmpFilter, setLogEmpFilter] = useState<string>('all');
+
+  const logEmployeeOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const log of validLogs) {
+      const id = String(log.employeeId || '').trim();
+      const name = String(log.employeeName || '').trim();
+      if (!id || id === 'unknown' || name === 'unknown') continue;
+      const label = name && name !== id ? `${name} (${id})` : name || id;
+      const key = id || name;
+      if (key && !map.has(key.toLowerCase())) {
+        map.set(key.toLowerCase(), label);
+      }
+    }
+    return Array.from(map.entries()).map(([key, label]) => ({ value: key, label }));
+  }, [validLogs]);
+
+  const filteredLogs = useMemo(() => {
+    if (!logEmpFilter || logEmpFilter === 'all') return validLogs;
+    const target = logEmpFilter.toLowerCase();
+    return validLogs.filter(row => {
+      const id = String(row.employeeId || '').trim().toLowerCase();
+      const name = String(row.employeeName || '').trim().toLowerCase();
+      return id === target || name === target;
+    });
+  }, [validLogs, logEmpFilter]);
 
   // Keep Employees page names in sync with machine log names (valid punches only)
   useEffect(() => {
@@ -287,25 +324,92 @@ export default function DeviceSettingsPage() {
       notify('error', 'Invalid range', 'From date must be on or before To date.');
       return;
     }
+
+    setLoadingSavedLogs(true);
     try {
-      const startTime = new Date(`${logDateFrom}T00:00:00`).toISOString();
-      const endTime = new Date(`${logDateTo}T23:59:59.999`).toISOString();
-      const result = await sync.mutateAsync({ startTime, endTime });
-      setLastSyncResult(result);
-      await queryClient.invalidateQueries({ queryKey: deviceQueryKeys.logs });
-      const freshLogs = await queryClient.fetchQuery({
-        queryKey: [...deviceQueryKeys.logs, logDateFrom, logDateTo],
-        queryFn: () => deviceApi.getLogs(undefined, { from: logDateFrom, to: logDateTo }),
-      });
-      saveDeviceLogsCache(freshLogs);
-      await importAttendanceFromDeviceLogs(freshLogs);
+      // 1) Instant: paint last local cache, then load already-saved server logs.
+      // Do NOT wait for the physical device here — that was freezing this page.
+      const localCached = cachedLogsForRange({ from: logDateFrom, to: logDateTo });
+      if (localCached.length) {
+        queryClient.setQueryData(
+          [...deviceQueryKeys.logs, logDateFrom, logDateTo],
+          localCached,
+        );
+      }
+
+      let savedLogs = localCached;
+      try {
+        savedLogs = await deviceApi.getLogs(undefined, { from: logDateFrom, to: logDateTo });
+        if (savedLogs.length) {
+          saveDeviceLogsCache(savedLogs);
+          queryClient.setQueryData(
+            [...deviceQueryKeys.logs, logDateFrom, logDateTo],
+            savedLogs,
+          );
+        } else if (localCached.length) {
+          savedLogs = localCached;
+        }
+      } catch {
+        // API offline — keep local cache on screen
+      }
+
+      void importAttendanceFromDeviceLogs(savedLogs);
       notify(
         'success',
         'Logs loaded',
-        `Downloaded ${result.downloaded} punch(es) for ${logDateFrom} → ${logDateTo}.`,
+        savedLogs.length
+          ? `Showing ${savedLogs.length} saved punch(es) for ${logDateFrom} → ${logDateTo}.`
+          : 'No saved punches in this range yet.',
       );
+
+      // 2) Pull from the physical device only when it is online.
+      // Offline machines must not trigger AcsEvent variant storms.
+      if (device && isOnline) {
+        setDeviceRefreshPending(true);
+        const startTime = new Date(`${logDateFrom}T00:00:00`).toISOString();
+        const endTime = new Date(`${logDateTo}T23:59:59.999`).toISOString();
+        void (async () => {
+          try {
+            const result = await deviceApi.sync({ startTime, endTime });
+            setLastSyncResult(result);
+            const freshLogs = await deviceApi.getLogs(undefined, {
+              from: logDateFrom,
+              to: logDateTo,
+            });
+            if (freshLogs.length) {
+              saveDeviceLogsCache(freshLogs);
+              queryClient.setQueryData(
+                [...deviceQueryKeys.logs, logDateFrom, logDateTo],
+                freshLogs,
+              );
+              void importAttendanceFromDeviceLogs(freshLogs);
+            }
+            void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.status });
+            void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.device });
+            notify(
+              'success',
+              'Device updated',
+              `Downloaded ${result.downloaded} punch(es) from the connected device.`,
+            );
+          } catch (err) {
+            // Keep showing saved logs; device may have gone offline mid-sync.
+            notify(
+              'info',
+              'Device refresh skipped',
+              err instanceof Error
+                ? err.message
+                : 'Saved logs are shown; device sync failed.',
+            );
+            void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.status });
+          } finally {
+            setDeviceRefreshPending(false);
+          }
+        })();
+      }
     } catch (err) {
       notify('error', 'Load Failed', err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoadingSavedLogs(false);
     }
   };
 
@@ -747,8 +851,8 @@ export default function DeviceSettingsPage() {
                   <Button
                     icon={<ReloadOutlined />}
                     onClick={() => void handleLoadLogsByDate()}
-                    loading={sync.isPending}
-                    disabled={!device || sync.isPending}
+                    loading={loadingSavedLogs || deviceRefreshPending}
+                    disabled={!device || loadingSavedLogs}
                     size="small"
                   >
                     Load by date
@@ -802,18 +906,41 @@ export default function DeviceSettingsPage() {
                       type="primary"
                       icon={<ReloadOutlined />}
                       onClick={() => void handleLoadLogsByDate()}
-                      loading={sync.isPending}
-                      disabled={!device || sync.isPending}
+                      loading={loadingSavedLogs}
+                      disabled={!device || loadingSavedLogs}
                     >
                       Get records
                     </Button>
                   </div>
+                  {deviceRefreshPending && (
+                    <Text type="secondary" className="text-xs pb-1">
+                      Updating from connected device…
+                    </Text>
+                  )}
+                  <div>
+                    <Text type="secondary" className="block text-xs mb-1">
+                      Employee
+                    </Text>
+                    <Select
+                      value={logEmpFilter}
+                      onChange={setLogEmpFilter}
+                      style={{ minWidth: 200 }}
+                      placeholder="All or Select Employee"
+                      showSearch
+                      optionFilterProp="label"
+                      options={[
+                        { value: 'all', label: 'All Employees' },
+                        ...logEmployeeOptions,
+                      ]}
+                    />
+                  </div>
                 </Space>
                 <Table
                   columns={logColumns}
-                  dataSource={validLogs}
+                  dataSource={filteredLogs}
                   rowKey="id"
-                  loading={logsLoading || isSyncing}
+                  // Never block the table on device sync — saved rows stay visible.
+                  loading={logsBusy && filteredLogs.length === 0}
                   pagination={{ pageSize: 20 }}
                   size="small"
                   locale={{

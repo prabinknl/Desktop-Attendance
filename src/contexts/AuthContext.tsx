@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useCallback, type ReactNode
 import type { User, UserRole } from '../types';
 import { mockUsers } from '../data/mockData';
 import { hydratePersistedStores } from '../data/store';
+import { deviceApi } from '../api/deviceApi';
+import { authApi } from '../api/authApi';
 
 /** Only this email may register as admin (one admin account total). */
 export const ALLOWED_ADMIN_EMAIL = 'appnep@pacenp.com';
@@ -128,6 +130,22 @@ function saveAuthUsers(users: User[]) {
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
 }
 
+export async function hydrateCloudAuthUsers(): Promise<User[]> {
+  try {
+    const cloudUsers = await authApi.getCloudUsers();
+    if (cloudUsers.length > 0) {
+      const local = loadAuthUsers();
+      const map = new Map<string, User>();
+      for (const u of local) map.set(u.email.toLowerCase(), u);
+      for (const cu of cloudUsers) map.set(cu.email.toLowerCase(), cu);
+      const merged = Array.from(map.values());
+      localStorage.setItem(USERS_KEY, JSON.stringify(merged));
+      return merged;
+    }
+  } catch {}
+  return loadAuthUsers();
+}
+
 // ─── Permission map ───────────────────────────────────────────────────────────
 const permissions: Record<UserRole, string[]> = {
   admin: [
@@ -138,6 +156,15 @@ const permissions: Record<UserRole, string[]> = {
     'shift:read', 'shift:write', 'shift:delete',
     'report:read', 'report:export',
     'settings:read', 'settings:write',
+    'notification:read',
+  ],
+  account: [
+    'employee:read',
+    'attendance:read', 'attendance:write',
+    'department:read',
+    'leave:read', 'leave:approve',
+    'shift:read',
+    'report:read', 'report:export',
     'notification:read',
   ],
   hr: [
@@ -180,6 +207,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   });
 
+  React.useEffect(() => {
+    hydrateCloudAuthUsers();
+  }, []);
+
   const getAuthUsers = useCallback(() => loadAuthUsers(), []);
 
   const hasAdminAccount = useCallback(() => {
@@ -194,8 +225,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (emailOrName: string, password = '') => {
+    const allUsers = await hydrateCloudAuthUsers();
     const key = emailOrName.trim().toLowerCase();
-    const found = loadAuthUsers().find((u) => {
+    const found = allUsers.find((u) => {
       const matchId =
         u.email.toLowerCase() === key
         || u.name.trim().toLowerCase() === key;
@@ -209,6 +241,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(safe);
     // Keep machine employees + attendance available after re-login
     hydratePersistedStores();
+    // Reconnect the saved attendance machine automatically if it is on the same network
+    deviceApi.reconnect().then((result) => {
+      if (result.connected) {
+        console.info('[Auth] Attendance machine reconnected automatically');
+      }
+    });
     return { success: true };
   }, []);
 
@@ -246,6 +284,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Anyone may create/recreate the admin — replace previous admin accounts
     const withoutAdmins = users.filter((u) => u.role !== 'admin');
     saveAuthUsers([...withoutAdmins, created]);
+    authApi.syncCloudUser(created);
     return { success: true };
   }, []);
 
@@ -282,6 +321,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(input.name.trim() || employeeId)}`,
     };
     saveAuthUsers([...users, created]);
+    authApi.syncCloudUser(created);
     const safe = persistSession(created);
     setUser(safe);
     return { success: true };
@@ -309,6 +349,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(input.name.trim() || email)}`,
     };
     saveAuthUsers([...users, created]);
+    authApi.syncCloudUser(created);
     // Do not auto-login — return to sign-in
     return { success: true };
   }, []);
@@ -324,6 +365,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const next = { ...prev, ...patch };
       const users = loadAuthUsers().map((u) => (u.id === prev.id ? { ...u, ...patch } : u));
       saveAuthUsers(users);
+      authApi.syncCloudUser(next);
       return persistSession(next);
     });
   }, []);
@@ -337,6 +379,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     mock.password = next;
     saveAuthUsers(users);
+    authApi.syncCloudUser(mock);
     return { success: true };
   }, [user]);
 

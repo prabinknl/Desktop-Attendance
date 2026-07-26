@@ -10,6 +10,7 @@ import type { Attendance, Employee, Department } from '../../types';
 import { formatDate, attendanceStatusLabel, cn } from '../../lib/utils';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
 import CalendarDateInput from '../../components/ui/CalendarDateInput';
+import { TimeDisplay, isManualTime } from '../../components/common/TimeDisplay';
 
 const pieColors = ['#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4'];
 
@@ -36,6 +37,7 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [activeReport, setActiveReport] = useState('monthly');
   const [deptFilter, setDeptFilter] = useState('');
+  const [empFilter, setEmpFilter] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -51,8 +53,9 @@ export default function ReportsPage() {
   const filtered = useMemo(() => {
     let r = attendance.filter(a => a.date >= dateFrom && a.date <= dateTo);
     if (deptFilter) r = r.filter(a => a.departmentId === deptFilter);
+    if (empFilter) r = r.filter(a => a.employeeId === empFilter);
     return r;
-  }, [attendance, dateFrom, dateTo, deptFilter]);
+  }, [attendance, dateFrom, dateTo, deptFilter, empFilter]);
 
   // Daily trend chart data
   const trendData = useMemo(() => {
@@ -191,6 +194,10 @@ export default function ReportsPage() {
           <option value="">All Departments</option>
           {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
+        <select value={empFilter} onChange={e => setEmpFilter(e.target.value)} className="input py-1.5 w-auto min-w-40">
+          <option value="">All Employees</option>
+          {employees.map(e => <option key={e.id} value={e.id}>{e.firstName} {e.lastName} ({e.employeeId})</option>)}
+        </select>
         <div className="ml-auto text-sm text-slate-500">
           {filtered.length} records in range
         </div>
@@ -326,8 +333,12 @@ export default function ReportsPage() {
                       </div>
                     </td>
                     <td className="py-2.5 px-4 text-slate-500">{deptMap[a.departmentId]?.name ?? '—'}</td>
-                    <td className="py-2.5 px-4 font-mono text-slate-600 dark:text-slate-300">{a.checkIn ?? '—'}</td>
-                    <td className="py-2.5 px-4 font-mono text-slate-600 dark:text-slate-300">{a.checkOut ?? '—'}</td>
+                    <td className="py-2.5 px-4 font-mono text-slate-600 dark:text-slate-300">
+                      <TimeDisplay time={a.manualCheckIn || a.checkIn} isManual={isManualTime(a, 'in')} record={a} type="in" />
+                    </td>
+                    <td className="py-2.5 px-4 font-mono text-slate-600 dark:text-slate-300">
+                      <TimeDisplay time={a.manualCheckOut || a.checkOut} isManual={isManualTime(a, 'out')} record={a} type="out" />
+                    </td>
                     <td className="py-2.5 px-4 font-semibold text-slate-700 dark:text-slate-200">{a.workingHours}h</td>
                     <td className="py-2.5 px-4 text-violet-500">{a.overtime > 0 ? `+${a.overtime}h` : '—'}</td>
                     <td className="py-2.5 px-4"><span className={`badge-${a.status}`}>{attendanceStatusLabel[a.status]}</span></td>

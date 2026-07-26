@@ -53,6 +53,15 @@ body {
   background-color: #020617;   /* slate-950 */
   color: #f8fafc;              /* slate-50 */
 }
+.edited-time-mark {
+  color: #dc2626;
+  font-size: 0.75em;
+  font-weight: 700;
+  margin-left: 2px;
+  vertical-align: super;
+  cursor: help;
+}
+
 @utility input-email-dim {
   background: #f1f5f9;
   color: #94a3b8;

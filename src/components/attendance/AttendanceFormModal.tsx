@@ -28,6 +28,8 @@ const schema = z.object({
   shiftId: z.string().min(1, 'Shift is required'),
   checkIn: z.string().optional(),
   checkOut: z.string().optional(),
+  manualCheckIn: z.string().optional(),
+  manualCheckOut: z.string().optional(),
   breakMinutes: z.coerce.number().min(0).default(60),
   status: z.enum([
     'present',
@@ -92,11 +94,13 @@ export default function AttendanceFormModal({
       shiftId: record?.shiftId ?? shifts[0]?.id ?? '',
       checkIn: record?.checkIn ?? '',
       checkOut: record?.checkOut ?? '',
+      manualCheckIn: record?.manualCheckIn ?? '',
+      manualCheckOut: record?.manualCheckOut ?? '',
       breakMinutes: record?.breakMinutes ?? 60,
       status: record?.status ?? 'present',
       location: record?.location ?? '',
       remarks:
-        record?.remarks && !record.remarks.startsWith('source=')
+        record?.remarks && !record.remarks.startsWith('source=') && !record.remarks.startsWith('rule=')
           ? record.remarks
           : '',
     },
@@ -106,6 +110,8 @@ export default function AttendanceFormModal({
   const watchDate = watch('date');
   const watchCheckIn = watch('checkIn');
   const watchCheckOut = watch('checkOut');
+  const watchManualCheckIn = watch('manualCheckIn');
+  const watchManualCheckOut = watch('manualCheckOut');
   const watchBreak = watch('breakMinutes');
   const watchShift = watch('shiftId');
 
@@ -154,18 +160,97 @@ export default function AttendanceFormModal({
   }, [watchEmployee, employees, setValue]);
 
   const selectedShift = shifts.find(s => s.id === watchShift);
-  const workingHours = calcWorkingHours(watchCheckIn, watchCheckOut, watchBreak);
-  const lateMinutes = calcLateMinutes(watchCheckIn, selectedShift?.startTime, selectedShift?.graceMinutes);
+  const effectiveIn = watchManualCheckIn || watchCheckIn;
+  const effectiveOut = watchManualCheckOut || watchCheckOut;
+  const workingHours = calcWorkingHours(effectiveIn, effectiveOut, watchBreak);
+  const lateMinutes = calcLateMinutes(effectiveIn, selectedShift?.startTime, selectedShift?.graceMinutes);
   const overtime = calcOvertime(workingHours, selectedShift?.workingHours);
 
   const onSubmit = async (data: FormData) => {
+    const editorName = user?.name || user?.email || 'Admin';
+    const nowIso = new Date().toISOString();
+
+    /** Normalize "17:00:00" / "17:00" so form vs store compares cleanly. */
+    const hm = (t?: string) => {
+      const m = /^(\d{1,2}):(\d{2})/.exec(String(t ?? '').trim());
+      return m ? `${m[1].padStart(2, '0')}:${m[2]}` : '';
+    };
+
+    const origIn = hm(record?.checkIn);
+    const origOut = hm(record?.checkOut);
+    const origManualIn = hm(record?.manualCheckIn);
+    const origManualOut = hm(record?.manualCheckOut);
+    const nextIn = hm(data.checkIn);
+    const nextOut = hm(data.checkOut);
+    const nextManualIn = hm(data.manualCheckIn);
+    const nextManualOut = hm(data.manualCheckOut);
+
+    /** Mark only the side the admin actually touched. */
+    const resolveEdited = (
+      prevEdited: boolean,
+      origMachine: string,
+      nextMachine: string,
+      origManual: string,
+      nextManual: string,
+    ): boolean => {
+      if (!isEditing) return Boolean(nextManual || nextMachine);
+      if (nextManual) return true;
+      if (origManual && !nextManual) return false; // override removed → back to machine time
+      if (nextMachine && nextMachine !== origMachine) return true;
+      return prevEdited;
+    };
+
+    const inTouched = nextManualIn !== origManualIn || nextIn !== origIn;
+    const outTouched = nextManualOut !== origManualOut || nextOut !== origOut;
+
+    const isCheckInEdited = resolveEdited(
+      Boolean(record?.checkInEdited) || Boolean(record?.manualCheckIn),
+      origIn,
+      nextIn,
+      origManualIn,
+      nextManualIn,
+    );
+    const isCheckOutEdited = resolveEdited(
+      Boolean(record?.checkOutEdited) || Boolean(record?.manualCheckOut),
+      origOut,
+      nextOut,
+      origManualOut,
+      nextManualOut,
+    );
+
+    // Persist a durable per-field marker (manual* time) so stars survive reload/sync.
+    const savedManualIn = isCheckInEdited
+      ? nextManualIn || nextIn || origManualIn || undefined
+      : undefined;
+    const savedManualOut = isCheckOutEdited
+      ? nextManualOut || nextOut || origManualOut || undefined
+      : undefined;
+
     await onSave({
       ...data,
+      checkIn: nextIn || undefined,
+      checkOut: nextOut || undefined,
+      manualCheckIn: savedManualIn,
+      manualCheckOut: savedManualOut,
+      checkInEdited: isCheckInEdited,
+      checkOutEdited: isCheckOutEdited,
+      checkInEditedBy: isCheckInEdited
+        ? (inTouched ? editorName : record?.checkInEditedBy || editorName)
+        : undefined,
+      checkOutEditedBy: isCheckOutEdited
+        ? (outTouched ? editorName : record?.checkOutEditedBy || editorName)
+        : undefined,
+      checkInEditedAt: isCheckInEdited
+        ? (inTouched ? nowIso : record?.checkInEditedAt || nowIso)
+        : undefined,
+      checkOutEditedAt: isCheckOutEdited
+        ? (outTouched ? nowIso : record?.checkOutEditedAt || nowIso)
+        : undefined,
       workingHours,
       lateMinutes,
       overtime,
       manualOverride: true,
-      createdBy: 'u1',
+      createdBy: user?.id || 'admin',
     });
   };
 
@@ -186,7 +271,7 @@ export default function AttendanceFormModal({
             : 'Rejected from attendance',
       );
 
-      if (status === 'approved') {
+      if (status === 'approved' || status === 'conditional_approved') {
         const employee =
           selectedEmployee ??
           employees.find(
@@ -206,7 +291,10 @@ export default function AttendanceFormModal({
           const existing = attendance.find(
             (item) => aliases.has(item.employeeId) && item.date === date,
           );
-          const remarks = `Approved ${leaveTypeLabel[leave.leaveType]} leave`;
+          const remarks =
+            status === 'conditional_approved'
+              ? `Conditional approved ${leaveTypeLabel[leave.leaveType] || leave.leaveType} leave`
+              : `Approved ${leaveTypeLabel[leave.leaveType] || leave.leaveType} leave`;
 
           if (existing) {
             await AttendanceAPI.update(existing.id, {
@@ -450,20 +538,38 @@ export default function AttendanceFormModal({
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                <Clock size={13} className="inline mr-1" /> Check In
+                <Clock size={13} className="inline mr-1" /> Machine Check In
               </label>
-              <input type="time" {...register('checkIn')} className="input" />
+              <input type="time" {...register('checkIn')} className="input text-slate-500" />
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                <Clock size={13} className="inline mr-1" /> Check Out
+                <Clock size={13} className="inline mr-1" /> Machine Check Out
               </label>
-              <input type="time" {...register('checkOut')} className={cn('input', errors.checkOut && 'border-rose-400')} />
+              <input type="time" {...register('checkOut')} className={cn('input text-slate-500', errors.checkOut && 'border-rose-400')} />
               {errors.checkOut && <p className="text-xs text-rose-500 mt-1">{errors.checkOut.message}</p>}
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Break (min)</label>
               <input type="number" {...register('breakMinutes')} min={0} className="input" />
+            </div>
+          </div>
+
+          {/* Admin Manual Check-in / Check-out Override */}
+          <div className="grid grid-cols-2 gap-4 p-3.5 rounded-xl bg-primary-50/50 dark:bg-primary-900/10 border border-primary-100 dark:border-primary-800/40">
+            <div>
+              <label className="block text-sm font-semibold text-primary-900 dark:text-primary-200 mb-1.5">
+                <Clock size={13} className="inline mr-1 text-primary-500" /> Manual Check In
+              </label>
+              <input type="time" step="1" {...register('manualCheckIn')} className="input bg-white dark:bg-slate-900" />
+              <p className="text-[11px] text-slate-400 mt-1">Admin manual override time</p>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-primary-900 dark:text-primary-200 mb-1.5">
+                <Clock size={13} className="inline mr-1 text-primary-500" /> Manual Check Out
+              </label>
+              <input type="time" step="1" {...register('manualCheckOut')} className="input bg-white dark:bg-slate-900" />
+              <p className="text-[11px] text-slate-400 mt-1">Admin manual override time</p>
             </div>
           </div>
 

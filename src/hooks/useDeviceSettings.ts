@@ -1,12 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { deviceApi } from '../api/deviceApi';
-import type { DeviceFormValues } from '../types/device';
+import type { AttendanceLogEntry, DeviceFormValues } from '../types/device';
+import { loadDeviceLogsCache, saveDeviceLogsCache } from '../lib/deviceLogsCache';
+import { punchCalendarDate } from '../lib/punchTime';
 
 export const deviceQueryKeys = {
   device: ['device'] as const,
   status: ['device', 'status'] as const,
   logs: ['device', 'logs'] as const,
 };
+
+/** Instant paint from last saved punches — do not wait for API/device. */
+export function cachedLogsForRange(range?: { from?: string; to?: string }): AttendanceLogEntry[] {
+  const all = loadDeviceLogsCache();
+  if (!range?.from && !range?.to) return all;
+  return all.filter((log) => {
+    const d = punchCalendarDate(log.time);
+    if (range.from && d < range.from) return false;
+    if (range.to && d > range.to) return false;
+    return true;
+  });
+}
 
 export function useDevice() {
   return useQuery({
@@ -24,10 +38,21 @@ export function useDeviceStatus() {
 }
 
 export function useDeviceLogs(range?: { from?: string; to?: string }) {
+  const from = range?.from ?? '';
+  const to = range?.to ?? '';
   return useQuery({
-    queryKey: [...deviceQueryKeys.logs, range?.from ?? '', range?.to ?? ''],
-    queryFn: () => deviceApi.getLogs(undefined, range),
-    refetchInterval: 15_000,
+    queryKey: [...deviceQueryKeys.logs, from, to],
+    queryFn: async () => {
+      const logs = await deviceApi.getLogs(undefined, range);
+      if (logs.length) saveDeviceLogsCache(logs);
+      return logs;
+    },
+    // Saved punches show immediately; network refresh happens in the background.
+    initialData: () => cachedLogsForRange(range),
+    initialDataUpdatedAt: 0,
+    placeholderData: (previous) => previous,
+    staleTime: 5_000,
+    refetchInterval: 30_000,
   });
 }
 

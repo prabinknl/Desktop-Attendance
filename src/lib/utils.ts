@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { format, formatDistanceToNow, differenceInMinutes } from 'date-fns';
-import type { AttendanceStatus, LeaveStatus } from '../types';
+import type { Attendance, AttendanceStatus, LeaveStatus, PunchRequestKind, PunchRequestStatus } from '../types';
 
 export { formatDate, formatDateTime } from './dateDisplay';
 
@@ -11,8 +11,13 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
-export const formatTime = (time?: string) =>
-  time ? time : '—';
+export const formatTime = (time?: string) => {
+  if (!time) return '—';
+  // Normalize "14:02:00" / "14:02" → display as HH:mm
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?/.exec(String(time).trim());
+  if (!m) return time;
+  return `${m[1].padStart(2, '0')}:${m[2]}`;
+};
 
 export const timeAgo = (dt: string) =>
   formatDistanceToNow(new Date(dt), { addSuffix: true });
@@ -47,6 +52,28 @@ export function calcOvertime(workingHours: number, expectedHours = 8): number {
 /** Expected day hours for a shift (Dayhour). */
 export function calcDayHours(shiftWorkingHours?: number): number {
   return shiftWorkingHours && shiftWorkingHours > 0 ? shiftWorkingHours : 8;
+}
+
+/**
+ * Resolves effective Check In / Check Out and working hours for an attendance record.
+ * Manual times (manualCheckIn/manualCheckOut) override machine punch times.
+ */
+export function getEffectiveAttendanceTimes(record: Attendance): {
+  effectiveIn?: string;
+  effectiveOut?: string;
+  workingHours: number;
+} {
+  const effectiveIn = record.manualCheckIn || record.checkIn;
+  const effectiveOut = record.manualCheckOut || record.checkOut;
+  let hours = record.workingHours || 0;
+  if (effectiveIn && effectiveOut) {
+    const [hi, mi] = effectiveIn.split(':').map(Number);
+    const [ho, mo] = effectiveOut.split(':').map(Number);
+    if (!Number.isNaN(hi) && !Number.isNaN(ho)) {
+      hours = Math.max(0, Math.round(((ho * 60 + mo - (hi * 60 + mi)) / 60) * 100) / 100);
+    }
+  }
+  return { effectiveIn, effectiveOut, workingHours: hours };
 }
 
 /**
@@ -129,6 +156,18 @@ export const leaveStatusLabel: Record<LeaveStatus, string> = {
   cancelled: 'Cancelled',
 };
 
+export const punchRequestStatusLabel: Record<PunchRequestStatus, string> = {
+  pending: 'Pending',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+};
+
+export const punchRequestKindLabel: Record<PunchRequestKind, string> = {
+  add: 'Add Punch',
+  edit: 'Edit Punch',
+};
+
 /** True when the date falls under a fully approved leave (not conditional / rejected). */
 export function isApprovedLeaveDay(
   leaves: Array<{ status: string; employeeId: string; fromDate: string; toDate: string }>,
@@ -137,19 +176,20 @@ export function isApprovedLeaveDay(
   employeeAliases: string[] = [],
 ): boolean {
   const ids = new Set([employeeId, ...employeeAliases].filter(Boolean));
+  const day = String(date).slice(0, 10);
   return leaves.some(
     (l) =>
       l.status === 'approved' &&
       ids.has(l.employeeId) &&
-      date >= l.fromDate &&
-      date <= l.toDate,
+      day >= String(l.fromDate).slice(0, 10) &&
+      day <= String(l.toDate).slice(0, 10),
   );
 }
 
 export const leaveTypeLabel: Record<string, string> = {
   annual: 'Annual',
   sick: 'Sick',
-  casual: 'Casual',
+  casual: 'House',
   maternity: 'Maternity',
   paternity: 'Paternity',
   unpaid: 'Unpaid',

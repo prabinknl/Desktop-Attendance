@@ -47,9 +47,6 @@ export default function SettingsPage() {
   const [officeHours, setOfficeHours] = useState(() =>
     normalizeOfficeHours(DEFAULT_APP_SETTINGS.officeHours),
   );
-  const [selectedDay, setSelectedDay] = useState(
-    () => DEFAULT_APP_SETTINGS.officeHours.workingDays[0] ?? 1,
-  );
 
   const [attendanceRules, setAttendanceRules] = useState(DEFAULT_APP_SETTINGS.attendanceRules);
 
@@ -83,39 +80,27 @@ export default function SettingsPage() {
     const oh = normalizeOfficeHours(saved.officeHours);
     setCompany(saved.company);
     setOfficeHours(oh);
-    setSelectedDay(oh.workingDays[0] ?? 1);
     setAttendanceRules(saved.attendanceRules);
     setNotifications(saved.notifications);
     setEmployeeOfficeHours(saved.employeeOfficeHours);
   }, []);
 
-  const selectedDayHours = getDayOfficeHours(officeHours, selectedDay);
-
-  const updateSelectedDayHours = (patch: Partial<DayOfficeHours>) => {
+  const updateDayHours = (dayIdx: number, patch: Partial<DayOfficeHours>) => {
     setOfficeHours((o) => {
-      const current = getDayOfficeHours(o, selectedDay);
+      const current = getDayOfficeHours(o, dayIdx);
       const nextDay = { ...current, ...patch };
-      const byDay = { ...o.byDay, [selectedDay]: nextDay };
-      // Keep top-level fields in sync with the day being edited (legacy fallback)
+      const byDay = { ...o.byDay, [dayIdx]: nextDay };
+      // Keep top-level fallback in sync with Monday (or first working day) for legacy readers
+      const fallbackDay = o.workingDays.includes(1) ? 1 : (o.workingDays[0] ?? dayIdx);
+      const fallback = dayIdx === fallbackDay ? nextDay : getDayOfficeHours({ ...o, byDay }, fallbackDay);
       return {
         ...o,
-        ...nextDay,
+        ...fallback,
         byDay,
-        workingDays: o.workingDays.includes(selectedDay)
+        workingDays: o.workingDays.includes(dayIdx)
           ? o.workingDays
-          : [...o.workingDays, selectedDay].sort(),
+          : [...o.workingDays, dayIdx].sort(),
       };
-    });
-  };
-
-  const selectWorkingDay = (idx: number) => {
-    setSelectedDay(idx);
-    setOfficeHours((o) => {
-      const byDay = { ...o.byDay };
-      if (!byDay[idx]) {
-        byDay[idx] = getDayOfficeHours(o, idx);
-      }
-      return { ...o, byDay };
     });
   };
 
@@ -123,9 +108,13 @@ export default function SettingsPage() {
     setOfficeHours((o) => {
       const isOn = o.workingDays.includes(idx);
       if (isOn) {
+        if (o.workingDays.length <= 1) {
+          toast('error', 'Keep one working day', 'At least one working day is required.');
+          return o;
+        }
         const workingDays = o.workingDays.filter((x) => x !== idx);
         const byDay = { ...o.byDay };
-        delete byDay[idx];
+        // Keep hours stored so re-enabling the day restores them
         return { ...o, workingDays, byDay };
       }
       const day = getDayOfficeHours(o, idx);
@@ -135,7 +124,6 @@ export default function SettingsPage() {
         byDay: { ...o.byDay, [idx]: day },
       };
     });
-    setSelectedDay(idx);
   };
 
   useEffect(() => {
@@ -168,7 +156,7 @@ export default function SettingsPage() {
     setEmpOfficeDraft(
       existing ?? {
         enabled: false,
-        ...getDayOfficeHours(officeHours, selectedDay),
+        ...getDayOfficeHours(officeHours, officeHours.workingDays[0] ?? 1),
       },
     );
   };
@@ -338,90 +326,133 @@ export default function SettingsPage() {
 
           {activeTab === 'office' && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Office Hours</h2>
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                  Working Days
-                </label>
-                <p className="text-xs text-slate-500 mb-2">
-                  Select a day to view or edit its office hours. Use the checkbox to mark it as a working day.
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Office Hours</h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  Set start and end times for each day of the week. Attendance Dayhour / OT-LT uses that day’s hours.
                 </p>
-                <div className="flex gap-2">
-                  {DAY_LABELS.map((d, idx) => (
-                    <button
-                      key={d}
-                      type="button"
-                      title={`${d} hours`}
-                      onClick={() => selectWorkingDay(idx)}
-                      className={cn(
-                        'w-9 h-9 rounded-xl text-xs font-bold transition-all ring-offset-2 dark:ring-offset-slate-900',
-                        officeHours.workingDays.includes(idx)
-                          ? 'bg-primary-500 text-white shadow-sm'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-500',
-                        selectedDay === idx && 'ring-2 ring-primary-400',
-                      )}
-                    >
-                      {d}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-center justify-between gap-3 mt-3">
-                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                    Hours for {DAY_LABELS[selectedDay]}
-                  </p>
-                  <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={officeHours.workingDays.includes(selectedDay)}
-                      onChange={() => toggleWorkingDay(selectedDay)}
-                      className="rounded border-slate-300"
-                    />
-                    Working day
-                  </label>
-                </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Start Time</label>
-                  <input
-                    type="time"
-                    value={selectedDayHours.startTime}
-                    onChange={(e) => updateSelectedDayHours({ startTime: e.target.value })}
-                    className="input"
-                  />
+
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                <div className="hidden md:grid grid-cols-[7rem_4.5rem_1fr_1fr_5.5rem_5.5rem] gap-3 px-4 py-2.5 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  <span>Day</span>
+                  <span>Work</span>
+                  <span>Start</span>
+                  <span>End</span>
+                  <span>Grace</span>
+                  <span>Early out</span>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">End Time</label>
-                  <input
-                    type="time"
-                    value={selectedDayHours.endTime}
-                    onChange={(e) => updateSelectedDayHours({ endTime: e.target.value })}
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Grace Period (min)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={selectedDayHours.graceMinutes}
-                    onChange={(e) => updateSelectedDayHours({ graceMinutes: +e.target.value })}
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Early Checkout Grace (min)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={selectedDayHours.earlyCheckoutMinutes}
-                    onChange={(e) => updateSelectedDayHours({ earlyCheckoutMinutes: +e.target.value })}
-                    className="input"
-                  />
+                <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {DAY_LABELS.map((label, idx) => {
+                    const isWorking = officeHours.workingDays.includes(idx);
+                    const hours = getDayOfficeHours(officeHours, idx);
+                    return (
+                      <div
+                        key={label}
+                        className={cn(
+                          'grid grid-cols-1 md:grid-cols-[7rem_4.5rem_1fr_1fr_5.5rem_5.5rem] gap-3 px-4 py-3 items-center',
+                          !isWorking && 'bg-slate-50/70 dark:bg-slate-900/40',
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              'inline-flex w-9 h-9 items-center justify-center rounded-xl text-xs font-bold',
+                              isWorking
+                                ? 'bg-primary-500 text-white'
+                                : 'bg-slate-200 dark:bg-slate-700 text-slate-500',
+                            )}
+                          >
+                            {label}
+                          </span>
+                          <span className="md:hidden text-sm font-medium text-slate-700 dark:text-slate-300">
+                            {label}
+                            {!isWorking && (
+                              <span className="ml-2 text-xs font-normal text-slate-400">Off</span>
+                            )}
+                          </span>
+                        </div>
+
+                        <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={isWorking}
+                            onChange={() => toggleWorkingDay(idx)}
+                            className="rounded border-slate-300"
+                          />
+                          <span className="md:sr-only">Working day</span>
+                        </label>
+
+                        <div>
+                          <label className="md:hidden block text-[11px] font-medium text-slate-500 mb-1">
+                            Start
+                          </label>
+                          <input
+                            type="time"
+                            value={hours.startTime}
+                            disabled={!isWorking}
+                            onChange={(e) => updateDayHours(idx, { startTime: e.target.value })}
+                            className="input disabled:opacity-45"
+                          />
+                        </div>
+                        <div>
+                          <label className="md:hidden block text-[11px] font-medium text-slate-500 mb-1">
+                            End
+                          </label>
+                          <input
+                            type="time"
+                            value={hours.endTime}
+                            disabled={!isWorking}
+                            onChange={(e) => updateDayHours(idx, { endTime: e.target.value })}
+                            className="input disabled:opacity-45"
+                          />
+                        </div>
+                        <div>
+                          <label className="md:hidden block text-[11px] font-medium text-slate-500 mb-1">
+                            Grace (min)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={hours.graceMinutes}
+                            disabled={!isWorking}
+                            onChange={(e) =>
+                              updateDayHours(idx, { graceMinutes: Number(e.target.value) || 0 })
+                            }
+                            className="input disabled:opacity-45"
+                            title="Grace period (minutes)"
+                          />
+                        </div>
+                        <div>
+                          <label className="md:hidden block text-[11px] font-medium text-slate-500 mb-1">
+                            Early out (min)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={hours.earlyCheckoutMinutes}
+                            disabled={!isWorking}
+                            onChange={(e) =>
+                              updateDayHours(idx, {
+                                earlyCheckoutMinutes: Number(e.target.value) || 0,
+                              })
+                            }
+                            className="input disabled:opacity-45"
+                            title="Early checkout grace (minutes)"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              <div className="pt-6 mt-6 border-t border-slate-200 dark:border-slate-700 space-y-4">
+              <p className="text-xs text-slate-400">
+                Tip: Sunday can use shorter hours (e.g. 09:30–14:00) while weekdays stay 09:00–17:00.
+                Click <span className="font-medium">Save Changes</span> when finished.
+              </p>
+
+              <div className="pt-6 mt-2 border-t border-slate-200 dark:border-slate-700 space-y-4">
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white">
                     Individual Employee Office Hours
@@ -711,7 +742,8 @@ export default function SettingsPage() {
                   <div>
                     <h3 className="text-base font-bold text-slate-900 dark:text-white">Monthly leave allowance</h3>
                     <p className="text-sm text-slate-500 mt-1">
-                      Set how many leave days each employee may take per month.
+                      House leave is granted every month. If unused, it carries to the next month
+                      (1 unused day + 1 new day = 2 available).
                     </p>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -754,7 +786,8 @@ export default function SettingsPage() {
                         className="input"
                       />
                       <p className="text-xs text-slate-500 mt-1.5">
-                        Maximum house leave days allowed each month.
+                        House / casual leave days granted every month. Unused days carry to the next
+                        month (e.g. 1 unused → 2 available next month).
                       </p>
                     </div>
                   </div>

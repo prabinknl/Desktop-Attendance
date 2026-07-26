@@ -1,10 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Bell, Sun, Moon, Menu, X, ChevronDown } from 'lucide-react';
+import { Search, Bell, Sun, Moon, Menu, X, ChevronDown, User as UserIcon, Building2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { EmployeeAPI, DepartmentAPI } from '../../data/store';
+import type { Employee, Department } from '../../types';
 import { cn, getInitials, timeAgo } from '../../lib/utils';
 
 interface HeaderProps {
@@ -35,8 +37,55 @@ export default function Header({ sidebarCollapsed, onMobileMenuToggle }: HeaderP
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+
   const notifRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Load employees and departments for global search
+  useEffect(() => {
+    (async () => {
+      try {
+        const [empList, deptList] = await Promise.all([
+          EmployeeAPI.getAll(),
+          DepartmentAPI.getAll(),
+        ]);
+        setEmployees(empList);
+        setDepartments(deptList);
+      } catch (err) {
+        console.warn('[Header] Failed to load search data:', err);
+      }
+    })();
+  }, []);
+
+  const deptMap = useMemo(
+    () => Object.fromEntries(departments.map(d => [d.id, d.name])),
+    [departments]
+  );
+
+  // Matching employees for the search query
+  const matchingEmployees = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return employees.filter(emp => {
+      const fullName = `${emp.firstName} ${emp.lastName}`.toLowerCase();
+      const code = (emp.employeeId || '').toLowerCase();
+      const desig = (emp.designation || '').toLowerCase();
+      const deptName = (deptMap[emp.departmentId] || '').toLowerCase();
+      const email = (emp.email || '').toLowerCase();
+      return (
+        fullName.includes(q) ||
+        code.includes(q) ||
+        desig.includes(q) ||
+        deptName.includes(q) ||
+        email.includes(q)
+      );
+    }).slice(0, 8);
+  }, [searchQuery, employees, deptMap]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -47,16 +96,39 @@ export default function Header({ sidebarCollapsed, onMobileMenuToggle }: HeaderP
       if (userRef.current && !userRef.current.contains(e.target as Node)) {
         setShowUserMenu(false);
       }
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchFocused(false);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // Keyboard shortcut ⌘K or Ctrl+K to focus search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        setSearchFocused(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const roleLabels: Record<string, string> = {
     admin: 'Administrator',
+    account: 'Account',
     hr: 'HR Manager',
     dept_manager: 'Dept. Manager',
     employee: 'Employee',
+  };
+
+  const handleSelectEmployee = (emp: Employee) => {
+    setSearchQuery('');
+    setSearchFocused(false);
+    navigate(`/dashboard?employeeId=${emp.id}`);
   };
 
   return (
@@ -77,26 +149,96 @@ export default function Header({ sidebarCollapsed, onMobileMenuToggle }: HeaderP
         <Menu size={20} />
       </button>
 
-      {/* Search */}
-      <div className={cn(
-        'flex items-center gap-2 flex-1 max-w-md px-3 py-2 rounded-xl',
-        'bg-slate-100 dark:bg-slate-800 border',
-        searchFocused
-          ? 'border-primary-400 ring-2 ring-primary-500/20'
-          : 'border-transparent',
-        'transition-all duration-200'
-      )}>
-        <Search size={15} className="text-slate-400 flex-shrink-0" />
-        <input
-          type="text"
-          placeholder="Search employees, attendance..."
-          onFocus={() => setSearchFocused(true)}
-          onBlur={() => setSearchFocused(false)}
-          className="bg-transparent text-sm text-slate-700 dark:text-slate-200 placeholder:text-slate-400 outline-none flex-1"
-        />
-        <kbd className="hidden sm:flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium text-slate-400 bg-white dark:bg-slate-700 rounded border border-slate-200 dark:border-slate-600">
-          ⌘K
-        </kbd>
+      {/* Global Search with Live Employee Results */}
+      <div ref={searchRef} className="relative flex-1 max-w-md">
+        <div
+          className={cn(
+            'flex items-center gap-2 px-3 py-2 rounded-xl',
+            'bg-slate-100 dark:bg-slate-800 border',
+            searchFocused
+              ? 'border-primary-400 ring-2 ring-primary-500/20'
+              : 'border-transparent',
+            'transition-all duration-200'
+          )}
+        >
+          <Search size={15} className="text-slate-400 flex-shrink-0" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Search employees, attendance..."
+            onFocus={() => setSearchFocused(true)}
+            className="bg-transparent text-sm text-slate-700 dark:text-slate-200 placeholder:text-slate-400 outline-none flex-1"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+            >
+              <X size={14} />
+            </button>
+          )}
+          <kbd className="hidden sm:flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium text-slate-400 bg-white dark:bg-slate-700 rounded border border-slate-200 dark:border-slate-600 select-none">
+            ⌘K
+          </kbd>
+        </div>
+
+        {/* Global Search Results Dropdown */}
+        <AnimatePresence>
+          {searchFocused && searchQuery.trim().length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 6, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 6, scale: 0.98 }}
+              transition={{ duration: 0.15 }}
+              className="absolute left-0 right-0 top-full mt-2 card shadow-2xl overflow-hidden z-50 max-h-96 overflow-y-auto"
+            >
+              <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  Employees ({matchingEmployees.length})
+                </span>
+                <span className="text-[11px] text-slate-400">Click to view attendance</span>
+              </div>
+
+              {matchingEmployees.length === 0 ? (
+                <div className="py-8 text-center text-sm text-slate-400">
+                  <UserIcon size={24} className="mx-auto mb-1.5 opacity-30" />
+                  No employees found matching "{searchQuery}"
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                  {matchingEmployees.map(emp => (
+                    <div
+                      key={emp.id}
+                      onClick={() => handleSelectEmployee(emp)}
+                      className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/80 cursor-pointer transition-colors"
+                    >
+                      <img
+                        src={emp.avatar}
+                        alt={`${emp.firstName} ${emp.lastName}`}
+                        className="w-8 h-8 rounded-full bg-slate-200 object-cover flex-shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                          {emp.firstName} {emp.lastName}
+                        </p>
+                        <p className="text-xs text-slate-400 truncate">
+                          {emp.employeeId} · {emp.designation || 'Employee'}{' '}
+                          {deptMap[emp.departmentId] ? `(${deptMap[emp.departmentId]})` : ''}
+                        </p>
+                      </div>
+                      <span className="text-xs font-medium text-primary-600 dark:text-primary-400 flex-shrink-0">
+                        View →
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       <div className="flex items-center gap-1 ml-auto">

@@ -58,14 +58,15 @@ export async function sendAdminVerificationEmail(input: {
   to: string;
   name: string;
   code: string;
-}): Promise<{ sent: boolean; error?: string }> {
+}): Promise<{ sent: boolean; devFallback?: boolean; error?: string }> {
   if (!smtpConfigured()) {
-    console.warn(
-      '[Auth] SMTP not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASS in server/.env to send verification emails.',
-    );
+    console.log('\n==========================================================');
+    console.log(`[Auth DEV MODE] SMTP not configured in server/.env`);
+    console.log(`[Auth DEV MODE] Verification Code for ${input.to}: ${input.code}`);
+    console.log('==========================================================\n');
     return {
-      sent: false,
-      error: 'Email service is not configured. Set SMTP_USER and SMTP_PASS in server/.env (SMTP_HOST is already set), then restart the server.',
+      sent: true,
+      devFallback: true,
     };
   }
 
@@ -105,7 +106,87 @@ export async function sendAdminVerificationEmail(input: {
     return { sent: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to send email';
-    console.error('[Auth] Failed to send verification email:', message);
+    console.error('[Auth] Failed to send verification email via SMTP:', message);
+    if (env.nodeEnv !== 'production') {
+      console.log('\n==========================================================');
+      console.log(`[Auth DEV MODE] SMTP send failed. Using console fallback.`);
+      console.log(`[Auth DEV MODE] Verification Code for ${input.to}: ${input.code}`);
+      console.log('==========================================================\n');
+      return { sent: true, devFallback: true };
+    }
     return { sent: false, error: message };
   }
 }
+
+export async function sendInvitationEmail(input: {
+  to: string;
+  role: string;
+  inviteLink: string;
+}): Promise<{ sent: boolean; devFallback?: boolean; error?: string }> {
+  if (!smtpConfigured()) {
+    console.log('\n==========================================================');
+    console.log(`[Auth DEV MODE] SMTP not configured in server/.env`);
+    console.log(`[Auth DEV MODE] Invitation link for ${input.to} (${input.role}): ${input.inviteLink}`);
+    console.log('==========================================================\n');
+    return {
+      sent: true,
+      devFallback: true,
+    };
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: env.smtpHost,
+      port: env.smtpPort,
+      secure: env.smtpPort === 465,
+      auth: {
+        user: env.smtpUser,
+        pass: env.smtpPass,
+      },
+    });
+
+    const from = env.smtpFrom || env.smtpUser;
+    const roleLabel = input.role.charAt(0).toUpperCase() + input.role.slice(1);
+    await transporter.sendMail({
+      from: `"PACE Attendance" <${from}>`,
+      to: input.to,
+      subject: `Invitation to join PACE Attendance as an ${roleLabel}`,
+      text: [
+        `Hello,`,
+        '',
+        `You have been invited to join PACE Attendance as an ${roleLabel}.`,
+        '',
+        `Please click the link below to complete your sign-up:`,
+        input.inviteLink,
+        '',
+        'This link expires in 7 days.',
+        '',
+        'If you did not expect this invitation, please ignore this email.',
+      ].join('\n'),
+      html: `
+      <p>Hello,</p>
+      <p>You have been invited to join PACE Attendance as an <strong>${roleLabel}</strong>.</p>
+      <p>Please click the link below to complete your sign-up:</p>
+      <p><a href="${input.inviteLink}" style="display:inline-block;background-color:#10b981;color:white;padding:10px 20px;text-decoration:none;border-radius:6px;font-weight:bold;">Accept Invitation</a></p>
+      <p>Or copy and paste this URL into your browser:</p>
+      <p style="word-break:break-all;"><a href="${input.inviteLink}">${input.inviteLink}</a></p>
+      <p>This link expires in 7 days.</p>
+      <p>If you did not expect this invitation, please ignore this email.</p>
+    `,
+    });
+
+    return { sent: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to send email';
+    console.error('[Auth] Failed to send invitation email:', message);
+    if (env.nodeEnv !== 'production') {
+      console.log('\n==========================================================');
+      console.log(`[Auth DEV MODE] SMTP send failed. Using console fallback.`);
+      console.log(`[Auth DEV MODE] Invitation link for ${input.to} (${input.role}): ${input.inviteLink}`);
+      console.log('==========================================================\n');
+      return { sent: true, devFallback: true };
+    }
+    return { sent: false, error: message };
+  }
+}
+

@@ -1,19 +1,23 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { Attendance, Department, Employee, Shift } from '../types';
+import type { Attendance, Department, Employee, LeaveRequest, Shift } from '../types';
 import {
   attendanceStatusLabel,
   calcOtLtHours,
-  formatDate,
   formatHoursMinutes,
   formatOtLt,
   formatTime,
+  isApprovedLeaveDay,
 } from './utils';
+import { formatDateBsPdf } from './dateDisplay';
 import { resolveEmployeeSchedule } from './appSettings';
+import { isManualTime } from '../components/common/TimeDisplay';
 
 export interface AttendancePdfMeta {
   employeeName: string;
-  monthLabel: string;
+  /** Optional AD month label — not shown under the title (date only). */
+  monthLabel?: string;
+  /** Shown alone under "Daily attendance" (prefer BS range). */
   dateLabel: string;
   fileName?: string;
 }
@@ -26,7 +30,9 @@ function formatWeekday(date: string): string {
 }
 
 function displayRemark(record: Attendance): string {
-  if (record.remarks && !record.remarks.startsWith('source=')) return record.remarks;
+  if (record.remarks && !record.remarks.startsWith('source=') && !record.remarks.startsWith('rule=')) {
+    return record.remarks;
+  }
   if (record.location && record.location !== 'Device Sync') return record.location;
   return '';
 }
@@ -37,8 +43,9 @@ export function downloadAttendancePdf(
     employees: Record<string, Employee>;
     departments: Record<string, Department>;
     shifts: Record<string, Shift>;
+    leaves?: LeaveRequest[];
   },
-  meta: AttendancePdfMeta
+  meta: AttendancePdfMeta,
 ) {
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -60,6 +67,12 @@ export function downloadAttendancePdf(
   };
 
   const getOtLt = (record: Attendance) => {
+    if (String(record.id).startsWith('gap-row-') && record.status === 'holiday') return 0;
+    const emp = maps.employees[record.employeeId];
+    const aliases = [emp?.id, emp?.employeeId].filter((id): id is string => Boolean(id));
+    if (isApprovedLeaveDay(maps.leaves || [], record.employeeId, record.date, aliases)) {
+      return 0;
+    }
     const schedule = getSchedule(record);
     return calcOtLtHours({
       checkIn: record.checkIn,
@@ -75,11 +88,16 @@ export function downloadAttendancePdf(
   const body = records.map((r) => {
     const schedule = getSchedule(r);
     const otLt = getOtLt(r);
+    const effIn = r.manualCheckIn || r.checkIn;
+    const effOut = r.manualCheckOut || r.checkOut;
+    const formattedIn = formatTime(effIn);
+    const formattedOut = formatTime(effOut);
     return [
-      formatDate(r.date),
+      // Nepali BS date — Latin script so the PDF font can render it
+      formatDateBsPdf(r.date),
       formatWeekday(r.date),
-      formatTime(r.checkIn),
-      formatTime(r.checkOut),
+      isManualTime(r, 'in') && formattedIn !== '—' ? `${formattedIn}*` : formattedIn,
+      isManualTime(r, 'out') && formattedOut !== '—' ? `${formattedOut}*` : formattedOut,
       formatHoursMinutes(r.workingHours || 0),
       formatHoursMinutes(schedule.dayHours),
       formatOtLt(otLt),
@@ -91,9 +109,9 @@ export function downloadAttendancePdf(
   const otLtTotal = Math.round(records.reduce((s, r) => s + getOtLt(r), 0) * 100) / 100;
 
   autoTable(doc, {
-    startY: 32,
+    startY: 30,
     head: [[
-      'Date',
+      'Date (BS)',
       'Day',
       'Check In',
       'Check Out',
@@ -141,8 +159,8 @@ export function downloadAttendancePdf(
       fillColor: [255, 255, 255],
     },
     columnStyles: {
-      0: { cellWidth: 28 },
-      1: { cellWidth: 22 },
+      0: { cellWidth: 30 },
+      1: { cellWidth: 20 },
       2: { cellWidth: 16, halign: 'center' },
       3: { cellWidth: 16, halign: 'center' },
       4: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
@@ -151,7 +169,7 @@ export function downloadAttendancePdf(
       7: { cellWidth: 20 },
       8: { cellWidth: 'auto' },
     },
-    margin: { left: marginX, right: marginX, top: 32, bottom: 16 },
+    margin: { left: marginX, right: marginX, top: 30, bottom: 16 },
     didParseCell: (data) => {
       if (data.section === 'body' && data.column.index === 6) {
         const raw = String(data.cell.raw ?? '');
@@ -169,7 +187,7 @@ export function downloadAttendancePdf(
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
 
-    // Employee name — top middle of every page
+    // Employee name — top middle
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(14);
     doc.setTextColor(15, 23, 42);
@@ -180,15 +198,15 @@ export function downloadAttendancePdf(
     doc.setTextColor(100);
     doc.text('Daily attendance', pageWidth / 2, 18, { align: 'center' });
 
+    // Only the date range under the title (Nepali BS)
     doc.setFontSize(8);
     doc.setTextColor(71, 85, 105);
-    doc.text(`${meta.monthLabel}  ·  ${meta.dateLabel}`, pageWidth / 2, 23, { align: 'center' });
+    doc.text(meta.dateLabel, pageWidth / 2, 23, { align: 'center' });
 
     doc.setDrawColor(226, 232, 240);
     doc.setLineWidth(0.3);
     doc.line(marginX, 26, pageWidth - marginX, 26);
 
-    // Page number — bottom right
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(100);

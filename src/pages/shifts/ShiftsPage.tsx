@@ -39,7 +39,7 @@ export default function ShiftsPage() {
 
   const { register, handleSubmit, reset, setValue, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(schema) as Resolver<FormData>,
-    defaultValues: { workingDays: [1, 2, 3, 4, 5], breakMinutes: 60, graceMinutes: 15, workingHours: 8 },
+    defaultValues: { workingDays: [0, 1, 2, 3, 4, 5], breakMinutes: 60, graceMinutes: 15, workingHours: 8 },
   });
 
   useEffect(() => {
@@ -98,7 +98,7 @@ export default function ShiftsPage() {
           <p className="text-sm text-slate-500 mt-0.5">{shifts.length} shifts configured</p>
         </div>
         {can('shift:write') && (
-          <button onClick={() => { setEditShift(null); setSelectedDays([1,2,3,4,5]); reset({ workingDays: [1,2,3,4,5], breakMinutes: 60, graceMinutes: 15, workingHours: 8 }); setShowForm(true); }} className="btn-primary">
+          <button onClick={() => { setEditShift(null); setSelectedDays([0,1,2,3,4,5]); reset({ workingDays: [0,1,2,3,4,5], breakMinutes: 60, graceMinutes: 15, workingHours: 8 }); setShowForm(true); }} className="btn-primary">
             <Plus size={16} /> Add Shift
           </button>
         )}

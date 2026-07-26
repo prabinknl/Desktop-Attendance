@@ -90,8 +90,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   officeHours: {
     ...DEFAULT_DAY,
-    workingDays: [1, 2, 3, 4, 5],
+    // Nepal office week: Sunday–Friday (Saturday weekly off)
+    workingDays: [0, 1, 2, 3, 4, 5],
     byDay: {
+      0: { ...DEFAULT_DAY },
       1: { ...DEFAULT_DAY },
       2: { ...DEFAULT_DAY },
       3: { ...DEFAULT_DAY },
@@ -110,7 +112,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     singlePunchHalfDayEnabled: true,
     singlePunchHalfDayBefore: '11:30',
     sickLeavePerMonth: 2,
-    houseLeavePerMonth: 2,
+    /** Default: 1 house leave day / month. Unused days carry to the next month. */
+    houseLeavePerMonth: 1,
   },
   notifications: {
     emailOnLate: true,
@@ -148,7 +151,8 @@ export function normalizeOfficeHours(
 
   const byDay: Partial<Record<number, DayOfficeHours>> = {};
   const rawByDay = raw?.byDay ?? {};
-  for (const d of workingDays) {
+  // Always keep a slot for every weekday so Admin can set hours per day.
+  for (let d = 0; d <= 6; d += 1) {
     const existing = rawByDay[d as keyof typeof rawByDay] ?? rawByDay[String(d) as unknown as number];
     byDay[d] = existing
       ? {
@@ -158,19 +162,6 @@ export function normalizeOfficeHours(
           earlyCheckoutMinutes: existing.earlyCheckoutMinutes ?? fallback.earlyCheckoutMinutes,
         }
       : { ...fallback };
-  }
-  // Keep any extra byDay entries (e.g. non-working days previously edited)
-  for (const key of Object.keys(rawByDay)) {
-    const d = Number(key);
-    if (Number.isNaN(d) || byDay[d]) continue;
-    const existing = rawByDay[d as keyof typeof rawByDay];
-    if (!existing) continue;
-    byDay[d] = {
-      startTime: existing.startTime ?? fallback.startTime,
-      endTime: existing.endTime ?? fallback.endTime,
-      graceMinutes: existing.graceMinutes ?? fallback.graceMinutes,
-      earlyCheckoutMinutes: existing.earlyCheckoutMinutes ?? fallback.earlyCheckoutMinutes,
-    };
   }
 
   return {
@@ -192,9 +183,37 @@ export function getAppSettings(): AppSettings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_APP_SETTINGS, employeeOfficeHours: {} };
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
+    const officeHours = normalizeOfficeHours(parsed.officeHours);
+    // Migrate old Mon–Fri default → include Sunday (Nepal office day)
+    const days = officeHours.workingDays;
+    const isLegacyMonFri =
+      days.length === 5
+      && days[0] === 1
+      && days[1] === 2
+      && days[2] === 3
+      && days[3] === 4
+      && days[4] === 5;
+    if (isLegacyMonFri) {
+      officeHours.workingDays = [0, 1, 2, 3, 4, 5];
+      if (!officeHours.byDay[0]) {
+        officeHours.byDay[0] = dayHoursFromFallback(officeHours);
+      }
+      try {
+        const next = {
+          company: { ...DEFAULT_APP_SETTINGS.company, ...parsed.company },
+          officeHours,
+          attendanceRules: { ...DEFAULT_APP_SETTINGS.attendanceRules, ...parsed.attendanceRules },
+          notifications: { ...DEFAULT_APP_SETTINGS.notifications, ...parsed.notifications },
+          employeeOfficeHours: parsed.employeeOfficeHours ?? {},
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore quota / private mode
+      }
+    }
     return {
       company: { ...DEFAULT_APP_SETTINGS.company, ...parsed.company },
-      officeHours: normalizeOfficeHours(parsed.officeHours),
+      officeHours,
       attendanceRules: { ...DEFAULT_APP_SETTINGS.attendanceRules, ...parsed.attendanceRules },
       notifications: { ...DEFAULT_APP_SETTINGS.notifications, ...parsed.notifications },
       employeeOfficeHours: parsed.employeeOfficeHours ?? {},
@@ -232,7 +251,7 @@ function dayOfWeekFromDate(date?: string): number {
 /** Resolve schedule for OT/LT: employee override → company day hours → shift. */
 export function resolveEmployeeSchedule(
   employeeId: string,
-  shift?: { startTime: string; graceMinutes: number; workingHours: number },
+  shift?: { startTime: string; graceMinutes: number; workingHours: number; workingDays?: number[] },
   alternateIds: string[] = [],
   date?: string,
 ): { shiftStart: string; graceMinutes: number; dayHours: number; source: 'employee' | 'company' | 'shift' } {
