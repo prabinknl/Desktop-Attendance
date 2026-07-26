@@ -139,9 +139,21 @@ export async function hydrateCloudAuthUsers(): Promise<User[]> {
       for (const u of local) map.set(u.email.toLowerCase(), u);
       for (const cu of cloudUsers) {
         const key = cu.email.toLowerCase();
-        // The server never returns passwords, so keep the cached one to leave
-        // offline sign-in working for accounts created on this device.
-        map.set(key, { ...cu, password: map.get(key)?.password ?? '' });
+        const existing = map.get(key);
+
+        // Normalize role: lowercase + trim; treat empty/undefined as missing
+        const cloudRole = (cu.role as string ?? '').trim().toLowerCase() || undefined;
+        const localRole = existing?.role;
+
+        // Merge: cloud data wins for most fields, but preserve critical local
+        // values (password, role, avatar) when the cloud response omits them.
+        map.set(key, {
+          ...existing,             // start from existing local data
+          ...cu,                   // overlay with cloud fields
+          role: (cloudRole ?? localRole ?? 'employee') as User['role'],
+          password: existing?.password ?? '',
+          avatar: cu.avatar || existing?.avatar || '',
+        });
       }
       const merged = Array.from(map.values());
       localStorage.setItem(USERS_KEY, JSON.stringify(merged));

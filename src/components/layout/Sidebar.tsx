@@ -54,11 +54,18 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { user, logout, hasRole } = useAuth();
   const { unreadCount } = useNotifications();
   const navigate = useNavigate();
-  const deviceSyncAvailable = useDeviceSyncAvailable();
+  const { available: deviceSyncAvailable, loading: deviceProbeLoading } = useDeviceSyncAvailable();
   const isEmployee = hasRole('employee');
+  const isAdmin = hasRole('admin');
   const navItems = isEmployee ? employeeNavItems : staffNavItems;
   const allBottomItems = isEmployee ? employeeBottomItems : staffBottomItems;
-  const bottomItems = deviceSyncAvailable
+
+  // Admins always see Device Settings regardless of the /health probe.
+  // Other staff see it only when the probe confirms deviceSyncEnabled.
+  // While the probe is still loading, keep Device Settings visible to
+  // prevent the flash-then-hide that the user reported.
+  const showDeviceSettings = isAdmin || deviceProbeLoading || deviceSyncAvailable;
+  const bottomItems = showDeviceSettings
     ? allBottomItems
     : allBottomItems.filter((item) => item.path !== '/device-settings');
 

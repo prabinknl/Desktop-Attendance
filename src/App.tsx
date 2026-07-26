@@ -27,11 +27,29 @@ import ProfilePage from './pages/profile/ProfilePage';
 import DeviceSettingsPage from './pages/device-settings/DeviceSettingsPage';
 import EmployeeAttendanceReportPage from './pages/dashboard/EmployeeAttendanceReportPage';
 import { useDeviceSyncAvailable } from './hooks/useDeviceSyncAvailable';
+import { useAuth } from './contexts/AuthContext';
 
-/** The attendance machine is LAN-only, so this page is unreachable from the
- *  hosted deployment where the API runs with device sync disabled. */
+/** Admin users always see Device Settings. Non-admin staff are redirected to
+ *  the dashboard only after the /health probe has definitively responded with
+ *  deviceSyncEnabled: false. While the probe is loading, a spinner is shown
+ *  to avoid the brief flash-then-redirect. */
 function DeviceSettingsRoute() {
-  const available = useDeviceSyncAvailable();
+  const { available, loading } = useDeviceSyncAvailable();
+  const { hasRole } = useAuth();
+  const isAdmin = hasRole('admin');
+
+  // Admins always get access — no probe gating
+  if (isAdmin) return <DeviceSettingsPage />;
+
+  // While probe is loading, show a brief spinner instead of redirecting
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="w-8 h-8 border-4 border-primary-200 border-t-primary-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   if (!available) return <Navigate to="/dashboard" replace />;
   return <DeviceSettingsPage />;
 }
