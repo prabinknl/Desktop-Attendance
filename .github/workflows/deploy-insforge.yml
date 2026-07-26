@@ -1,0 +1,148 @@
+name: Deploy to InsForge
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never run two deployments of the same branch at once, and never cancel a
+# deployment that is already uploading/building.
+concurrency:
+  group: insforge-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Pinned so a new CLI release cannot silently change deploy behaviour.
+  INSFORGE_CLI_VERSION: '0.2.1'
+  # Project identifier only (not a credential). Override with a repository
+  # variable of the same name to deploy to a different project.
+  INSFORGE_PROJECT_ID: ${{ vars.INSFORGE_PROJECT_ID || 'b8a4b02c-6a27-402f-8cc4-ba21910570f4' }}
+
+jobs:
+  deploy:
+    name: Build and deploy frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Build gate: a broken build must never reach InsForge. InsForge rebuilds
+      # the app itself, so this step exists to fail fast on compile errors.
+      - name: Build frontend
+        run: npm run build
+
+      - name: Authenticate with InsForge
+        env:
+          INSFORGE_USER_API_KEY: ${{ secrets.INSFORGE_USER_API_KEY }}
+          INSFORGE_EMAIL: ${{ secrets.INSFORGE_EMAIL }}
+          INSFORGE_PASSWORD: ${{ secrets.INSFORGE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INSFORGE_USER_API_KEY:-}" ]; then
+            echo "Authenticating with a user API key."
+            npx --yes "@insforge/cli@${INSFORGE_CLI_VERSION}" login \
+              --user-api-key "${INSFORGE_USER_API_KEY}" --json > /dev/null
+          elif [ -n "${INSFORGE_EMAIL:-}" ] && [ -n "${INSFORGE_PASSWORD:-}" ]; then
+            echo "Authenticating with email and password."
+            npx --yes "@insforge/cli@${INSFORGE_CLI_VERSION}" login \
+              --email --json > /dev/null
+          else
+            echo "::error::No InsForge credentials configured. Add the INSFORGE_USER_API_KEY secret, or both INSFORGE_EMAIL and INSFORGE_PASSWORD."
+            exit 1
+          fi
+          echo "Authentication succeeded."
+
+      # .insforge/project.json is gitignored, so the runner must link on every run.
+      - name: Link InsForge project
+        run: |
+          set -euo pipefail
+          npx --yes "@insforge/cli@${INSFORGE_CLI_VERSION}" link \
+            --project-id "${INSFORGE_PROJECT_ID}" --json --yes > /dev/null
+          echo "Linked to project ${INSFORGE_PROJECT_ID}."
+
+      - name: Deploy to InsForge hosting
+        id: deploy
+        run: |
+          set -euo pipefail
+          npx --yes "@insforge/cli@${INSFORGE_CLI_VERSION}" deployments deploy . --json \
+            | tee insforge-deployment.json
+
+      # Reads the deployment record the CLI printed and turns it into job
+      # outputs. A deployment that is not READY fails the job.
+      - name: Check deployment result
+        if: always() && (steps.deploy.conclusion == 'success' || steps.deploy.conclusion == 'failure')
+        id: result
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+
+          let raw = '';
+          try {
+            raw = fs.readFileSync('insforge-deployment.json', 'utf8');
+          } catch {
+            console.log('::error::The InsForge CLI produced no deployment output.');
+            process.exit(1);
+          }
+
+          const start = raw.indexOf('{');
+          const end = raw.lastIndexOf('}');
+          if (start === -1 || end <= start) {
+            console.log('::error::Could not parse the deployment response from the InsForge CLI.');
+            process.exit(1);
+          }
+
+          const deployment = JSON.parse(raw.slice(start, end + 1));
+          const status = String(deployment.status ?? 'UNKNOWN').toUpperCase();
+          const id = deployment.id ?? '';
+          const rawUrl = deployment.url ?? '';
+          const url = rawUrl && !/^https?:\/\//.test(rawUrl) ? `https://${rawUrl}` : rawUrl;
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `status=${status}\nurl=${url}\nid=${id}\n`);
+
+          const summary = [
+            '## InsForge deployment',
+            '',
+            `- Status: \`${status}\``,
+            `- Deployment ID: \`${id || 'unknown'}\``,
+            `- Commit: \`${process.env.GITHUB_SHA ?? ''}\``,
+            url ? `- Live URL: ${url}` : '- Live URL: not available yet',
+          ].join('\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+
+          if (status === 'READY') {
+            console.log(`Deployment ${id} is READY.`);
+            if (url) console.log(`Live at: ${url}`);
+            process.exit(0);
+          }
+
+          console.log(
+            `::error::Deployment ${id || ''} finished with status ${status}. ` +
+            `Check progress with: npx @insforge/cli deployments status ${id}`
+          );
+          process.exit(1);
+          NODE
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "::error::Deploy to InsForge failed for commit ${GITHUB_SHA}. See the failing step above."
+          {
+            echo "## InsForge deployment failed"
+            echo ""
+            echo "Commit \`${GITHUB_SHA}\` was not deployed. Review the failing step in this run."
+          } >> "$GITHUB_STEP_SUMMARY"
