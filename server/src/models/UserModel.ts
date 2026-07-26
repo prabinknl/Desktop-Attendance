@@ -30,6 +30,12 @@ function rowToAppUser(row: UserRow) {
   };
 }
 
+/** Same shape as rowToAppUser but without the credential. */
+function rowToSafeUser(row: UserRow) {
+  const { password: _password, ...safe } = rowToAppUser(row);
+  return safe;
+}
+
 export const UserModel = {
   /** Fetch all registered user accounts from cloud DB */
   async getAll() {
@@ -39,6 +45,37 @@ export const UserModel = {
     } catch (err) {
       console.warn('[UserModel] getAll error:', err);
       return [];
+    }
+  },
+
+  /** Account list for the client. The API is reachable from the public
+   *  internet, so passwords must never be part of a read response. */
+  async getAllSafe() {
+    try {
+      const res = await query<UserRow>('SELECT * FROM app_users ORDER BY created_at ASC');
+      return res.rows.map(rowToSafeUser);
+    } catch (err) {
+      console.warn('[UserModel] getAllSafe error:', err);
+      return [];
+    }
+  },
+
+  /** Check a login by email or display name. Returns the account without its
+   *  password, or null when the credentials do not match. */
+  async verifyCredentials(identifier: string, password: string) {
+    const key = identifier.trim().toLowerCase();
+    if (!key) return null;
+    try {
+      const res = await query<UserRow>(
+        `SELECT * FROM app_users
+         WHERE (LOWER(email) = $1 OR LOWER(TRIM(name)) = $1) AND password = $2
+         LIMIT 1`,
+        [key, password],
+      );
+      return res.rows[0] ? rowToSafeUser(res.rows[0]) : null;
+    } catch (err) {
+      console.warn('[UserModel] verifyCredentials error:', err);
+      return null;
     }
   },
 

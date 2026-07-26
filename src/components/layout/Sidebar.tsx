@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { useDeviceSyncAvailable } from '../../hooks/useDeviceSyncAvailable';
 import { cn, getInitials } from '../../lib/utils';
 
 interface NavItem {
@@ -53,9 +54,13 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { user, logout, hasRole } = useAuth();
   const { unreadCount } = useNotifications();
   const navigate = useNavigate();
+  const deviceSyncAvailable = useDeviceSyncAvailable();
   const isEmployee = hasRole('employee');
   const navItems = isEmployee ? employeeNavItems : staffNavItems;
-  const bottomItems = isEmployee ? employeeBottomItems : staffBottomItems;
+  const allBottomItems = isEmployee ? employeeBottomItems : staffBottomItems;
+  const bottomItems = deviceSyncAvailable
+    ? allBottomItems
+    : allBottomItems.filter((item) => item.path !== '/device-settings');
 
   const handleLogout = () => {
     logout();

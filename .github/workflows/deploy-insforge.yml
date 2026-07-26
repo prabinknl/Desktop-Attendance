@@ -21,6 +21,14 @@ env:
   # variable of the same name to deploy to a different project.
   INSFORGE_PROJECT_ID: ${{ vars.INSFORGE_PROJECT_ID || 'b8a4b02c-6a27-402f-8cc4-ba21910570f4' }}
 
+# This workflow deploys the frontend only. The Express API in server/ runs as
+# an InsForge compute service and is released separately with `npm run
+# deploy:api`, which needs the database credentials from server/.env.
+#
+# Required repository variable:
+#   VITE_API_BASE_URL — absolute API origin including /api, e.g.
+#   https://attendance-api-<id>.fly.dev/api
+# Without it the hosted login page POSTs to the static site and gets HTTP 405.
 jobs:
   deploy:
     name: Build and deploy frontend
@@ -40,9 +48,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Require API base URL
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VITE_API_BASE_URL:-}" ]; then
+            echo "::error::Set repository variable VITE_API_BASE_URL to your compute API origin (…/api). Deploy the API with npm run deploy:api first."
+            exit 1
+          fi
+          case "${VITE_API_BASE_URL}" in
+            http://*|https://*) ;;
+            *)
+              echo "::error::VITE_API_BASE_URL must be an absolute http(s) URL, got: ${VITE_API_BASE_URL}"
+              exit 1
+              ;;
+          esac
+          echo "Using VITE_API_BASE_URL=${VITE_API_BASE_URL}"
+
       # Build gate: a broken build must never reach InsForge. InsForge rebuilds
       # the app itself, so this step exists to fail fast on compile errors.
       - name: Build frontend
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: npm run build
 
       - name: Authenticate with InsForge
@@ -74,11 +102,24 @@ jobs:
             --project-id "${INSFORGE_PROJECT_ID}" --json --yes > /dev/null
           echo "Linked to project ${INSFORGE_PROJECT_ID}."
 
+      # Persist so InsForge's own rebuild uses the same API origin.
+      - name: Set frontend API env
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          npx --yes "@insforge/cli@${INSFORGE_CLI_VERSION}" deployments env set \
+            VITE_API_BASE_URL "${VITE_API_BASE_URL}"
+          npx --yes "@insforge/cli@${INSFORGE_CLI_VERSION}" deployments env list
+
       - name: Deploy to InsForge hosting
         id: deploy
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: |
           set -euo pipefail
           npx --yes "@insforge/cli@${INSFORGE_CLI_VERSION}" deployments deploy . --json \
+            --env "{\"VITE_API_BASE_URL\":\"${VITE_API_BASE_URL}\"}" \
             | tee insforge-deployment.json
 
       # Reads the deployment record the CLI printed and turns it into job

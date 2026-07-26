@@ -14,23 +14,15 @@ import {
   mockHolidays,
 } from './mockData';
 import type {
-  Attendance, Department, Employee, LeaveRequest, PunchTimeRequest, Shift, Holiday,
-  AttendanceStatus, LeaveStatus, PunchRequestStatus,
+  Attendance, Department, Employee, LeaveRequest, Shift, Holiday,
+  AttendanceStatus, LeaveStatus,
 } from '../types';
 import { generateId } from '../lib/utils';
 import { cloudAttendanceApi } from '../api/attendanceApi';
-import {
-  cloudDepartmentApi, cloudEmployeeApi, cloudHolidayApi,
-  cloudLeaveApi, cloudPunchRequestApi, cloudShiftApi,
-} from '../api/coreDataApi';
 
 const ATTENDANCE_STORAGE_KEY = 'attendance-store-v1';
 const EMPLOYEE_STORAGE_KEY = 'employee-store-v1';
 const LEAVE_STORAGE_KEY = 'leave-store-v1';
-const PUNCH_REQUEST_STORAGE_KEY = 'punch-request-store-v1';
-const DEPARTMENT_STORAGE_KEY = 'department-store-v1';
-const SHIFT_STORAGE_KEY = 'shift-store-v1';
-const HOLIDAY_STORAGE_KEY = 'holiday-store-v1';
 
 type StoreListener = () => void;
 const attendanceListeners = new Set<StoreListener>();
@@ -139,107 +131,13 @@ function persistLeaveStore() {
   }
 }
 
-function loadPunchRequestStore(): PunchTimeRequest[] {
-  try {
-    const raw = localStorage.getItem(PUNCH_REQUEST_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as PunchTimeRequest[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistPunchRequestStore() {
-  try {
-    localStorage.setItem(PUNCH_REQUEST_STORAGE_KEY, JSON.stringify(punchRequestStore));
-  } catch {
-    /* ignore */
-  }
-}
-
-/** Read a cached collection, falling back to the bundled seed data. */
-function loadCollection<T>(key: string, seed: T[]): T[] {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [...seed];
-    const parsed = JSON.parse(raw) as T[];
-    return Array.isArray(parsed) ? parsed : [...seed];
-  } catch {
-    return [...seed];
-  }
-}
-
-function persistCollection<T>(key: string, rows: T[]) {
-  try {
-    localStorage.setItem(key, JSON.stringify(rows));
-  } catch {
-    /* quota — the cloud copy is authoritative anyway */
-  }
-}
-
-type CloudCollectionApi<T> = {
-  getAll: () => Promise<T[]>;
-  upsert: (record: T) => Promise<T | null>;
-  bulkUpsert: (records: T[]) => Promise<T[]>;
-  delete: (id: string) => Promise<void>;
-};
-
-/**
- * Push a write to the cloud without blocking the UI. The localStorage copy has
- * already been updated, so a failure here just means this device is ahead
- * until the next successful sync.
- */
-function pushToCloud<T>(api: CloudCollectionApi<T>, record: T) {
-  api.upsert(record).catch(() => { /* offline */ });
-}
-
-function removeFromCloud<T>(api: CloudCollectionApi<T>, id: string) {
-  api.delete(id).catch(() => { /* offline */ });
-}
-
-/**
- * Resolve a collection against the cloud database. A non-empty cloud table is
- * authoritative, so rows deleted on another device stay deleted. An empty one
- * means this table has not been populated yet, so the local rows are uploaded
- * once to seed it.
- */
-async function hydrateCollection<T extends { id: string }>(
-  api: CloudCollectionApi<T>,
-  local: T[],
-  key: string,
-): Promise<T[]> {
-  const cloud = await api.getAll();
-  if (cloud.length > 0) {
-    persistCollection(key, cloud);
-    return cloud;
-  }
-  if (local.length > 0) {
-    await api.bulkUpsert(local);
-  }
-  return local;
-}
-
 // ─── Mutable stores ───────────────────────────────────────────────────────────
 let attendanceStore: Attendance[] = loadAttendanceStore();
 let employeeStore: Employee[] = loadEmployeeStore();
-let departmentStore: Department[] = loadCollection(DEPARTMENT_STORAGE_KEY, mockDepartments);
+let departmentStore: Department[] = [...mockDepartments];
 let leaveStore: LeaveRequest[] = loadLeaveStore();
-let punchRequestStore: PunchTimeRequest[] = loadPunchRequestStore();
-let shiftStore: Shift[] = loadCollection(SHIFT_STORAGE_KEY, mockShifts);
-let holidayStore: Holiday[] = loadCollection(HOLIDAY_STORAGE_KEY, mockHolidays);
-
-function persistDepartmentStore() {
-  persistCollection(DEPARTMENT_STORAGE_KEY, departmentStore);
-}
-
-function persistShiftStore() {
-  persistCollection(SHIFT_STORAGE_KEY, shiftStore);
-}
-
-function persistHolidayStore() {
-  persistCollection(HOLIDAY_STORAGE_KEY, holidayStore);
-}
+let shiftStore: Shift[] = [...mockShifts];
+let holidayStore: Holiday[] = [...mockHolidays];
 
 /**
  * Reload employees / attendance / leave from localStorage first, then from
@@ -252,36 +150,9 @@ export async function hydratePersistedStores() {
   attendanceStore = loadAttendanceStore();
   employeeStore = loadEmployeeStore();
   leaveStore = loadLeaveStore();
-  punchRequestStore = loadPunchRequestStore();
-  departmentStore = loadCollection(DEPARTMENT_STORAGE_KEY, mockDepartments);
-  shiftStore = loadCollection(SHIFT_STORAGE_KEY, mockShifts);
-  holidayStore = loadCollection(HOLIDAY_STORAGE_KEY, mockHolidays);
   notifyAttendanceListeners();
 
-  // 2. Reconcile every collection with the cloud DB so a second device sees
-  //    the same employees, leave and punch requests. Each is independent —
-  //    one failing table must not block the rest.
-  const collections = await Promise.allSettled([
-    hydrateCollection(cloudDepartmentApi, departmentStore, DEPARTMENT_STORAGE_KEY),
-    hydrateCollection(cloudShiftApi, shiftStore, SHIFT_STORAGE_KEY),
-    hydrateCollection(cloudHolidayApi, holidayStore, HOLIDAY_STORAGE_KEY),
-    hydrateCollection(cloudEmployeeApi, employeeStore, EMPLOYEE_STORAGE_KEY),
-    hydrateCollection(cloudLeaveApi, leaveStore, LEAVE_STORAGE_KEY),
-    hydrateCollection(cloudPunchRequestApi, punchRequestStore, PUNCH_REQUEST_STORAGE_KEY),
-  ]);
-
-  if (collections[0].status === 'fulfilled') departmentStore = collections[0].value;
-  if (collections[1].status === 'fulfilled') shiftStore = collections[1].value;
-  if (collections[2].status === 'fulfilled') holidayStore = collections[2].value;
-  if (collections[3].status === 'fulfilled') employeeStore = collections[3].value;
-  if (collections[4].status === 'fulfilled') leaveStore = collections[4].value;
-  if (collections[5].status === 'fulfilled') punchRequestStore = collections[5].value;
-
-  if (collections.every((c) => c.status === 'rejected')) {
-    console.info('[Store] Cloud sync unavailable — using local data');
-  }
-
-  // 3. Pull cloud attendance and merge (cloud wins for non-manual rows)
+  // 2. Pull cloud records and merge (cloud wins for non-manual rows)
   try {
     const cloudRecords = await cloudAttendanceApi.getAll();
     if (cloudRecords.length > 0) {
@@ -743,7 +614,6 @@ export const EmployeeAPI = {
     };
     employeeStore = [...employeeStore, emp];
     persistEmployeeStore();
-    pushToCloud(cloudEmployeeApi, emp);
     return Promise.resolve(emp);
   },
 
@@ -752,15 +622,12 @@ export const EmployeeAPI = {
       e.id === id ? { ...e, ...data, updatedAt: new Date().toISOString() } : e
     );
     persistEmployeeStore();
-    const updated = employeeStore.find(e => e.id === id)!;
-    pushToCloud(cloudEmployeeApi, updated);
-    return Promise.resolve(updated);
+    return Promise.resolve(employeeStore.find(e => e.id === id)!);
   },
 
   delete: (id: string) => {
     employeeStore = employeeStore.filter(e => e.id !== id);
     persistEmployeeStore();
-    removeFromCloud(cloudEmployeeApi, id);
     return Promise.resolve();
   },
 
@@ -796,7 +663,6 @@ export const EmployeeAPI = {
       };
       employeeStore = employeeStore.map((e) => (e.id === existing.id ? updated : e));
       persistEmployeeStore();
-      pushToCloud(cloudEmployeeApi, updated);
       return Promise.resolve(updated);
     }
 
@@ -819,7 +685,6 @@ export const EmployeeAPI = {
     };
     employeeStore = [...employeeStore, created];
     persistEmployeeStore();
-    pushToCloud(cloudEmployeeApi, created);
     return Promise.resolve(created);
   },
 };
@@ -839,8 +704,6 @@ export const DepartmentAPI = {
       updatedAt: new Date().toISOString(),
     };
     departmentStore = [...departmentStore, dept];
-    persistDepartmentStore();
-    pushToCloud(cloudDepartmentApi, dept);
     return Promise.resolve(dept);
   },
 
@@ -848,16 +711,11 @@ export const DepartmentAPI = {
     departmentStore = departmentStore.map(d =>
       d.id === id ? { ...d, ...data, updatedAt: new Date().toISOString() } : d
     );
-    persistDepartmentStore();
-    const updated = departmentStore.find(d => d.id === id)!;
-    pushToCloud(cloudDepartmentApi, updated);
-    return Promise.resolve(updated);
+    return Promise.resolve(departmentStore.find(d => d.id === id)!);
   },
 
   delete: (id: string) => {
     departmentStore = departmentStore.filter(d => d.id !== id);
-    persistDepartmentStore();
-    removeFromCloud(cloudDepartmentApi, id);
     return Promise.resolve();
   },
 };
@@ -878,7 +736,6 @@ export const LeaveAPI = {
     };
     leaveStore = [req, ...leaveStore];
     persistLeaveStore();
-    pushToCloud(cloudLeaveApi, req);
     return Promise.resolve(req);
   },
 
@@ -896,60 +753,12 @@ export const LeaveAPI = {
     };
     leaveStore = leaveStore.map(l => (l.id === id ? next : l));
     persistLeaveStore();
-    pushToCloud(cloudLeaveApi, next);
     return Promise.resolve({ ...next });
   },
 
   delete: (id: string) => {
     leaveStore = leaveStore.filter(l => l.id !== id);
     persistLeaveStore();
-    removeFromCloud(cloudLeaveApi, id);
-    return Promise.resolve();
-  },
-};
-
-// ─── Punch Time Request API ───────────────────────────────────────────────────
-export const PunchTimeRequestAPI = {
-  getAll: () => Promise.resolve([...punchRequestStore]),
-
-  getByEmployee: (employeeId: string) =>
-    Promise.resolve(punchRequestStore.filter(r => r.employeeId === employeeId)),
-
-  create: (data: Omit<PunchTimeRequest, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const req: PunchTimeRequest = {
-      ...data,
-      id: generateId('pr'),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    punchRequestStore = [req, ...punchRequestStore];
-    persistPunchRequestStore();
-    pushToCloud(cloudPunchRequestApi, req);
-    return Promise.resolve(req);
-  },
-
-  updateStatus: (id: string, status: PunchRequestStatus, approvedBy?: string, comments?: string) => {
-    const existing = punchRequestStore.find(r => r.id === id);
-    if (!existing) {
-      return Promise.reject(new Error('Punch request not found'));
-    }
-    const next = {
-      ...existing,
-      status,
-      approvedBy,
-      comments,
-      updatedAt: new Date().toISOString(),
-    };
-    punchRequestStore = punchRequestStore.map(r => (r.id === id ? next : r));
-    persistPunchRequestStore();
-    pushToCloud(cloudPunchRequestApi, next);
-    return Promise.resolve({ ...next });
-  },
-
-  delete: (id: string) => {
-    punchRequestStore = punchRequestStore.filter(r => r.id !== id);
-    persistPunchRequestStore();
-    removeFromCloud(cloudPunchRequestApi, id);
     return Promise.resolve();
   },
 };
@@ -968,23 +777,16 @@ export const ShiftAPI = {
       createdAt: new Date().toISOString(),
     };
     shiftStore = [...shiftStore, shift];
-    persistShiftStore();
-    pushToCloud(cloudShiftApi, shift);
     return Promise.resolve(shift);
   },
 
   update: (id: string, data: Partial<Shift>) => {
     shiftStore = shiftStore.map(s => s.id === id ? { ...s, ...data } : s);
-    persistShiftStore();
-    const updated = shiftStore.find(s => s.id === id)!;
-    pushToCloud(cloudShiftApi, updated);
-    return Promise.resolve(updated);
+    return Promise.resolve(shiftStore.find(s => s.id === id)!);
   },
 
   delete: (id: string) => {
     shiftStore = shiftStore.filter(s => s.id !== id);
-    persistShiftStore();
-    removeFromCloud(cloudShiftApi, id);
     return Promise.resolve();
   },
 };
@@ -1006,23 +808,17 @@ export const HolidayAPI = {
   create: (data: Omit<Holiday, 'id'>) => {
     const holiday: Holiday = { ...data, id: generateId('h') };
     holidayStore = [...holidayStore, holiday];
-    persistHolidayStore();
-    pushToCloud(cloudHolidayApi, holiday);
     return Promise.resolve(holiday);
   },
 
   createMany: (items: Omit<Holiday, 'id'>[]) => {
     const created = items.map(data => ({ ...data, id: generateId('h') }) as Holiday);
     holidayStore = [...holidayStore, ...created];
-    persistHolidayStore();
-    cloudHolidayApi.bulkUpsert(created).catch(() => { /* offline */ });
     return Promise.resolve(created);
   },
 
   delete: (id: string) => {
     holidayStore = holidayStore.filter(h => h.id !== id);
-    persistHolidayStore();
-    removeFromCloud(cloudHolidayApi, id);
     return Promise.resolve();
   },
 };

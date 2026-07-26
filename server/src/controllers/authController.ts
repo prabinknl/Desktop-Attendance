@@ -135,11 +135,32 @@ export async function sendInviteEmail(req: Request, res: Response) {
 export async function getUsers(_req: Request, res: Response) {
   try {
     const { UserModel } = await import('../models/UserModel.js');
-    const users = await UserModel.getAll();
+    const users = await UserModel.getAllSafe();
     return res.json({ success: true, data: users });
   } catch (err) {
     console.error('[Auth] getUsers error:', err);
     return res.status(500).json({ success: false, message: 'Failed to fetch users' });
+  }
+}
+
+/** Credentials are checked here rather than in the browser so the account
+ *  list can be served without passwords. */
+export async function login(req: Request, res: Response) {
+  try {
+    const identifier = String(req.body?.identifier ?? '').trim();
+    const password = String(req.body?.password ?? '');
+    if (!identifier) {
+      return res.status(400).json({ success: false, message: 'User name or email is required.' });
+    }
+    const { UserModel } = await import('../models/UserModel.js');
+    const user = await UserModel.verifyCredentials(identifier, password);
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'Invalid user name or password' });
+    }
+    return res.json({ success: true, data: user });
+  } catch (err) {
+    console.error('[Auth] login error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to sign in' });
   }
 }
 

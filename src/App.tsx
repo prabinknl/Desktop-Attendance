@@ -26,6 +26,15 @@ import SettingsPage from './pages/settings/SettingsPage';
 import ProfilePage from './pages/profile/ProfilePage';
 import DeviceSettingsPage from './pages/device-settings/DeviceSettingsPage';
 import EmployeeAttendanceReportPage from './pages/dashboard/EmployeeAttendanceReportPage';
+import { useDeviceSyncAvailable } from './hooks/useDeviceSyncAvailable';
+
+/** The attendance machine is LAN-only, so this page is unreachable from the
+ *  hosted deployment where the API runs with device sync disabled. */
+function DeviceSettingsRoute() {
+  const available = useDeviceSyncAvailable();
+  if (!available) return <Navigate to="/dashboard" replace />;
+  return <DeviceSettingsPage />;
+}
 
 export default function App() {
   return (
@@ -59,7 +68,7 @@ export default function App() {
                         <Route path="/shifts" element={<ShiftsPage />} />
                         <Route path="/reports" element={<ReportsPage />} />
                         <Route path="/settings" element={<SettingsPage />} />
-                        <Route path="/device-settings" element={<DeviceSettingsPage />} />
+                        <Route path="/device-settings" element={<DeviceSettingsRoute />} />
                       </Route>
 
                       <Route path="*" element={<Navigate to="/dashboard" replace />} />

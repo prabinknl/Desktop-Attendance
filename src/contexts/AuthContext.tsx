@@ -137,7 +137,12 @@ export async function hydrateCloudAuthUsers(): Promise<User[]> {
       const local = loadAuthUsers();
       const map = new Map<string, User>();
       for (const u of local) map.set(u.email.toLowerCase(), u);
-      for (const cu of cloudUsers) map.set(cu.email.toLowerCase(), cu);
+      for (const cu of cloudUsers) {
+        const key = cu.email.toLowerCase();
+        // The server never returns passwords, so keep the cached one to leave
+        // offline sign-in working for accounts created on this device.
+        map.set(key, { ...cu, password: map.get(key)?.password ?? '' });
+      }
       const merged = Array.from(map.values());
       localStorage.setItem(USERS_KEY, JSON.stringify(merged));
       return merged;
@@ -225,14 +230,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (emailOrName: string, password = '') => {
-    const allUsers = await hydrateCloudAuthUsers();
-    const key = emailOrName.trim().toLowerCase();
-    const found = allUsers.find((u) => {
-      const matchId =
-        u.email.toLowerCase() === key
-        || u.name.trim().toLowerCase() === key;
-      return matchId && u.password === password;
-    });
+    const identifier = emailOrName.trim();
+    const key = identifier.toLowerCase();
+    let found: User | undefined;
+
+    try {
+      // The server holds the credentials; a rejection here is authoritative.
+      const verified = await authApi.login(identifier, password);
+      if (!verified) {
+        return { success: false, error: 'Invalid user name or password' };
+      }
+      const cached = (await hydrateCloudAuthUsers()).find(
+        (u) => u.email.toLowerCase() === verified.email.toLowerCase(),
+      );
+      found = { ...verified, password: cached?.password || password };
+    } catch {
+      // Server unreachable — fall back to the offline account cache.
+      found = loadAuthUsers().find((u) => {
+        const matchId =
+          u.email.toLowerCase() === key
+          || u.name.trim().toLowerCase() === key;
+        return matchId && u.password === password;
+      });
+    }
+
     if (!found) {
       return { success: false, error: 'Invalid user name or password' };
     }

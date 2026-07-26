@@ -15,15 +15,19 @@ async function start() {
     console.warn('[Server] Configure DATABASE_URL in server/.env for persistent storage.');
   }
 
-  await refreshSyncScheduler();
-  startSyncSettingsWatcher();
+  if (env.deviceSyncEnabled) {
+    await refreshSyncScheduler();
+    startSyncSettingsWatcher();
 
-  // Auto-reconnect saved attendance machine on startup (if network-reachable)
-  autoReconnectDevice();
+    // Auto-reconnect saved attendance machine on startup (if network-reachable)
+    autoReconnectDevice();
+  } else {
+    console.log('[Server] Device sync disabled — the attendance machine is LAN-only');
+  }
 
   app.listen(env.port, () => {
-    console.log(`[Server] API listening on http://localhost:${env.port}`);
-    console.log('[Server] Hikvision ISAPI mode: REAL (mock disabled)');
+    console.log(`[Server] API listening on port ${env.port}`);
+    console.log(`[Server] Device sync: ${env.deviceSyncEnabled ? 'REAL Hikvision ISAPI' : 'disabled'}`);
   });
 }
 
