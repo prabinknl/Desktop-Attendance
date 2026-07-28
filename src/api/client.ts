@@ -13,6 +13,20 @@ const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+apiClient.interceptors.request.use((config) => {
+  try {
+    const raw = localStorage.getItem('ams_user');
+    if (raw) {
+      const user = JSON.parse(raw);
+      if (user?.role) config.headers['x-user-role'] = user.role;
+      if (user?.id) config.headers['x-user-id'] = user.id;
+    }
+  } catch {
+    /* ignore */
+  }
+  return config;
+});
+
 const UNREACHABLE_MESSAGE = API_BASE_URL.startsWith('http')
   ? 'Backend server is not reachable.'
   : 'Backend server is not reachable. Start the API with npm run dev:server (port 3001).';

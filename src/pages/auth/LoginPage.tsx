@@ -5,7 +5,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
-  Eye, EyeOff, ArrowRight, Clock, Users, BarChart3, Lock, ArrowLeft, Search, Check,
+  Eye, EyeOff, ArrowRight, Clock, Users, BarChart3, Lock, ArrowLeft, Search, Check, Mail,
 } from 'lucide-react';
 import { useAuth, ALLOWED_ADMIN_EMAIL, hydrateCloudAuthUsers } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -117,6 +117,7 @@ export default function LoginPage() {
   const [loadingEmployees, setLoadingEmployees] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [inviteInputToken, setInviteInputToken] = useState('');
 
   const loginForm = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
@@ -456,14 +457,14 @@ export default function LoginPage() {
   const subtitle =
     mode === 'signup-admin'
       ? `Only ${ALLOWED_ADMIN_EMAIL} can register as admin.`
-      : mode === 'signup-employee' ? 'Pick your name from employees connected to the attendance machine.'
-        : mode === 'signup-accountant' ? 'Create an accountant account to access reports and attendance.'
-          : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
-            : selectedRole
-              ? authAction === 'login'
-                ? 'Sign in to your account to continue'
-                : 'Create your account to continue'
-              : 'Choose your role to continue';
+      : (mode === 'signup-employee' || mode === 'signup-accountant')
+        ? 'Invitation link required from your Administrator.'
+        : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
+          : selectedRole
+            ? authAction === 'login'
+              ? 'Sign in to your account to continue'
+              : 'Invitation required to create account'
+            : 'Choose your role to continue';
 
   return (
     <div className="min-h-screen flex bg-slate-50 dark:bg-slate-950">
@@ -828,203 +829,57 @@ export default function LoginPage() {
               </motion.div>
             )}
 
-            {mode === 'signup-accountant' && (
-              <motion.form
-                key="signup-accountant"
+            {(mode === 'signup-accountant' || mode === 'signup-employee') && (
+              <motion.div
+                key="signup-invite-required"
                 initial={{ opacity: 0, x: 12 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -12 }}
-                onSubmit={accountantForm.handleSubmit(onAccountantSignup)}
-                className="space-y-5"
+                className="space-y-6"
               >
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Full name</label>
-                  <input
-                    {...accountantForm.register('name')}
-                    type="text"
-                    placeholder="Your name"
-                    className={cn('input', accountantForm.formState.errors.name && 'border-rose-400')}
-                  />
-                  {accountantForm.formState.errors.name && (
-                    <p className="text-xs text-rose-500 mt-1">{accountantForm.formState.errors.name.message}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Email Address</label>
-                  <input
-                    {...accountantForm.register('email')}
-                    type="email"
-                    placeholder="you@pacenp.com"
-                    className={cn('input', accountantForm.formState.errors.email && 'border-rose-400')}
-                  />
-                  {accountantForm.formState.errors.email && (
-                    <p className="text-xs text-rose-500 mt-1">{accountantForm.formState.errors.email.message}</p>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Password</label>
-                  <div className="relative">
-                    <input
-                      {...accountantForm.register('password')}
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      className={cn('input pr-10', accountantForm.formState.errors.password && 'border-rose-400')}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                    </button>
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 dark:bg-sky-950/40 dark:border-sky-800/60 p-6 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-sky-500/10 text-sky-600 dark:text-sky-400 flex items-center justify-center mx-auto">
+                    <Mail size={24} />
                   </div>
-                  {accountantForm.formState.errors.password && (
-                    <p className="text-xs text-rose-500 mt-1">{accountantForm.formState.errors.password.message}</p>
-                  )}
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                    Admin Invitation Required
+                  </h3>
+                  <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                    Only users invited by an Administrator can sign up for an{' '}
+                    <strong>{selectedRole === 'accountant' ? 'Accountant' : 'Employee'}</strong> account.
+                    Please ask your Administrator to send an invite link to your email.
+                  </p>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Confirm password</label>
-                  <input
-                    {...accountantForm.register('confirmPassword')}
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    className={cn('input', accountantForm.formState.errors.confirmPassword && 'border-rose-400')}
-                  />
-                  {accountantForm.formState.errors.confirmPassword && (
-                    <p className="text-xs text-rose-500 mt-1">{accountantForm.formState.errors.confirmPassword.message}</p>
-                  )}
-                </div>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="btn-primary w-full py-2.5 text-base font-semibold disabled:opacity-60"
-                >
-                  {loading ? 'Creating account...' : 'Sign Up as Accountant'}
-                </button>
-              </motion.form>
-            )}
 
-            {mode === 'signup-employee' && (
-              <motion.form
-                key="signup-employee"
-                initial={{ opacity: 0, x: 12 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -12 }}
-                onSubmit={employeeForm.handleSubmit(onEmployeeSignup)}
-                className="space-y-5"
-              >
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                    Your name on the machine
+                <div className="space-y-3 pt-2">
+                  <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    Received an invite code or link?
                   </label>
-                  <div className="relative mb-2">
-                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <div className="flex gap-2">
                     <input
-                      type="search"
-                      value={employeeSearch}
-                      onChange={(e) => setEmployeeSearch(e.target.value)}
-                      placeholder="Search employees..."
-                      className="input pl-9"
-                    />
-                  </div>
-
-                  <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
-                    {loadingEmployees && (
-                      <p className="px-4 py-6 text-sm text-center text-slate-400">Loading machine employees...</p>
-                    )}
-                    {!loadingEmployees && availableEmployees.length === 0 && (
-                      <p className="px-4 py-6 text-sm text-center text-slate-400">
-                        No machine-connected employees found. Sync the attendance device first, then try again.
-                      </p>
-                    )}
-                    {!loadingEmployees && availableEmployees.map((emp) => {
-                      const name = employeeDisplayName(emp);
-                      const selected = selectedEmployeeId === emp.employeeId;
-                      return (
-                        <button
-                          key={emp.employeeId}
-                          type="button"
-                          onClick={() => setSelectedEmployeeId(emp.employeeId)}
-                          className={cn(
-                            'w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors',
-                            selected ? 'bg-primary-50' : 'hover:bg-slate-50',
-                          )}
-                        >
-                          <img
-                            src={emp.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`}
-                            alt=""
-                            className="w-8 h-8 rounded-full bg-slate-100"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-slate-900 truncate">{name}</p>
-                            <p className="text-xs text-slate-400">ID {emp.employeeId}</p>
-                          </div>
-                          {selected && <Check size={16} className="text-primary-600 flex-shrink-0" />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {!selectedEmployeeId && (
-                    <p className="text-xs text-slate-400 mt-1">Scroll and select your name from the list.</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Email Address</label>
-                  <input
-                    {...employeeForm.register('email')}
-                    type="email"
-                    placeholder="you@company.com"
-                    className={cn('input', employeeForm.formState.errors.email && 'border-rose-400')}
-                  />
-                  {employeeForm.formState.errors.email && (
-                    <p className="text-xs text-rose-500 mt-1">{employeeForm.formState.errors.email.message}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Password</label>
-                  <div className="relative">
-                    <input
-                      {...employeeForm.register('password')}
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      className={cn('input pr-10', employeeForm.formState.errors.password && 'border-rose-400')}
+                      type="text"
+                      value={inviteInputToken}
+                      onChange={(e) => setInviteInputToken(e.target.value)}
+                      placeholder="Paste invite link or token code..."
+                      className="input flex-1"
                     />
                     <button
                       type="button"
-                      onClick={() => setShowPassword((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      onClick={() => {
+                        const trimmed = inviteInputToken.trim();
+                        if (!trimmed) return;
+                        const match = trimmed.match(/\/invite\/([a-f0-9]+)/i);
+                        const token = match ? match[1] : trimmed;
+                        navigate(`/invite/${token}`);
+                      }}
+                      disabled={!inviteInputToken.trim()}
+                      className="btn-primary px-4 py-2.5 text-sm font-semibold disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap"
                     >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      Open <ArrowRight size={14} />
                     </button>
                   </div>
-                  {employeeForm.formState.errors.password && (
-                    <p className="text-xs text-rose-500 mt-1">{employeeForm.formState.errors.password.message}</p>
-                  )}
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Confirm password</label>
-                  <input
-                    {...employeeForm.register('confirmPassword')}
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    className={cn('input', employeeForm.formState.errors.confirmPassword && 'border-rose-400')}
-                  />
-                  {employeeForm.formState.errors.confirmPassword && (
-                    <p className="text-xs text-rose-500 mt-1">{employeeForm.formState.errors.confirmPassword.message}</p>
-                  )}
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading || !selectedEmployeeId}
-                  className="btn-primary w-full py-2.5 text-base font-semibold disabled:opacity-60"
-                >
-                  {loading ? 'Creating account...' : 'Sign Up as Employee'}
-                </button>
-              </motion.form>
+              </motion.div>
             )}
           </AnimatePresence>
 

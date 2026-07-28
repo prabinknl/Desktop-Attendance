@@ -49,11 +49,15 @@ const ADMIN_BOY_AVATAR =
   'https://api.dicebear.com/9.x/avataaars/svg?seed=AdminKhan&top=shortFlat&facialHairProbability=100&facialHair=beardMedium';
 
 function migrateStoredUser(raw: User): User {
-  const avatar = raw.avatar ?? '';
-  if (raw.id === 'u1' && (!avatar || avatar.includes('seed=admin'))) {
-    return { ...raw, avatar: ADMIN_BOY_AVATAR };
+  let user = raw;
+  const avatar = user.avatar ?? '';
+  if (user.id === 'u1' && (!avatar || avatar.includes('seed=admin'))) {
+    user = { ...user, avatar: ADMIN_BOY_AVATAR };
   }
-  return raw;
+  if ((user.role as string) === 'accountant' || (user.id && user.id.startsWith('u-acct-') && user.role === 'hr')) {
+    user = { ...user, role: 'account' };
+  }
+  return user;
 }
 
 function persistSession(user: User) {
@@ -83,9 +87,20 @@ function loadAuthUsers(): User[] {
           } catch {
             /* ignore */
           }
-          return withoutAdmins;
         }
-        return parsed;
+
+        let changed = false;
+        const migrated = parsed.map((u) => {
+          if ((u.role as string) === 'accountant' || (u.id && u.id.startsWith('u-acct-') && u.role === 'hr')) {
+            changed = true;
+            return { ...u, role: 'account' as UserRole };
+          }
+          return u;
+        });
+        if (changed) {
+          localStorage.setItem(USERS_KEY, JSON.stringify(migrated));
+        }
+        return migrated;
       }
     }
   } catch {
@@ -177,11 +192,10 @@ const permissions: Record<UserRole, string[]> = {
   ],
   account: [
     'employee:read',
-    'attendance:read', 'attendance:write',
-    'department:read',
-    'leave:read', 'leave:approve',
-    'shift:read',
-    'report:read', 'report:export',
+    'attendance:read',
+    'leave:read',
+    'device_settings:read',
+    'device_settings:write',
     'notification:read',
   ],
   hr: [
@@ -328,24 +342,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     employeeId: string;
     departmentId?: string;
   }) => {
-    const employeeId = String(input.employeeId).trim();
-    if (!employeeId) {
-      return { success: false, error: 'Select your name from the machine list.' };
-    }
-
-    const users = loadAuthUsers();
-    if (users.some((u) => u.employeeId === employeeId)) {
-      return { success: false, error: 'This employee already has an account. Please sign in.' };
-    }
-
+    const employeeId = String(input.employeeId).trim() || `emp-${Date.now()}`;
     const email = input.email.trim().toLowerCase();
-    if (users.some((u) => u.email.toLowerCase() === email)) {
-      return { success: false, error: 'This email is already registered.' };
+    const users = loadAuthUsers();
+
+    const existingByEmail = users.find((u) => u.email.toLowerCase() === email);
+    if (existingByEmail) {
+      const updatedUser: User = {
+        ...existingByEmail,
+        name: input.name.trim() || existingByEmail.name,
+        password: input.password,
+        role: 'employee',
+        employeeId: employeeId || existingByEmail.employeeId || `emp-${Date.now()}`,
+      };
+      const updatedList = users.map((u) => (u.id === existingByEmail.id ? updatedUser : u));
+      saveAuthUsers(updatedList);
+      authApi.syncCloudUser(updatedUser);
+      const safe = persistSession(updatedUser);
+      setUser(safe);
+      return { success: true };
     }
 
     const created: User = {
       id: `u-emp-${employeeId}`,
-      name: input.name.trim(),
+      name: input.name.trim() || 'Employee',
       email,
       role: 'employee',
       password: input.password,
@@ -367,15 +387,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }) => {
     const email = input.email.trim().toLowerCase();
     const users = loadAuthUsers();
-    if (users.some((u) => u.email.toLowerCase() === email)) {
-      return { success: false, error: 'This email is already registered.' };
+
+    const existingByEmail = users.find((u) => u.email.toLowerCase() === email);
+    if (existingByEmail) {
+      const updatedUser: User = {
+        ...existingByEmail,
+        name: input.name.trim() || existingByEmail.name,
+        password: input.password,
+        role: 'account',
+      };
+      const updatedList = users.map((u) => (u.id === existingByEmail.id ? updatedUser : u));
+      saveAuthUsers(updatedList);
+      authApi.syncCloudUser(updatedUser);
+      const safe = persistSession(updatedUser);
+      setUser(safe);
+      return { success: true };
     }
 
     const created: User = {
       id: `u-acct-${Date.now()}`,
       name: input.name.trim() || 'Accountant',
       email,
-      role: 'hr',
+      role: 'account',
       password: input.password,
       phone: '',
       timezone: 'Asia/Kathmandu',
@@ -383,7 +416,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     saveAuthUsers([...users, created]);
     authApi.syncCloudUser(created);
-    // Do not auto-login — return to sign-in
+    const safe = persistSession(created);
+    setUser(safe);
     return { success: true };
   }, []);
 

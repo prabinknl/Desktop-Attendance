@@ -1,18 +1,20 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Camera, Lock, Activity, Save, Eye, EyeOff, User } from 'lucide-react';
+import { Camera, Lock, Activity, Save, Eye, EyeOff, User, Users, Search, Shield, Briefcase, UserCheck } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { mockAuditLogs } from '../../data/mockData';
 import { formatDateTime, getInitials, cn } from '../../lib/utils';
+import type { User as UserType } from '../../types';
 
 const tabs = [
   { id: 'personal', label: 'Personal Info', icon: User },
   { id: 'security', label: 'Security', icon: Lock },
   { id: 'activity', label: 'Activity Log', icon: Activity },
+  { id: 'team', label: 'Team Members', icon: Users },
 ];
 
 const passwordSchema = z.object({
@@ -24,9 +26,28 @@ const passwordSchema = z.object({
 type PasswordForm = z.infer<typeof passwordSchema>;
 
 export default function ProfilePage() {
-  const { user, updateProfile, changePassword } = useAuth();
+  const { user, updateProfile, changePassword, getAuthUsers } = useAuth();
   const { toast } = useNotifications();
   const [activeTab, setActiveTab] = useState('personal');
+  const [teamSearch, setTeamSearch] = useState('');
+  const [authUsers, setAuthUsers] = useState<UserType[]>([]);
+
+  useEffect(() => {
+    setAuthUsers(getAuthUsers());
+  }, [getAuthUsers]);
+
+  const filteredTeamUsers = useMemo(() => {
+    const q = teamSearch.trim().toLowerCase();
+    return authUsers.filter((u) => {
+      if (!q) return true;
+      return (
+        u.name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        u.role.toLowerCase().includes(q) ||
+        (u.employeeId ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [authUsers, teamSearch]);
   const [showCurrent, setShowCurrent] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -258,6 +279,96 @@ export default function ProfilePage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'team' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">Team Members</h2>
+                  <p className="text-sm text-slate-500 mt-0.5">
+                    {authUsers.length} registered user{authUsers.length !== 1 ? 's' : ''} under this account
+                  </p>
+                </div>
+              </div>
+
+              {/* Search */}
+              <div className="relative max-w-sm">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={teamSearch}
+                  onChange={(e) => setTeamSearch(e.target.value)}
+                  placeholder="Search by name, email, role..."
+                  className="input pl-9 py-2"
+                />
+              </div>
+
+              {/* Role summary pills */}
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { role: 'admin', label: 'Admins', icon: Shield, color: 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' },
+                  { role: 'hr', label: 'HR / Accountant', icon: Briefcase, color: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400' },
+                  { role: 'employee', label: 'Employees', icon: UserCheck, color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
+                ].map(({ role, label, icon: Icon, color }) => {
+                  const count = authUsers.filter((u) => role === 'employee' ? u.role === 'employee' : role === 'hr' ? (u.role === 'hr' || u.role === 'account') : u.role === role).length;
+                  return (
+                    <div key={role} className={cn('inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold', color)}>
+                      <Icon size={13} />
+                      {count} {label}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* User cards */}
+              <div className="grid grid-cols-1 gap-3">
+                {filteredTeamUsers.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400">
+                    <Users size={32} className="mx-auto mb-2 opacity-30" />
+                    <p className="text-sm">No users found</p>
+                  </div>
+                ) : (
+                  filteredTeamUsers.map((member) => (
+                    <div
+                      key={member.id}
+                      className={cn(
+                        'flex items-center gap-4 p-4 rounded-2xl border transition-all',
+                        member.id === user?.id
+                          ? 'border-primary-300 bg-primary-50/50 dark:border-primary-700 dark:bg-primary-900/20'
+                          : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600',
+                      )}
+                    >
+                      <div className="w-11 h-11 rounded-2xl overflow-hidden bg-gradient-to-br from-primary-400 to-violet-500 flex items-center justify-center flex-shrink-0">
+                        {member.avatar ? (
+                          <img src={member.avatar} alt={member.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-sm font-bold text-white">{getInitials(member.name)}</span>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold text-sm text-slate-900 dark:text-white truncate">
+                            {member.name}
+                          </p>
+                          {member.id === user?.id && (
+                            <span className="text-[10px] font-bold text-primary-600 dark:text-primary-400 bg-primary-100 dark:bg-primary-900/40 px-1.5 py-0.5 rounded-md">
+                              You
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{member.email}</p>
+                        {member.employeeId && (
+                          <p className="text-[11px] text-slate-400 mt-0.5">ID: {member.employeeId}</p>
+                        )}
+                      </div>
+                      <span className={cn('badge text-[11px] font-semibold flex-shrink-0', roleBadgeColors[member.role] ?? roleBadgeColors.employee)}>
+                        {roleLabels[member.role] ?? member.role}
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
             </motion.div>
           )}

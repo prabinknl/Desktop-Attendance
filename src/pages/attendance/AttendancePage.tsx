@@ -16,6 +16,7 @@ import type { Attendance, Employee, Department, Shift, AttendanceStatus, LeaveRe
 import { attendanceStatusLabel, formatDate, formatTime, cn, calcDayHours, calcOtLtHours, formatHoursMinutes, formatOtLt, generateId, isApprovedLeaveDay } from '../../lib/utils';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { downloadAttendancePdf } from '../../lib/attendancePdf';
 import AttendanceFormModal from '../../components/attendance/AttendanceFormModal';
 import { TimeDisplay, isManualTime } from '../../components/common/TimeDisplay';
@@ -45,6 +46,8 @@ const statusOptions: { value: AttendanceStatus | ''; label: string }[] = [
 
 export default function AttendancePage() {
   const [searchParams] = useSearchParams();
+  const { user, can } = useAuth();
+  const canWriteAttendance = can('attendance:write') && user?.role !== 'account';
   const { toast } = useNotifications();
   const { dateRange, updateDateRange, settings: dateSettings, updateSettings } = useDateSettings();
   const dateFrom = dateRange.from;
@@ -385,36 +388,36 @@ export default function AttendancePage() {
         <span className="text-xs text-slate-500">{(getValue() as string) || '—'}</span>
       ),
     },
-    {
-      id: 'actions',
-      header: 'Actions',
-      cell: ({ row }) => (
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => { setEditRecord(row.original); setShowForm(true); }}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/30 transition-colors"
-            title="Edit"
-          >
-            <Edit2 size={14} />
-          </button>
-          <button
-            onClick={() => handleDuplicate(row.original)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 transition-colors"
-            title="Duplicate"
-          >
-            <Copy size={14} />
-          </button>
-          <button
-            onClick={() => setDeleteId(row.original.id)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"
-            title="Delete"
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
-      ),
-    },
-  ], [empMap, deptMap, shiftMap, leaves]);
+      ...(canWriteAttendance ? [{
+        id: 'actions',
+        header: 'Actions',
+        cell: ({ row }: { row: { original: Attendance } }) => (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => { setEditRecord(row.original); setShowForm(true); }}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/30 transition-colors"
+              title="Edit"
+            >
+              <Edit2 size={14} />
+            </button>
+            <button
+              onClick={() => handleDuplicate(row.original)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 transition-colors"
+              title="Duplicate"
+            >
+              <Copy size={14} />
+            </button>
+            <button
+              onClick={() => setDeleteId(row.original.id)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"
+              title="Delete"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ),
+      }] : []),
+    ], [empMap, deptMap, shiftMap, leaves, canWriteAttendance]);
 
   const selectedIds = useMemo(
     () => Object.keys(rowSelection).filter((id) => rowSelection[id]),
@@ -736,9 +739,11 @@ export default function AttendancePage() {
             )}
           </div>
         </div>
-        <button onClick={() => { setEditRecord(null); setShowForm(true); }} className="btn-primary">
-          <Plus size={16} /> Add Attendance
-        </button>
+        {canWriteAttendance && (
+          <button onClick={() => { setEditRecord(null); setShowForm(true); }} className="btn-primary">
+            <Plus size={16} /> Add Attendance
+          </button>
+        )}
       </div>
 
       {/* Toolbar */}

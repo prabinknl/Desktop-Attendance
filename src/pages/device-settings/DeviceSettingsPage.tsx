@@ -58,6 +58,7 @@ import { importAttendanceFromDeviceLogs } from '../../lib/deviceAttendanceSync';
 import { saveDeviceLogsCache } from '../../lib/deviceLogsCache';
 import { punchCalendarDate } from '../../lib/punchTime';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
+import { useAuth } from '../../contexts/AuthContext';
 import CalendarDateInput from '../../components/ui/CalendarDateInput';
 
 const { Title, Text, Paragraph } = Typography;
@@ -80,6 +81,8 @@ function statusLabel(status?: string, authState?: string): string {
 }
 
 export default function DeviceSettingsPage() {
+  const { user } = useAuth();
+  const isReadOnly = false;
   const [form] = Form.useForm<DeviceFormValues>();
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
@@ -601,9 +604,20 @@ export default function DeviceSettingsPage() {
           <Progress percent={connectProgress} status="active" className="mb-4" />
         )}
 
+        {isReadOnly && (
+          <Alert
+            type="info"
+            showIcon
+            className="mb-4"
+            message="Read-Only View"
+            description="As an Accountant, you can view device information, status, and punch logs. Changing device configuration or triggering manual sync requires Admin or HR permissions."
+          />
+        )}
+
         <Form
           form={form}
           layout="vertical"
+          disabled={isReadOnly}
           initialValues={{
             brand: 'hikvision',
             model: 'DS-K1T320EFWX',
@@ -649,6 +663,7 @@ export default function DeviceSettingsPage() {
                     icon={<RadarChartOutlined />}
                     onClick={handleScan}
                     loading={scan.isPending}
+                    disabled={isReadOnly}
                   >
                     Scan Network
                   </Button>
@@ -704,6 +719,7 @@ export default function DeviceSettingsPage() {
                     icon={<ApiOutlined />}
                     onClick={handleTestConnection}
                     loading={test.isPending}
+                    disabled={isReadOnly}
                   >
                     Test Connection
                   </Button>
@@ -712,6 +728,7 @@ export default function DeviceSettingsPage() {
                     icon={<SaveOutlined />}
                     onClick={handleSave}
                     loading={save.isPending}
+                    disabled={isReadOnly}
                   >
                     Save Device
                   </Button>
@@ -720,6 +737,7 @@ export default function DeviceSettingsPage() {
                     icon={<WifiOutlined />}
                     onClick={handleConnect}
                     loading={connect.isPending}
+                    disabled={isReadOnly}
                   >
                     Connect
                   </Button>
@@ -728,7 +746,7 @@ export default function DeviceSettingsPage() {
                     icon={<DisconnectOutlined />}
                     onClick={handleDisconnect}
                     loading={disconnect.isPending}
-                    disabled={!device}
+                    disabled={isReadOnly || !device}
                   >
                     Disconnect
                   </Button>
@@ -794,7 +812,7 @@ export default function DeviceSettingsPage() {
                       handleSyncSettingsChange(checked, status?.syncIntervalSeconds ?? 60)
                     }
                     loading={updateSyncSettings.isPending}
-                    disabled={!isOnline}
+                    disabled={isReadOnly || !isOnline}
                   />
                 </Form.Item>
                 <Form.Item label="Sync Interval">
@@ -805,7 +823,7 @@ export default function DeviceSettingsPage() {
                       handleSyncSettingsChange(status?.autoSyncEnabled ?? false, val)
                     }
                     style={{ width: '100%' }}
-                    disabled={!status?.autoSyncEnabled}
+                    disabled={isReadOnly || !status?.autoSyncEnabled}
                   />
                 </Form.Item>
                 <Button
@@ -813,7 +831,7 @@ export default function DeviceSettingsPage() {
                   icon={<CloudSyncOutlined />}
                   onClick={handleManualSync}
                   loading={sync.isPending}
-                  disabled={!device || sync.isPending}
+                  disabled={isReadOnly || !device || sync.isPending}
                 >
                   Manual Sync
                 </Button>

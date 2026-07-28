@@ -579,6 +579,17 @@ export class HikvisionService implements IDeviceAdapter {
   async testConnection(): Promise<ConnectionTestResult> {
     const tryOnce = async (cfg: DeviceConnectionConfig): Promise<ConnectionTestResult> => {
       try {
+        const reachable = await probeTcpPort(cfg.ipAddress, cfg.port, REACHABILITY_TIMEOUT_MS);
+        if (!reachable) {
+          return {
+            online: false,
+            authState: 'offline',
+            latencyMs: 0,
+            message: `Device not found on network (${cfg.ipAddress}:${cfg.port} is unreachable)`,
+            fromRealDevice: false,
+          };
+        }
+
         const { status, body, latencyMs } = await isapiRequest(
           cfg,
           'GET',

@@ -36,10 +36,10 @@ import { useAuth } from './contexts/AuthContext';
 function DeviceSettingsRoute() {
   const { available, loading } = useDeviceSyncAvailable();
   const { hasRole } = useAuth();
-  const isAdmin = hasRole('admin');
+  const isAdminOrAccountant = hasRole('admin', 'account');
 
-  // Admins always get access — no probe gating
-  if (isAdmin) return <DeviceSettingsPage />;
+  // Admins and Accountants always get access — no probe gating
+  if (isAdminOrAccountant) return <DeviceSettingsPage />;
 
   // While probe is loading, show a brief spinner instead of redirecting
   if (loading) {
@@ -77,16 +77,28 @@ export default function App() {
                       <Route path="/notifications" element={<NotificationsPage />} />
                       <Route path="/profile" element={<ProfilePage />} />
 
-                      {/* Staff-only routes */}
-                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'dept_manager']} />}>
+                      {/* Accessible by admin, hr, account, dept_manager */}
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'account', 'dept_manager']} />}>
                         <Route path="/attendance" element={<AttendancePage />} />
                         <Route path="/employees" element={<EmployeesPage />} />
                         <Route path="/employees/:employeeId/report" element={<EmployeeAttendanceReportPage />} />
+                      </Route>
+
+                      {/* Staff management routes - excluded for accountant */}
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'dept_manager']} />}>
                         <Route path="/departments" element={<DepartmentsPage />} />
                         <Route path="/shifts" element={<ShiftsPage />} />
                         <Route path="/reports" element={<ReportsPage />} />
-                        <Route path="/settings" element={<SettingsPage />} />
+                      </Route>
+
+                      {/* Device settings - admin, hr & account */}
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'account']} />}>
                         <Route path="/device-settings" element={<DeviceSettingsRoute />} />
+                      </Route>
+
+                      {/* App settings - admin & hr only */}
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr']} />}>
+                        <Route path="/settings" element={<SettingsPage />} />
                       </Route>
 
                       <Route path="*" element={<Navigate to="/dashboard" replace />} />

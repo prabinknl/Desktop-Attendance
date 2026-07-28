@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useForm } from 'react-hook-form';
@@ -9,6 +9,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useInvitations } from '../../contexts/InvitationContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { EmployeeAPI } from '../../data/store';
+import { deviceApi } from '../../api/deviceApi';
+import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { cn } from '../../lib/utils';
 import type { Employee } from '../../types';
 
@@ -39,7 +41,7 @@ export default function InviteSignupPage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
   const { getInvitation, markUsed } = useInvitations();
-  const { signupEmployee, signupAccountant } = useAuth();
+  const { signupEmployee, signupAccountant, isEmployeeRegistered } = useAuth();
   const { toast } = useNotifications();
 
   const [invite, setInvite] = useState<ReturnType<typeof getInvitation>>(null);
@@ -56,7 +58,10 @@ export default function InviteSignupPage() {
     setValue,
     watch,
     formState: { errors },
-  } = useForm<FormData>({ resolver: zodResolver(schema) });
+  } = useForm<FormData>({
+    resolver: zodResolver(schema),
+    defaultValues: { name: '', employeeId: '' },
+  });
 
   const selectedEmpId = watch('employeeId');
 
@@ -69,57 +74,95 @@ export default function InviteSignupPage() {
 
   useEffect(() => {
     if (invite?.role === 'employee') {
-      EmployeeAPI.getAll().then((list) => {
-        // Only show un-registered employees
-        setEmployees(list.filter((e) => !e.email.endsWith('@device.local') || e.departmentId !== 'd0'));
-      });
+      let cancelled = false;
+      (async () => {
+        try {
+          const logs = await deviceApi.getLogs();
+          await upsertEmployeesFromDeviceLogs(logs);
+        } catch {
+          /* ignore if device offline */
+        }
+        const list = await EmployeeAPI.getAll();
+        if (!cancelled) {
+          setEmployees(list);
+        }
+      })();
+      return () => { cancelled = true; };
     }
   }, [invite]);
 
-  const filteredEmployees = employees.filter((e) => {
-    const q = empSearch.toLowerCase();
-    return (
-      e.firstName.toLowerCase().includes(q) ||
-      e.lastName.toLowerCase().includes(q) ||
-      e.employeeId.toLowerCase().includes(q)
-    );
-  });
+  const availableEmployees = useMemo(() => {
+    return employees;
+  }, [employees]);
+
+  const filteredEmployees = useMemo(() => {
+    const q = empSearch.trim().toLowerCase();
+    return availableEmployees
+      .filter((e) => {
+        if (!q) return true;
+        const name = employeeDisplayName(e).toLowerCase();
+        const code = (e.employeeId || e.id || '').toLowerCase();
+        return name.includes(q) || code.includes(q);
+      })
+      .sort((a, b) => employeeDisplayName(a).localeCompare(employeeDisplayName(b)));
+  }, [availableEmployees, empSearch]);
 
   const onSubmit = async (data: FormData) => {
     if (!invite || !token) return;
     setSubmitting(true);
 
-    let result: { success: boolean; error?: string };
+    try {
+      let result: { success: boolean; error?: string };
 
-    if (invite.role === 'employee') {
-      if (!data.employeeId) {
-        toast('error', 'Please select your name from the list');
-        setSubmitting(false);
-        return;
+      if (invite.role === 'employee') {
+        const matchedEmp = employees.find(
+          (e) =>
+            employeeDisplayName(e).toLowerCase() === (data.name || '').trim().toLowerCase() ||
+            (e.email && e.email.toLowerCase() === invite.email.toLowerCase())
+        );
+        const effectiveEmployeeId = data.employeeId || matchedEmp?.employeeId || matchedEmp?.id || `emp-${Date.now()}`;
+        const finalName = data.name.trim() || (matchedEmp ? employeeDisplayName(matchedEmp) : invite.email.split('@')[0]);
+
+        result = await signupEmployee({
+          name: finalName,
+          email: invite.email,
+          password: data.password,
+          employeeId: effectiveEmployeeId,
+        });
+      } else {
+        result = await signupAccountant({
+          name: data.name.trim() || invite.email.split('@')[0],
+          email: invite.email,
+          password: data.password,
+        });
       }
-      result = await signupEmployee({
-        name: data.name,
-        email: invite.email,
-        password: data.password,
-        employeeId: data.employeeId,
-      });
-    } else {
-      // accountant
-      result = await signupAccountant({
-        name: data.name,
-        email: invite.email,
-        password: data.password,
-      });
-    }
 
-    if (result.success) {
-      markUsed(token);
-      toast('success', 'Account created! Please sign in.');
-      navigate('/login');
-    } else {
-      toast('error', result.error ?? 'Sign-up failed');
+      if (result.success) {
+        markUsed(token);
+        toast('success', 'Account Created Successfully', 'Welcome! Redirecting to your account...');
+        setTimeout(() => {
+          navigate('/dashboard', { replace: true });
+        }, 500);
+      } else {
+        toast('error', 'Sign-up Failed', result.error ?? 'Could not create account');
+      }
+    } catch (err: any) {
+      toast('error', 'Sign-up Error', err?.message || 'An unexpected error occurred. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
+  };
+
+  const onInvalid = (fieldErrors: typeof errors) => {
+    if (fieldErrors.name) {
+      toast('error', 'Full Name Required', fieldErrors.name.message || 'Please click your name from the employee list below.');
+    } else if (fieldErrors.confirmPassword) {
+      toast('error', 'Password Mismatch', fieldErrors.confirmPassword.message || 'Passwords do not match.');
+    } else if (fieldErrors.password) {
+      toast('error', 'Password Required', fieldErrors.password.message || 'Password must be at least 6 characters.');
+    } else {
+      toast('error', 'Incomplete Form', 'Please complete all required fields before clicking Create Account.');
+    }
   };
 
   // ── Loading ──────────────────────────────────────────────────────────────────
@@ -231,7 +274,7 @@ export default function InviteSignupPage() {
             </div>
           </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+          <form onSubmit={handleSubmit(onSubmit, onInvalid)} className="space-y-5">
             {/* Full Name */}
             <div>
               <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
@@ -276,26 +319,48 @@ export default function InviteSignupPage() {
                   onChange={(e) => setEmpSearch(e.target.value)}
                   className="input-field w-full mb-2"
                 />
-                <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden max-h-40 overflow-y-auto">
+                <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden max-h-48 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900">
                   {filteredEmployees.length === 0 ? (
-                    <p className="text-sm text-slate-400 p-3 text-center">No employees found</p>
+                    <p className="text-sm text-slate-400 p-4 text-center">No employees found</p>
                   ) : (
-                    filteredEmployees.map((e) => (
-                      <button
-                        key={e.id}
-                        type="button"
-                        onClick={() => { setValue('employeeId', e.employeeId); setValue('name', employeeDisplayName(e)); }}
-                        className={cn(
-                          'w-full text-left px-4 py-2.5 text-sm transition-colors',
-                          selectedEmpId === e.employeeId
-                            ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-medium'
-                            : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300',
-                        )}
-                      >
-                        <span className="font-medium">{employeeDisplayName(e)}</span>
-                        <span className="text-slate-400 dark:text-slate-500 ml-2 text-xs">#{e.employeeId}</span>
-                      </button>
-                    ))
+                    filteredEmployees.map((e) => {
+                      const empId = e.employeeId || e.id;
+                      const name = employeeDisplayName(e);
+                      const isSelected = selectedEmpId === empId;
+                      return (
+                        <button
+                          key={e.id}
+                          type="button"
+                          onClick={() => {
+                            setValue('employeeId', empId, { shouldValidate: true, shouldDirty: true, shouldTouch: true });
+                            setValue('name', name, { shouldValidate: true, shouldDirty: true, shouldTouch: true });
+                          }}
+                          className={cn(
+                            'w-full text-left px-4 py-3 flex items-center justify-between text-sm transition-colors',
+                            isSelected
+                              ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-bold'
+                              : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300',
+                          )}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <img
+                              src={e.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`}
+                              alt=""
+                              className="w-8 h-8 rounded-full bg-slate-100 flex-shrink-0 object-cover"
+                            />
+                            <div className="min-w-0">
+                              <p className="font-semibold text-slate-900 dark:text-white truncate">{name}</p>
+                              <p className="text-xs text-slate-400 truncate">
+                                ID: #{empId} {e.designation ? `· ${e.designation}` : ''}
+                              </p>
+                            </div>
+                          </div>
+                          {isSelected && (
+                            <span className="ml-2 flex-shrink-0 text-emerald-500 font-bold text-xs">Selected</span>
+                          )}
+                        </button>
+                      );
+                    })
                   )}
                 </div>
                 <input type="hidden" {...register('employeeId')} />

@@ -6,6 +6,8 @@ import attendanceRoutes from './routes/attendanceRoutes.js';
 import coreRoutes from './routes/coreRoutes.js';
 import { env } from './config/env.js';
 
+import { authorizeAccountantPermissions } from './middleware/authMiddleware.js';
+
 const app = express();
 
 app.use(
@@ -26,6 +28,9 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+
+// Apply authorization middleware for Accountant role security enforcement
+app.use(authorizeAccountantPermissions);
 
 // Singular (legacy) and plural (preferred) mounts share the same controllers
 app.use('/api/device', deviceRoutes);

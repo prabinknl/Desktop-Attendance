@@ -36,9 +36,10 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-function EmployeeCard({ emp, dept, leaveRemaining, onEdit, onDelete, onView, onReport }: {
+function EmployeeCard({ emp, dept, leaveRemaining, canWrite, onEdit, onDelete, onView, onReport }: {
   emp: Employee; dept?: Department;
   leaveRemaining?: number;
+  canWrite?: boolean;
   onEdit: () => void; onDelete: () => void; onView: () => void; onReport: () => void;
 }) {
   return (
@@ -121,12 +122,16 @@ function EmployeeCard({ emp, dept, leaveRemaining, onEdit, onDelete, onView, onR
           <button onClick={onView} className="p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/30 transition-colors" title="View">
             <Eye size={13} />
           </button>
-          <button onClick={onEdit} className="p-1.5 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 dark:hover:bg-sky-900/30 transition-colors" title="Edit">
-            <Edit2 size={13} />
-          </button>
-          <button onClick={onDelete} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors" title="Delete">
-            <Trash2 size={13} />
-          </button>
+          {canWrite && (
+            <>
+              <button onClick={onEdit} className="p-1.5 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 dark:hover:bg-sky-900/30 transition-colors" title="Edit">
+                <Edit2 size={13} />
+              </button>
+              <button onClick={onDelete} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors" title="Delete">
+                <Trash2 size={13} />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </motion.div>
@@ -308,6 +313,7 @@ export default function EmployeesPage() {
                 emp={emp}
                 dept={deptMap[emp.departmentId]}
                 leaveRemaining={leaveRemainingByEmp[emp.id]}
+                canWrite={can('employee:write')}
                 onEdit={() => openEdit(emp)}
                 onDelete={() => setDeleteId(emp.id)}
                 onView={() => setViewEmp(emp)}
@@ -372,8 +378,12 @@ export default function EmployeesPage() {
                         See report
                       </button>
                       <button onClick={() => setViewEmp(emp)} className="p-1.5 rounded-lg text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/30 transition-colors"><Eye size={13} /></button>
-                      <button onClick={() => openEdit(emp)} className="p-1.5 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 dark:hover:bg-sky-900/30 transition-colors"><Edit2 size={13} /></button>
-                      <button onClick={() => setDeleteId(emp.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"><Trash2 size={13} /></button>
+                      {can('employee:write') && (
+                        <>
+                          <button onClick={() => openEdit(emp)} className="p-1.5 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 dark:hover:bg-sky-900/30 transition-colors"><Edit2 size={13} /></button>
+                          <button onClick={() => setDeleteId(emp.id)} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"><Trash2 size={13} /></button>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>

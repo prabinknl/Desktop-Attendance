@@ -29,6 +29,18 @@ const staffNavItems: NavItem[] = [
   { label: 'Notifications', icon: Bell, path: '/notifications' },
 ];
 
+const accountantNavItems: NavItem[] = [
+  { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+  { label: 'Attendance', icon: Clock, path: '/attendance' },
+  { label: 'Employees', icon: Users, path: '/employees' },
+  { label: 'Leave', icon: CalendarOff, path: '/leave' },
+];
+
+const accountantBottomItems: NavItem[] = [
+  { label: 'Device Settings', icon: Cpu, path: '/device-settings' },
+  { label: 'Profile', icon: User, path: '/profile' },
+];
+
 const employeeNavItems: NavItem[] = [
   { label: 'Attendance Report', icon: BarChart3, path: '/dashboard' },
   { label: 'Leave', icon: CalendarOff, path: '/leave' },
@@ -57,14 +69,15 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { available: deviceSyncAvailable, loading: deviceProbeLoading } = useDeviceSyncAvailable();
   const isEmployee = hasRole('employee');
   const isAdmin = hasRole('admin');
-  const navItems = isEmployee ? employeeNavItems : staffNavItems;
-  const allBottomItems = isEmployee ? employeeBottomItems : staffBottomItems;
+  const isAccountant = hasRole('account') || user?.role === 'account';
+  const navItems = isEmployee ? employeeNavItems : isAccountant ? accountantNavItems : staffNavItems;
+  const allBottomItems = isEmployee ? employeeBottomItems : isAccountant ? accountantBottomItems : staffBottomItems;
 
-  // Admins always see Device Settings regardless of the /health probe.
+  // Admins and Accountants always see Device Settings regardless of the /health probe.
   // Other staff see it only when the probe confirms deviceSyncEnabled.
   // While the probe is still loading, keep Device Settings visible to
   // prevent the flash-then-hide that the user reported.
-  const showDeviceSettings = isAdmin || deviceProbeLoading || deviceSyncAvailable;
+  const showDeviceSettings = isAdmin || isAccountant || deviceProbeLoading || deviceSyncAvailable;
   const bottomItems = showDeviceSettings
     ? allBottomItems
     : allBottomItems.filter((item) => item.path !== '/device-settings');
@@ -77,6 +90,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const roleColors: Record<string, string> = {
     admin: 'bg-rose-500',
     hr: 'bg-violet-500',
+    account: 'bg-sky-500',
     dept_manager: 'bg-amber-500',
     employee: 'bg-emerald-500',
   };
@@ -84,6 +98,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const roleLabels: Record<string, string> = {
     admin: 'Administrator',
     hr: 'HR Manager',
+    account: 'Accountant',
     dept_manager: 'Dept. Manager',
     employee: 'Employee',
   };

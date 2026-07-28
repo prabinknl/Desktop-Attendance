@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import {
   Users, UserCheck, UserX, Clock, CalendarOff, TrendingUp,
   Plus, ClipboardList, CheckSquare, FileText, ArrowRight,
-  AlertCircle, UserPlus,
+  AlertCircle, UserPlus, Cpu,
 } from 'lucide-react';
 import InviteModal from '../../components/InviteModal';
 import {
@@ -97,12 +97,20 @@ export default function DashboardPage() {
     { name: 'On Leave', value: stats.onLeaveToday },
   ] : [];
 
-  const quickActions = [
-    { label: 'Add Attendance', icon: Plus, path: '/attendance?action=add', color: 'bg-primary-500 hover:bg-primary-600' },
-    { label: 'Add Employee', icon: Users, path: '/employees?action=add', color: 'bg-emerald-500 hover:bg-emerald-600' },
-    { label: 'Approve Leave', icon: CheckSquare, path: '/leave', color: 'bg-amber-500 hover:bg-amber-600' },
-    { label: 'Export Report', icon: FileText, path: '/reports', color: 'bg-violet-500 hover:bg-violet-600' },
-  ];
+  const isAccountant = user?.role === 'account';
+
+  const quickActions = isAccountant
+    ? [
+        { label: 'Export Report', icon: FileText, path: '/attendance', color: 'bg-violet-500 hover:bg-violet-600' },
+        { label: 'View Attendance', icon: Clock, path: '/attendance', color: 'bg-primary-500 hover:bg-primary-600' },
+        { label: 'View Employees', icon: Users, path: '/employees', color: 'bg-emerald-500 hover:bg-emerald-600' },
+      ]
+    : [
+        { label: 'Add Attendance', icon: Plus, path: '/attendance?action=add', color: 'bg-primary-500 hover:bg-primary-600' },
+        { label: 'Add Employee', icon: Users, path: '/employees?action=add', color: 'bg-emerald-500 hover:bg-emerald-600' },
+        { label: 'Approve Leave', icon: CheckSquare, path: '/leave', color: 'bg-amber-500 hover:bg-amber-600' },
+        { label: 'Export Report', icon: FileText, path: '/reports', color: 'bg-violet-500 hover:bg-violet-600' },
+      ];
 
   if (loading) {
     return (
