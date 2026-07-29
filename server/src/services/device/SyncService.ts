@@ -46,7 +46,7 @@ function localTimeStr(d: Date): string {
   });
 }
 
-async function persistEvent(
+export async function persistEvent(
   deviceId: string,
   event: DeviceAttendanceEvent,
 ): Promise<'inserted' | 'duplicate' | 'failed'> {

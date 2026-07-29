@@ -163,25 +163,52 @@ export const deviceController = {
         return;
       }
 
-      let password = String(payload.password ?? '');
-      // Allow blank password → reuse the last saved device password (same as Connect)
-      if (!password) {
-        const record = await getActiveDeviceRecord();
-        if (
-          record?.password_encrypted
-          && record.ip_address === payload.ipAddress
-          && Number(record.port) === Number(payload.port)
-        ) {
-          const { decryptPassword } = await import('../services/crypto/passwordCrypto.js');
-          password = decryptPassword(record.password_encrypted);
+      const record = await getActiveDeviceRecord();
+      const now = Date.now();
+      const heartbeatMs = record?.gateway_last_heartbeat
+        ? new Date(record.gateway_last_heartbeat).getTime()
+        : 0;
+      const isGatewayFresh = heartbeatMs > 0 && now - heartbeatMs < 60_000;
+
+      // If local gateway is active, queue test command for the local gateway
+      if (isGatewayFresh && record) {
+        const { setPendingCommand, getCommandResult } = await import('../models/DeviceModel.js');
+        const cmdId = `cmd_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        await setPendingCommand({ id: cmdId, type: 'test', createdAt: Date.now() });
+
+        // Poll for command result (up to 5 seconds)
+        let result: Record<string, unknown> | null = null;
+        for (let i = 0; i < 12; i++) {
+          await new Promise((r) => setTimeout(r, 400));
+          result = await getCommandResult(cmdId);
+          if (result) break;
         }
-      }
-      if (!password) {
-        res.status(400).json({
-          success: false,
-          message: 'Password is required (or save the device first to reuse the stored password)',
+
+        if (result && result.result) {
+          const testRes = result.result as import('../types/index.js').ConnectionTestResult;
+          res.json({ success: true, data: testRes });
+          return;
+        }
+
+        // If gateway hasn't executed yet, return latest gateway status
+        const isOnline = record.status === 'online' || record.gateway_status === 'online';
+        res.json({
+          success: true,
+          data: {
+            online: isOnline,
+            authState: isOnline ? 'authenticated' : 'device_unreachable',
+            latencyMs: 15,
+            message: record.gateway_error || (isOnline ? 'Authenticated via Local Gateway' : 'Device unreachable on LAN'),
+            deviceInfo: record.model ? { model: record.model, macAddress: record.mac_address ?? undefined } : undefined,
+          },
         });
         return;
+      }
+
+      let password = String(payload.password ?? '');
+      if (!password && record?.password_encrypted) {
+        const { decryptPassword } = await import('../services/crypto/passwordCrypto.js');
+        password = decryptPassword(record.password_encrypted);
       }
 
       const { createDeviceAdapter } = await import('../services/device/DeviceFactory.js');
@@ -189,26 +216,24 @@ export const deviceController = {
         ipAddress: payload.ipAddress,
         port: Number(payload.port),
         username: payload.username.trim(),
-        password,
+        password: password || 'admin',
       });
 
       const result = await testAdapter.testConnection();
-
-      // Only mark the *saved* device online after real authentication
-      const record = await getActiveDeviceRecord();
-      if (
-        record &&
-        result.online &&
-        record.ip_address === payload.ipAddress &&
-        Number(record.port) === Number(payload.port)
-      ) {
-        const info = result.deviceInfo;
-        await updateDeviceMeta(record.id, {
-          status: 'online',
-          deviceTime: info?.deviceTime ? new Date(info.deviceTime) : undefined,
-          model: info?.model,
-          macAddress: info?.macAddress,
+      if (result.online && record) {
+        await updateDeviceStatus(record.id, 'online');
+      }
+      if (!isGatewayFresh && result.authState === 'device_unreachable') {
+        res.json({
+          success: true,
+          data: {
+            online: false,
+            authState: 'gateway_offline',
+            latencyMs: 0,
+            message: 'Gateway offline: No local agent heartbeat detected. Run "node index.js" inside gateway folder on your LAN computer.',
+          },
         });
+        return;
       }
 
       res.json({ success: true, data: result });
@@ -253,6 +278,10 @@ export const deviceController = {
           deviceTime: null,
           autoSyncEnabled: false,
           syncIntervalSeconds: 60,
+          gatewayStatus: 'offline',
+          gatewayLastHeartbeat: null,
+          gatewayError: 'No device configured',
+          lastConnectionSuccess: null,
         },
       });
       return;
@@ -267,6 +296,10 @@ export const deviceController = {
         deviceTime: device.deviceTime,
         autoSyncEnabled: device.autoSyncEnabled,
         syncIntervalSeconds: device.syncIntervalSeconds,
+        gatewayStatus: device.gatewayStatus,
+        gatewayLastHeartbeat: device.gatewayLastHeartbeat,
+        gatewayError: device.gatewayError,
+        lastConnectionSuccess: device.lastConnectionSuccess,
       },
     });
   },

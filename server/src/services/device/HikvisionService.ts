@@ -258,12 +258,12 @@ async function isapiRequest(
       uri: string;
       uriMode: 'path' | 'absolute';
     }> = [
-      { label: 'digest-utf8-omit-alg', encoding: 'utf8', algorithmMode: 'omit', uri: apiPath, uriMode: 'path' },
-      { label: 'digest-utf8-raw-alg', encoding: 'utf8', algorithmMode: 'raw', uri: apiPath, uriMode: 'path' },
-      { label: 'digest-latin1-omit-alg', encoding: 'latin1', algorithmMode: 'omit', uri: apiPath, uriMode: 'path' },
-      { label: 'digest-utf8-abs-uri', encoding: 'utf8', algorithmMode: 'omit', uri: absoluteUri, uriMode: 'absolute' },
-      { label: 'digest-utf8-quoted-alg', encoding: 'utf8', algorithmMode: 'quoted', uri: apiPath, uriMode: 'path' },
-    ];
+        { label: 'digest-utf8-omit-alg', encoding: 'utf8', algorithmMode: 'omit', uri: apiPath, uriMode: 'path' },
+        { label: 'digest-utf8-raw-alg', encoding: 'utf8', algorithmMode: 'raw', uri: apiPath, uriMode: 'path' },
+        { label: 'digest-latin1-omit-alg', encoding: 'latin1', algorithmMode: 'omit', uri: apiPath, uriMode: 'path' },
+        { label: 'digest-utf8-abs-uri', encoding: 'utf8', algorithmMode: 'omit', uri: absoluteUri, uriMode: 'absolute' },
+        { label: 'digest-utf8-quoted-alg', encoding: 'utf8', algorithmMode: 'quoted', uri: apiPath, uriMode: 'path' },
+      ];
 
     const tryDigest = async (
       variant: (typeof digestVariants)[number],
@@ -347,9 +347,9 @@ async function isapiRequest(
       throw Object.assign(
         new Error(
           'Authentication failed — invalid username or password. ' +
-            'Open http://' +
-            config.ipAddress +
-            ' in your browser, confirm admin login works, then type that exact password here (do not leave blank).',
+          'Open http://' +
+          config.ipAddress +
+          ' in your browser, confirm admin login works, then type that exact password here (do not leave blank).',
         ),
         { code: 'AUTH_FAILED', status: 401 },
       );
@@ -562,7 +562,7 @@ export class HikvisionService implements IDeviceAdapter {
     eventAttribute?: string;
   };
 
-  constructor(private readonly config: DeviceConnectionConfig) {}
+  constructor(private readonly config: DeviceConnectionConfig) { }
 
   async connect(): Promise<void> {
     const result = await this.testConnection();
@@ -892,25 +892,25 @@ export class HikvisionService implements IDeviceAdapter {
       eventAttribute?: string;
       searchIdOverride?: string;
     }> = [
-      { name: 'json-m5-local', timeStyle: 'local', maxResults: 30, major: 5 },
-      {
-        name: 'json-m5-local-sid1',
-        timeStyle: 'local',
-        maxResults: 30,
-        major: 5,
-        searchIdOverride: '1',
-      },
-      { name: 'json-m0-minor0-local', timeStyle: 'local', maxResults: 30, major: 0, includeMinor0: true },
-      { name: 'json-m5-minor0-local', timeStyle: 'local', maxResults: 30, major: 5, includeMinor0: true },
-      { name: 'json-m5-local-max10', timeStyle: 'local', maxResults: 10, major: 5 },
-      { name: 'json-face75-local', timeStyle: 'local', maxResults: 30, major: 5, minor: 75 },
-      { name: 'json-m5-offset', timeStyle: 'offset', maxResults: 30, major: 5 },
-      { name: 'json-m0-minor0-offset', timeStyle: 'offset', maxResults: 30, major: 0, includeMinor0: true },
-      { name: 'json-attendance-local', timeStyle: 'local', maxResults: 10, major: 5, eventAttribute: 'attendance' },
-      { name: 'json-m5-utcZ', timeStyle: 'utcZ', maxResults: 30, major: 5 },
-      { name: 'json-m5-utcNoZ', timeStyle: 'utcNoZ', maxResults: 30, major: 5 },
-      { name: 'json-m5-offset-max10', timeStyle: 'offset', maxResults: 10, major: 5 },
-    ];
+        { name: 'json-m5-local', timeStyle: 'local', maxResults: 30, major: 5 },
+        {
+          name: 'json-m5-local-sid1',
+          timeStyle: 'local',
+          maxResults: 30,
+          major: 5,
+          searchIdOverride: '1',
+        },
+        { name: 'json-m0-minor0-local', timeStyle: 'local', maxResults: 30, major: 0, includeMinor0: true },
+        { name: 'json-m5-minor0-local', timeStyle: 'local', maxResults: 30, major: 5, includeMinor0: true },
+        { name: 'json-m5-local-max10', timeStyle: 'local', maxResults: 10, major: 5 },
+        { name: 'json-face75-local', timeStyle: 'local', maxResults: 30, major: 5, minor: 75 },
+        { name: 'json-m5-offset', timeStyle: 'offset', maxResults: 30, major: 5 },
+        { name: 'json-m0-minor0-offset', timeStyle: 'offset', maxResults: 30, major: 0, includeMinor0: true },
+        { name: 'json-attendance-local', timeStyle: 'local', maxResults: 10, major: 5, eventAttribute: 'attendance' },
+        { name: 'json-m5-utcZ', timeStyle: 'utcZ', maxResults: 30, major: 5 },
+        { name: 'json-m5-utcNoZ', timeStyle: 'utcNoZ', maxResults: 30, major: 5 },
+        { name: 'json-m5-offset-max10', timeStyle: 'offset', maxResults: 10, major: 5 },
+      ];
 
     for (const p of prioritized) {
       const startTime = formatHikvisionTime(start, p.timeStyle);
@@ -1013,10 +1013,10 @@ export class HikvisionService implements IDeviceAdapter {
     // Prefer the strategy that already worked for this session — try only that first.
     const ordered = this.acsEventStrategy
       ? [
-          ...attempts.filter((a) => a.name === this.acsEventStrategy!.name),
-          // Fall back only if the known shape fails (firmware change / stale cache)
-          ...attempts.filter((a) => a.name !== this.acsEventStrategy!.name),
-        ]
+        ...attempts.filter((a) => a.name === this.acsEventStrategy!.name),
+        // Fall back only if the known shape fails (firmware change / stale cache)
+        ...attempts.filter((a) => a.name !== this.acsEventStrategy!.name),
+      ]
       : attempts;
 
     let lastStatus = 0;

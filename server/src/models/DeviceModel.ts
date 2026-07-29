@@ -11,6 +11,20 @@ import type {
 } from '../types/index.js';
 
 function toPublic(record: DeviceRecord): DevicePublic {
+  const now = Date.now();
+  const heartbeatMs = record.gateway_last_heartbeat ? new Date(record.gateway_last_heartbeat).getTime() : 0;
+  const isHeartbeatFresh = heartbeatMs > 0 && now - heartbeatMs < 60_000;
+  const computedGatewayStatus: 'online' | 'offline' = isHeartbeatFresh ? 'online' : 'offline';
+
+  // Overall status: direct connection (online/syncing/connecting) takes priority,
+  // falling back to gateway status if direct status is offline.
+  const computedStatus =
+    record.status === 'online' || record.status === 'syncing' || record.status === 'connecting'
+      ? record.status
+      : isHeartbeatFresh && record.gateway_status === 'online'
+        ? 'online'
+        : 'offline';
+
   return {
     id: record.id,
     name: record.name,
@@ -21,13 +35,17 @@ function toPublic(record: DeviceRecord): DevicePublic {
     username: record.username,
     location: record.location,
     description: record.description,
-    status: record.status,
+    status: computedStatus,
     autoSyncEnabled: record.auto_sync_enabled,
     syncIntervalSeconds: record.sync_interval_seconds,
     lastSync: record.last_sync,
     lastAttendanceReceived: record.last_attendance_received,
     deviceTime: record.device_time,
     macAddress: record.mac_address,
+    gatewayStatus: computedGatewayStatus,
+    gatewayLastHeartbeat: record.gateway_last_heartbeat,
+    gatewayError: computedGatewayStatus === 'offline' ? (record.gateway_error || 'Gateway Offline: Local agent heartbeat missing') : record.gateway_error,
+    lastConnectionSuccess: record.last_connection_success,
   };
 }
 
@@ -307,6 +325,107 @@ export async function getDeviceLogs(
       rawEventCode: row.raw_event_code,
     }))
     .filter(isValidLog);
+}
+
+export interface GatewayHeartbeatPayload {
+  gatewayStatus: 'online' | 'offline';
+  deviceStatus: string;
+  deviceInfo?: {
+    model?: string;
+    serialNumber?: string;
+    firmwareVersion?: string;
+    deviceTime?: string;
+    macAddress?: string;
+  } | null;
+  lastConnectionSuccess?: string | null;
+  lastSyncTime?: string | null;
+  errorMessage?: string | null;
+}
+
+export async function updateGatewayHeartbeat(payload: GatewayHeartbeatPayload): Promise<{ pendingCommand: Record<string, unknown> | null }> {
+  const device = await getActiveDeviceRecord();
+  if (!device) return { pendingCommand: null };
+
+  const isOnline = payload.deviceStatus === 'online';
+  const newStatus: DeviceStatus = isOnline ? 'online' : 'offline';
+  const model = payload.deviceInfo?.model || device.model;
+  const macAddress = payload.deviceInfo?.macAddress || device.mac_address;
+  const deviceTime = payload.deviceInfo?.deviceTime ? new Date(payload.deviceInfo.deviceTime) : undefined;
+  const lastConn = payload.lastConnectionSuccess ? new Date(payload.lastConnectionSuccess) : undefined;
+
+  if (isMemoryMode()) {
+    memoryStore.updateMeta({
+      status: newStatus,
+      gateway_status: payload.gatewayStatus,
+      gateway_last_heartbeat: new Date().toISOString(),
+      gateway_error: payload.errorMessage ?? null,
+      last_connection_success: payload.lastConnectionSuccess ?? null,
+      model,
+      mac_address: macAddress,
+    });
+    const pending = device.pending_command ?? null;
+    return { pendingCommand: pending };
+  }
+
+  const result = await query<DeviceRecord>(
+    `UPDATE devices SET
+      status = $1,
+      gateway_status = $2,
+      gateway_last_heartbeat = NOW(),
+      gateway_error = $3,
+      last_connection_success = COALESCE($4, last_connection_success),
+      model = COALESCE($5, model),
+      mac_address = COALESCE($6, mac_address),
+      device_time = COALESCE($7, device_time),
+      updated_at = NOW()
+     WHERE id = $8 RETURNING pending_command`,
+    [
+      newStatus,
+      payload.gatewayStatus,
+      payload.errorMessage ?? null,
+      lastConn ?? null,
+      model ?? null,
+      macAddress ?? null,
+      deviceTime ?? null,
+      device.id,
+    ],
+  );
+
+  const pending = result.rows[0]?.pending_command ?? null;
+  if (pending) {
+    // Clear pending command so it is not issued twice
+    await query('UPDATE devices SET pending_command = NULL WHERE id = $1', [device.id]);
+  }
+
+  return { pendingCommand: pending };
+}
+
+export async function setPendingCommand(command: { id: string; type: 'test' | 'sync'; createdAt: number }): Promise<void> {
+  const device = await getActiveDeviceRecord();
+  if (!device) return;
+  if (isMemoryMode()) return;
+  await query('UPDATE devices SET pending_command = $1, command_result = NULL WHERE id = $2', [
+    JSON.stringify(command),
+    device.id,
+  ]);
+}
+
+export async function setCommandResult(commandId: string, result: Record<string, unknown>): Promise<void> {
+  const device = await getActiveDeviceRecord();
+  if (!device) return;
+  if (isMemoryMode()) return;
+  await query('UPDATE devices SET command_result = $1 WHERE id = $2', [
+    JSON.stringify({ commandId, result, completedAt: new Date().toISOString() }),
+    device.id,
+  ]);
+}
+
+export async function getCommandResult(commandId: string): Promise<Record<string, unknown> | null> {
+  const device = await getActiveDeviceRecord();
+  if (!device || !device.command_result) return null;
+  const res = device.command_result as { commandId?: string; result?: Record<string, unknown> };
+  if (res.commandId === commandId) return res.result ?? null;
+  return null;
 }
 
 export { toPublic, isMemoryMode, setMemoryMode };

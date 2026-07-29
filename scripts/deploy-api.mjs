@@ -24,6 +24,7 @@ const OVERRIDES = {
   // The attendance machine is LAN-only and unreachable from the cloud.
   DEVICE_SYNC_ENABLED: 'false',
   CORS_ORIGINS: 'https://ew5ub4j6.insforge.site',
+  GATEWAY_SECRET: 'attendence_local_gateway_secret_2026',
 };
 
 const repoRoot = path.resolve(import.meta.dirname, '..');

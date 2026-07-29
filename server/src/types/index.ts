@@ -4,7 +4,12 @@ export type DeviceAuthState =
   | 'authenticated'
   | 'authentication_failed'
   | 'reachable'
-  | 'offline';
+  | 'offline'
+  | 'gateway_offline'
+  | 'device_unreachable'
+  | 'isapi_unsupported';
+
+export type GatewayStatus = 'online' | 'offline';
 
 export interface DeviceRecord {
   id: string;
@@ -24,6 +29,12 @@ export interface DeviceRecord {
   last_attendance_received: string | null;
   device_time: string | null;
   mac_address: string | null;
+  gateway_status?: GatewayStatus;
+  gateway_last_heartbeat?: string | null;
+  gateway_error?: string | null;
+  last_connection_success?: string | null;
+  pending_command?: Record<string, unknown> | null;
+  command_result?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -46,6 +57,10 @@ export interface DevicePublic {
   lastAttendanceReceived: string | null;
   deviceTime: string | null;
   macAddress: string | null;
+  gatewayStatus?: GatewayStatus;
+  gatewayLastHeartbeat?: string | null;
+  gatewayError?: string | null;
+  lastConnectionSuccess?: string | null;
 }
 
 export interface DeviceConnectPayload {
@@ -114,6 +129,10 @@ export interface DeviceStatusResponse {
   deviceTime: string | null;
   autoSyncEnabled: boolean;
   syncIntervalSeconds: number;
+  gatewayStatus?: GatewayStatus;
+  gatewayLastHeartbeat?: string | null;
+  gatewayError?: string | null;
+  lastConnectionSuccess?: string | null;
 }
 
 /**
