@@ -1,9 +1,11 @@
 import { Router } from 'express';
-import { gatewayController, authenticateGatewaySecret } from '../controllers/gatewayController.js';
+import { gatewayController, authenticateConnector } from '../controllers/gatewayController.js';
+import { gatewayRateLimit } from '../middleware/gatewayRateLimit.js';
 
 const router = Router();
 
-router.use(authenticateGatewaySecret);
+router.use(gatewayRateLimit);
+router.use(authenticateConnector);
 
 router.post('/heartbeat', gatewayController.heartbeat);
 router.post('/logs', gatewayController.uploadLogs);

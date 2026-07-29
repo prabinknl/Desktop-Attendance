@@ -163,7 +163,7 @@ export const memoryStore = {
 
 export function createMemoryRecord(
   payload: DeviceConnectPayload,
-  encryptedPassword: string,
+  encryptedPassword: string | null,
   existing?: DeviceRecord | null,
 ): DeviceRecord {
   const now = new Date().toISOString();
@@ -185,6 +185,7 @@ export function createMemoryRecord(
     last_attendance_received: existing?.last_attendance_received ?? null,
     device_time: existing?.device_time ?? null,
     mac_address: existing?.mac_address ?? null,
+    connection_mode: payload.connectionMode ?? existing?.connection_mode ?? 'local_direct',
     created_at: existing?.created_at ?? now,
     updated_at: now,
   };

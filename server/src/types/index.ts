@@ -11,6 +11,8 @@ export type DeviceAuthState =
 
 export type GatewayStatus = 'online' | 'offline';
 
+export type ConnectionMode = 'local_direct' | 'cloud_connector';
+
 export interface DeviceRecord {
   id: string;
   name: string;
@@ -33,6 +35,11 @@ export interface DeviceRecord {
   gateway_last_heartbeat?: string | null;
   gateway_error?: string | null;
   last_connection_success?: string | null;
+  connection_mode?: ConnectionMode;
+  connector_token_hash?: string | null;
+  connector_missed_heartbeats?: number;
+  last_device_auth_at?: string | null;
+  last_connector_error?: string | null;
   pending_command?: Record<string, unknown> | null;
   command_result?: Record<string, unknown> | null;
   created_at: string;
@@ -61,6 +68,8 @@ export interface DevicePublic {
   gatewayLastHeartbeat?: string | null;
   gatewayError?: string | null;
   lastConnectionSuccess?: string | null;
+  connectionMode?: ConnectionMode;
+  hasConnectorToken?: boolean;
 }
 
 export interface DeviceConnectPayload {
@@ -73,6 +82,7 @@ export interface DeviceConnectPayload {
   password: string;
   location?: string;
   description?: string;
+  connectionMode?: ConnectionMode;
 }
 
 export interface DeviceTestPayload {
@@ -124,6 +134,10 @@ export interface AttendanceLogEntry {
 
 export interface DeviceStatusResponse {
   status: DeviceStatus;
+  /** Device authenticated on LAN (direct or via connector). */
+  deviceOnline: boolean;
+  connectorOnline: boolean;
+  connectionMode: ConnectionMode;
   lastSync: string | null;
   lastAttendanceReceived: string | null;
   deviceTime: string | null;
@@ -133,6 +147,8 @@ export interface DeviceStatusResponse {
   gatewayLastHeartbeat?: string | null;
   gatewayError?: string | null;
   lastConnectionSuccess?: string | null;
+  lastDeviceAuthAt?: string | null;
+  lastConnectorError?: string | null;
 }
 
 /**

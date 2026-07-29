@@ -28,11 +28,13 @@ It authenticates with the Hikvision machine via ISAPI Digest Auth, polls attenda
 
    # Cloud InsForge API Configuration
    INSFORGE_API_URL=https://ew5ub4j6.ap-southeast.insforge.app/api
-   GATEWAY_SECRET=attendence_local_gateway_secret_2026
+# Prefer token from Device Settings → Generate connector token
+CONNECTOR_TOKEN=
+GATEWAY_SECRET=attendence_local_gateway_secret_2026
 
-   # Intervals in seconds
-   SYNC_INTERVAL_SECONDS=30
-   HEARTBEAT_INTERVAL_SECONDS=10
+# Polling & Sync Timers (in seconds)
+SYNC_INTERVAL_SECONDS=30
+HEARTBEAT_INTERVAL_SECONDS=30
    ```
 
 ### Step 2: Start the Gateway

@@ -8,6 +8,8 @@ import { isMemoryMode, memoryStore } from '../../db/memoryStore.js';
 import { query } from '../../db/pool.js';
 import { logDeviceAction } from './deviceLogger.js';
 import { isDeviceUnreachableError } from './HikvisionService.js';
+import { resolveConnectionMode } from '../connector/devicePresence.js';
+import { env } from '../../config/env.js';
 import type { DeviceAttendanceEvent, SyncResult } from '../../types/index.js';
 
 /** Overlap window so events near the last sync boundary are not missed. */
@@ -200,6 +202,12 @@ export async function syncDeviceAttendance(options: SyncOptions = {}): Promise<S
 async function runSyncDeviceAttendance(options: SyncOptions = {}): Promise<SyncResult> {
   const device = await getActiveDeviceRecord();
   if (!device) throw new Error('No device configured');
+
+  if (resolveConnectionMode(device) === 'cloud_connector' || !env.deviceSyncEnabled) {
+    throw new Error(
+      'Attendance sync from the cloud API is disabled for LAN devices. Use the Windows connector.',
+    );
+  }
 
   await updateDeviceStatus(device.id, 'syncing');
 

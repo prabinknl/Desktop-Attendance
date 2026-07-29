@@ -7,6 +7,7 @@ import coreRoutes from './routes/coreRoutes.js';
 import { env } from './config/env.js';
 
 import { authorizeAccountantPermissions } from './middleware/authMiddleware.js';
+import gatewayRoutes from './routes/gatewayRoutes.js';
 
 const app = express();
 
@@ -28,6 +29,9 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+
+// Local connector agent (ISAPI on LAN → HTTPS to cloud)
+app.use('/api/gateway', gatewayRoutes);
 
 // Apply authorization middleware for Accountant role security enforcement
 app.use(authorizeAccountantPermissions);

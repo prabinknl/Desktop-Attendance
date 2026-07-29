@@ -8,16 +8,25 @@ import {
   getAdapterForDevice,
   updateDeviceMeta,
   clearDeviceAdapterCache,
+  toStatusResponse,
+  regenerateConnectorToken,
+  updateConnectionMode,
+  setPendingCommand,
+  getCommandResult,
 } from '../models/DeviceModel.js';
 import { syncDeviceAttendance } from '../services/device/SyncService.js';
 import { scanNetwork } from '../services/device/NetworkScanner.js';
 import { isValidIpAddress, isValidPort } from '../services/crypto/passwordCrypto.js';
 import { logDeviceAction } from '../services/device/deviceLogger.js';
 import { refreshSyncScheduler } from '../services/device/BackgroundSyncService.js';
+import { computeDevicePresence, resolveConnectionMode } from '../services/connector/devicePresence.js';
+import { env } from '../config/env.js';
 import type {
   DeviceConnectPayload,
   DeviceTestPayload,
   DeviceBrand,
+  ConnectionMode,
+  ConnectionTestResult,
 } from '../types/index.js';
 
 const VALID_BRANDS: DeviceBrand[] = ['hikvision', 'zkteco', 'essl', 'suprema', 'other'];
@@ -28,8 +37,45 @@ function validateConnectPayload(payload: DeviceConnectPayload): string | null {
   if (!isValidIpAddress(payload.ipAddress)) return 'Invalid IP address';
   if (!isValidPort(Number(payload.port))) return 'Port must be between 1 and 65535';
   if (!payload.username?.trim()) return 'Username is required';
-  // Password may be omitted when updating an already-saved device (reuse stored secret)
+  const mode = payload.connectionMode ?? 'local_direct';
+  if (mode === 'local_direct' && !String(payload.password ?? '').trim()) {
+    // Password may be omitted when updating an already-saved device (reuse stored secret)
+  }
   return null;
+}
+
+function isPrivateLanIp(ip: string): boolean {
+  return (
+    /^10\./.test(ip) ||
+    /^192\.168\./.test(ip) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
+  );
+}
+
+async function pollConnectorCommand(
+  type: 'test' | 'sync',
+  timeoutMs = 5000,
+): Promise<Record<string, unknown> | null> {
+  const cmdId = `cmd_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  await setPendingCommand({ id: cmdId, type, createdAt: Date.now() });
+  const attempts = Math.ceil(timeoutMs / 400);
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, 400));
+    const result = await getCommandResult(cmdId);
+    if (result) return result;
+  }
+  return null;
+}
+
+function gatewayOfflineResult(message?: string): ConnectionTestResult {
+  return {
+    online: false,
+    authState: 'gateway_offline',
+    latencyMs: 0,
+    message:
+      message ??
+      'Connector not running: the cloud server cannot reach a private LAN IP. Run the Windows connector on your office network.',
+  };
 }
 
 function sanitizePayloadForLog(payload: Record<string, unknown>) {
@@ -97,15 +143,46 @@ export const deviceController = {
       return;
     }
 
-    const saved = await saveDevice({
-      ...payload,
-      port: Number(payload.port),
-      username: payload.username?.trim() || 'admin',
-      password: payload.password ?? '',
-    });
-    await updateDeviceStatus(saved.id, 'connecting');
+    const connectionMode: ConnectionMode =
+      payload.connectionMode ??
+      (!env.deviceSyncEnabled || isPrivateLanIp(payload.ipAddress)
+        ? 'cloud_connector'
+        : 'local_direct');
+
+    if (connectionMode === 'cloud_connector' && !env.deviceSyncEnabled && isPrivateLanIp(payload.ipAddress)) {
+      console.log(
+        `[Device] connect cloud_connector ip=${payload.ipAddress} (no cloud LAN access)`,
+      );
+    }
 
     try {
+      const saved = await saveDevice({
+        ...payload,
+        port: Number(payload.port),
+        username: payload.username?.trim() || 'admin',
+        password: payload.password ?? '',
+        connectionMode,
+      });
+
+      if (connectionMode === 'cloud_connector') {
+        await updateDeviceStatus(saved.id, 'offline');
+        const updated = await getActiveDevice();
+        logDeviceAction({
+          ip: payload.ipAddress,
+          action: 'connect',
+          result: 'ok',
+          message: 'cloud_connector_saved',
+        });
+        res.json({
+          success: true,
+          message:
+            'Configuration saved. Device stays Offline until the Windows connector reports a successful authenticated heartbeat.',
+          data: updated,
+        });
+        return;
+      }
+
+      await updateDeviceStatus(saved.id, 'connecting');
       const record = await getActiveDeviceRecord();
       if (!record) throw new Error('Device not found after save');
       const realAdapter = getAdapterForDevice(record);
@@ -130,7 +207,8 @@ export const deviceController = {
       });
       res.json({ success: true, message: 'Device connected successfully', data: updated });
     } catch (err) {
-      await updateDeviceStatus(saved.id, 'offline');
+      const record = await getActiveDeviceRecord().catch(() => null);
+      if (record) await updateDeviceStatus(record.id, 'offline');
       const message = err instanceof Error ? err.message : 'Connection failed';
       logDeviceAction({
         ip: payload.ipAddress,
@@ -164,43 +242,46 @@ export const deviceController = {
       }
 
       const record = await getActiveDeviceRecord();
-      const now = Date.now();
-      const heartbeatMs = record?.gateway_last_heartbeat
-        ? new Date(record.gateway_last_heartbeat).getTime()
-        : 0;
-      const isGatewayFresh = heartbeatMs > 0 && now - heartbeatMs < 60_000;
+      const mode = record ? resolveConnectionMode(record) : 'local_direct';
+      const presence = record ? computeDevicePresence(record) : null;
+      const connectorAlive = presence?.connectorOnline ?? false;
 
-      // If local gateway is active, queue test command for the local gateway
-      if (isGatewayFresh && record) {
-        const { setPendingCommand, getCommandResult } = await import('../models/DeviceModel.js');
-        const cmdId = `cmd_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        await setPendingCommand({ id: cmdId, type: 'test', createdAt: Date.now() });
-
-        // Poll for command result (up to 5 seconds)
-        let result: Record<string, unknown> | null = null;
-        for (let i = 0; i < 12; i++) {
-          await new Promise((r) => setTimeout(r, 400));
-          result = await getCommandResult(cmdId);
-          if (result) break;
-        }
-
-        if (result && result.result) {
-          const testRes = result.result as import('../types/index.js').ConnectionTestResult;
-          res.json({ success: true, data: testRes });
+      if (mode === 'cloud_connector') {
+        if (connectorAlive && record) {
+          const polled = await pollConnectorCommand('test');
+          if (polled?.result) {
+            res.json({ success: true, data: polled.result as ConnectionTestResult });
+            return;
+          }
+          const deviceOnline = presence?.deviceOnline ?? false;
+          res.json({
+            success: true,
+            data: {
+              online: deviceOnline,
+              authState: deviceOnline ? 'authenticated' : 'device_unreachable',
+              latencyMs: 0,
+              message:
+                record.gateway_error ||
+                (deviceOnline
+                  ? 'Authenticated via connector'
+                  : 'Connector online but device authentication failed'),
+              deviceInfo: record.model
+                ? { model: record.model, macAddress: record.mac_address ?? undefined }
+                : undefined,
+            },
+          });
           return;
         }
+        res.json({ success: true, data: gatewayOfflineResult() });
+        return;
+      }
 
-        // If gateway hasn't executed yet, return latest gateway status
-        const isOnline = record.status === 'online' || record.gateway_status === 'online';
+      if (!env.deviceSyncEnabled && isPrivateLanIp(payload.ipAddress)) {
         res.json({
           success: true,
-          data: {
-            online: isOnline,
-            authState: isOnline ? 'authenticated' : 'device_unreachable',
-            latencyMs: 15,
-            message: record.gateway_error || (isOnline ? 'Authenticated via Local Gateway' : 'Device unreachable on LAN'),
-            deviceInfo: record.model ? { model: record.model, macAddress: record.mac_address ?? undefined } : undefined,
-          },
+          data: gatewayOfflineResult(
+            'Cloud server cannot access a private LAN IP. Switch to Cloud Connector Mode and run the Windows connector.',
+          ),
         });
         return;
       }
@@ -222,17 +303,12 @@ export const deviceController = {
       const result = await testAdapter.testConnection();
       if (result.online && record) {
         await updateDeviceStatus(record.id, 'online');
-      }
-      if (!isGatewayFresh && result.authState === 'device_unreachable') {
-        res.json({
-          success: true,
-          data: {
-            online: false,
-            authState: 'gateway_offline',
-            latencyMs: 0,
-            message: 'Gateway offline: No local agent heartbeat detected. Run "node index.js" inside gateway folder on your LAN computer.',
-          },
-        });
+      } else if (
+        !result.online &&
+        (result.authState === 'offline' || result.authState === 'device_unreachable') &&
+        !env.deviceSyncEnabled
+      ) {
+        res.json({ success: true, data: gatewayOfflineResult(result.message) });
         return;
       }
 
@@ -267,12 +343,15 @@ export const deviceController = {
 
   /** GET /api/device/status */
   async status(_req: import('express').Request, res: import('express').Response) {
-    const device = await getActiveDevice();
-    if (!device) {
+    const record = await getActiveDeviceRecord();
+    if (!record) {
       res.json({
         success: true,
         data: {
           status: 'offline',
+          deviceOnline: false,
+          connectorOnline: false,
+          connectionMode: 'local_direct',
           lastSync: null,
           lastAttendanceReceived: null,
           deviceTime: null,
@@ -282,6 +361,8 @@ export const deviceController = {
           gatewayLastHeartbeat: null,
           gatewayError: 'No device configured',
           lastConnectionSuccess: null,
+          lastDeviceAuthAt: null,
+          lastConnectorError: null,
         },
       });
       return;
@@ -289,18 +370,7 @@ export const deviceController = {
 
     res.json({
       success: true,
-      data: {
-        status: device.status,
-        lastSync: device.lastSync,
-        lastAttendanceReceived: device.lastAttendanceReceived,
-        deviceTime: device.deviceTime,
-        autoSyncEnabled: device.autoSyncEnabled,
-        syncIntervalSeconds: device.syncIntervalSeconds,
-        gatewayStatus: device.gatewayStatus,
-        gatewayLastHeartbeat: device.gatewayLastHeartbeat,
-        gatewayError: device.gatewayError,
-        lastConnectionSuccess: device.lastConnectionSuccess,
-      },
+      data: toStatusResponse(record),
     });
   },
 
@@ -340,6 +410,46 @@ export const deviceController = {
       }
       if (endTime && Number.isNaN(endTime.getTime())) {
         res.status(400).json({ success: false, message: 'Invalid endTime' });
+        return;
+      }
+
+      const record = await getActiveDeviceRecord();
+      if (!record) {
+        res.status(404).json({ success: false, message: 'No device configured' });
+        return;
+      }
+
+      const mode = resolveConnectionMode(record);
+      const presence = computeDevicePresence(record);
+      if (mode === 'cloud_connector') {
+        if (!presence.connectorOnline) {
+          res.status(503).json({
+            success: false,
+            message: 'Connector not running — attendance sync runs on your LAN via the Windows connector.',
+          });
+          return;
+        }
+        const polled = await pollConnectorCommand('sync', 12_000);
+        if (polled?.result) {
+          res.json({
+            success: true,
+            message: 'Sync requested via connector',
+            data: polled.result,
+          });
+          return;
+        }
+        res.status(504).json({
+          success: false,
+          message: 'Connector did not complete sync in time. It will retry on its schedule.',
+        });
+        return;
+      }
+
+      if (!env.deviceSyncEnabled) {
+        res.status(503).json({
+          success: false,
+          message: 'Cloud server cannot sync a private LAN device directly. Use Cloud Connector Mode.',
+        });
         return;
       }
 
@@ -452,8 +562,13 @@ export const deviceController = {
         return;
       }
 
-      // Already online — nothing to do
-      if (record.status === 'online') {
+      if (!env.deviceSyncEnabled || resolveConnectionMode(record) === 'cloud_connector') {
+        res.json({ success: true, connected: false, reason: 'connector_mode' });
+        return;
+      }
+
+      const presence = computeDevicePresence(record);
+      if (presence.deviceOnline) {
         const pub = await getActiveDevice();
         res.json({ success: true, connected: true, data: pub });
         return;
@@ -503,5 +618,41 @@ export const deviceController = {
       // Always 200 so the frontend can ignore the result
       res.json({ success: true, connected: false, reason: message });
     }
+  },
+
+  /** POST /api/devices/connector-token — generate a new connector token (shown once). */
+  async createConnectorToken(_req: import('express').Request, res: import('express').Response) {
+    try {
+      const { token, device } = await regenerateConnectorToken();
+      res.json({
+        success: true,
+        message: 'Copy this token into the Windows connector .env — it will not be shown again.',
+        data: { token, device },
+      });
+    } catch (err) {
+      res.status(400).json({
+        success: false,
+        message: err instanceof Error ? err.message : 'Failed to generate connector token',
+      });
+    }
+  },
+
+  /** PATCH /api/devices/connection-mode */
+  async patchConnectionMode(req: import('express').Request, res: import('express').Response) {
+    const device = await getActiveDeviceRecord();
+    if (!device) {
+      res.status(404).json({ success: false, message: 'No device configured' });
+      return;
+    }
+    const mode = req.body?.connectionMode as ConnectionMode;
+    if (mode !== 'local_direct' && mode !== 'cloud_connector') {
+      res.status(400).json({ success: false, message: 'Invalid connection mode' });
+      return;
+    }
+    const updated = await updateConnectionMode(device.id, mode);
+    if (mode === 'cloud_connector') {
+      await updateDeviceStatus(device.id, 'offline');
+    }
+    res.json({ success: true, data: updated });
   },
 };

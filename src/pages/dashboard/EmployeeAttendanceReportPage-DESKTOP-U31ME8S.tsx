@@ -188,7 +188,7 @@ export default function EmployeeAttendanceReportPage() {
       void (async () => {
         try {
           const st = await deviceApi.getStatus();
-          if (st?.status !== 'online') return;
+          if (!st?.deviceOnline) return;
           const startTime = new Date(`${dateFrom}T00:00:00`).toISOString();
           const endTime = new Date(`${dateTo}T23:59:59.999`).toISOString();
           await deviceApi.sync({ startTime, endTime });

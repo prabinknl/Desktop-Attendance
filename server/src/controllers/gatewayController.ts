@@ -6,24 +6,29 @@ import {
   updateDeviceMeta,
 } from '../models/DeviceModel.js';
 import { persistEvent } from '../services/device/SyncService.js';
+import { verifyConnectorToken } from '../services/connector/connectorAuth.js';
 import type { DeviceAttendanceEvent } from '../types/index.js';
 
-const GATEWAY_SECRET = process.env.GATEWAY_SECRET || 'attendence_local_gateway_secret_2026';
-
-export function authenticateGatewaySecret(req: Request, res: Response, next: NextFunction): void {
+export async function authenticateConnector(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader;
   const customHeader = (req.headers['x-gateway-secret'] as string) || '';
+  const candidate = token || customHeader;
 
-  if (token === GATEWAY_SECRET || customHeader === GATEWAY_SECRET) {
-    next();
+  const device = await getActiveDeviceRecord();
+  if (!verifyConnectorToken(device, candidate)) {
+    console.warn('[Connector] Rejected unauthorized heartbeat/upload');
+    res.status(401).json({
+      success: false,
+      message: 'Unauthorized: invalid connector token',
+    });
     return;
   }
-
-  res.status(401).json({
-    success: false,
-    message: 'Unauthorized: Invalid Gateway Secret token',
-  });
+  next();
 }
 
 export const gatewayController = {
@@ -32,15 +37,22 @@ export const gatewayController = {
     try {
       const payload = req.body;
       const { pendingCommand } = await updateGatewayHeartbeat(payload);
+      const deviceStatus = String(payload?.deviceStatus ?? 'unknown');
+      const errMsg = payload?.errorMessage ? String(payload.errorMessage).slice(0, 200) : '';
+      console.log(
+        `[Connector] Heartbeat device=${deviceStatus}${errMsg ? ` err=${errMsg}` : ''}`,
+      );
       res.json({
         success: true,
         message: 'Heartbeat received',
         pendingCommand,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Heartbeat failed';
+      console.error('[Connector] Heartbeat failed:', message);
       res.status(500).json({
         success: false,
-        message: err instanceof Error ? err.message : 'Heartbeat failed',
+        message,
       });
     }
   },
@@ -89,6 +101,10 @@ export const gatewayController = {
         status: 'online',
       });
 
+      console.log(
+        `[Connector] Attendance batch events=${events.length} inserted=${inserted} dup=${duplicates} failed=${failed}`,
+      );
+
       res.json({
         success: true,
         message: `Processed ${events.length} events (inserted: ${inserted}, duplicates: ${duplicates}, failed: ${failed})`,
@@ -100,9 +116,11 @@ export const gatewayController = {
         },
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Logs upload failed';
+      console.error('[Connector] Upload failed:', message);
       res.status(500).json({
         success: false,
-        message: err instanceof Error ? err.message : 'Logs upload failed',
+        message,
       });
     }
   },

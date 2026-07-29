@@ -7,6 +7,7 @@ import type {
   DeviceStatusResponse,
   DiscoveredDevice,
   SyncResult,
+  ConnectionMode,
 } from '../types/device';
 
 interface ApiResponse<T> {
@@ -27,6 +28,7 @@ function toPayload(form: DeviceFormValues) {
     password: form.password,
     location: form.location || undefined,
     description: form.description || undefined,
+    connectionMode: form.connectionMode,
   };
 }
 
@@ -139,5 +141,20 @@ export const deviceApi = {
     } catch {
       return { connected: false, reason: 'api_unreachable' };
     }
+  },
+
+  createConnectorToken: async (): Promise<{ token: string; device: DevicePublic }> => {
+    const { data } = await apiClient.post<ApiResponse<{ token: string; device: DevicePublic }>>(
+      '/devices/connector-token',
+      {},
+    );
+    return data.data;
+  },
+
+  setConnectionMode: async (connectionMode: DeviceFormValues['connectionMode']): Promise<DevicePublic> => {
+    const { data } = await apiClient.patch<ApiResponse<DevicePublic>>('/devices/connection-mode', {
+      connectionMode,
+    });
+    return data.data;
   },
 };

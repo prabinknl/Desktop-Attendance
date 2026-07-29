@@ -51,6 +51,7 @@ import {
   type DeviceFormValues,
   type DiscoveredDevice,
   type SyncResult,
+  type ConnectionMode,
 } from '../../types/device';
 import { formatDateTime } from '../../lib/utils';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
@@ -71,8 +72,19 @@ const brandLabels: Record<DeviceBrand, string> = {
   other: 'Other',
 };
 
-function statusLabel(status?: string, authState?: string): string {
+function statusLabel(
+  status?: string,
+  authState?: string,
+  opts?: { connectorOnline?: boolean; deviceOnline?: boolean; connectionMode?: ConnectionMode },
+): string {
+  if (opts?.connectionMode === 'cloud_connector') {
+    if (!opts.connectorOnline) return 'Connector Offline';
+    if (opts.deviceOnline) return 'Device Online';
+    if (authState === 'authentication_failed') return 'Authentication failed';
+    return 'Device Offline';
+  }
   if (authState === 'authentication_failed') return 'Authentication failed';
+  if (authState === 'gateway_offline') return 'Connector not running';
   if (authState === 'reachable') return 'Reachable (not authenticated)';
   if (status === 'syncing') return 'Syncing…';
   if (status === 'online' || authState === 'authenticated') return 'Device Online';
@@ -92,6 +104,7 @@ export default function DeviceSettingsPage() {
   const [lastSyncResult, setLastSyncResult] = useState<SyncResult | null>(null);
   const [loadingSavedLogs, setLoadingSavedLogs] = useState(false);
   const [deviceRefreshPending, setDeviceRefreshPending] = useState(false);
+  const [connectorToken, setConnectorToken] = useState<string | null>(null);
 
   const { dateRange, updateDateRange, settings: dateSettings, updateSettings } = useDateSettings();
   const logDateFrom = dateRange.from;
@@ -105,9 +118,14 @@ export default function DeviceSettingsPage() {
     to: logDateTo,
   });
   const queryClient = useQueryClient();
-  const { connect, save, test, disconnect, sync, scan, updateSyncSettings } = useDeviceMutations();
+  const { connect, save, test, disconnect, sync, scan, updateSyncSettings, setConnectionMode, createConnectorToken } =
+    useDeviceMutations();
 
-  const isOnline = status?.status === 'online';
+  const connectionMode: ConnectionMode =
+    device?.connectionMode ?? status?.connectionMode ?? 'local_direct';
+  const isCloudMode = connectionMode === 'cloud_connector';
+  const isOnline = Boolean(status?.deviceOnline);
+  const connectorOnline = Boolean(status?.connectorOnline);
   const logsBusy = loadingSavedLogs || (logsLoading && logs.length === 0);
 
   const validLogs = useMemo(() => {
@@ -181,6 +199,7 @@ export default function DeviceSettingsPage() {
         port: device.port,
         username: device.username ?? 'admin',
         password: '',
+        connectionMode: device.connectionMode ?? 'local_direct',
       });
     }
   }, [device, form]);
@@ -208,7 +227,7 @@ export default function DeviceSettingsPage() {
     try {
       await form.validateFields(['brand', 'ipAddress', 'port', 'username']);
       const values = getFormValues();
-      if (!String(values.password || '').trim()) {
+      if (!isCloudMode && !String(values.password || '').trim()) {
         notify(
           'error',
           'Password required',
@@ -263,7 +282,7 @@ export default function DeviceSettingsPage() {
     try {
       await form.validateFields(['name', 'brand', 'ipAddress', 'port', 'username']);
       const values = getFormValues();
-      if (!String(values.password || '').trim()) {
+      if (!isCloudMode && !String(values.password || '').trim()) {
         notify(
           'error',
           'Password required',
@@ -277,7 +296,13 @@ export default function DeviceSettingsPage() {
       }, 300);
       await connect.mutateAsync(values);
       setConnectProgress(100);
-      notify('success', 'Connected', 'Authenticated with the real device and ready to sync.');
+      notify(
+        'success',
+        isCloudMode ? 'Configuration saved' : 'Connected',
+        isCloudMode
+          ? 'Device stays Offline until the Windows connector sends a verified heartbeat.'
+          : 'Authenticated with the real device and ready to sync.',
+      );
       setTimeout(() => setConnectProgress(0), 1000);
     } catch (err) {
       setConnectProgress(0);
@@ -563,7 +588,11 @@ export default function DeviceSettingsPage() {
                 )}
                 <div>
                   <Title level={4} style={{ margin: 0, color: isOnline ? '#059669' : '#dc2626' }}>
-                    {statusLabel(status?.status, testResult?.authState)}
+                    {statusLabel(status?.status, testResult?.authState, {
+                      connectorOnline,
+                      deviceOnline: isOnline,
+                      connectionMode,
+                    })}
                   </Title>
                   <Text type="secondary">{device?.name ?? 'No device configured'}</Text>
                 </div>
@@ -571,6 +600,26 @@ export default function DeviceSettingsPage() {
             </Col>
             <Col xs={24} md={16}>
               <Row gutter={[16, 8]}>
+                {isCloudMode && (
+                  <Col span={8}>
+                    <Text type="secondary">Connector</Text>
+                    <div>
+                      <Tag color={connectorOnline ? 'success' : 'error'}>
+                        {connectorOnline ? 'Online' : 'Offline'}
+                      </Tag>
+                    </div>
+                  </Col>
+                )}
+                <Col span={8}>
+                  <Text type="secondary">Last Heartbeat</Text>
+                  <div>
+                    <Text strong>
+                      {status?.gatewayLastHeartbeat
+                        ? formatDateTime(status.gatewayLastHeartbeat)
+                        : '—'}
+                    </Text>
+                  </div>
+                </Col>
                 <Col span={8}>
                   <Text type="secondary">Last Sync</Text>
                   <div>
@@ -588,6 +637,18 @@ export default function DeviceSettingsPage() {
                   </div>
                 </Col>
                 <Col span={8}>
+                  <Text type="secondary">Last Auth OK</Text>
+                  <div>
+                    <Text strong>
+                      {status?.lastDeviceAuthAt
+                        ? formatDateTime(status.lastDeviceAuthAt)
+                        : status?.lastConnectionSuccess
+                          ? formatDateTime(status.lastConnectionSuccess)
+                          : '—'}
+                    </Text>
+                  </div>
+                </Col>
+                <Col span={8}>
                   <Text type="secondary">Device Time</Text>
                   <div>
                     <Text strong>
@@ -596,9 +657,70 @@ export default function DeviceSettingsPage() {
                   </div>
                 </Col>
               </Row>
+              {status?.lastConnectorError && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  className="mt-3"
+                  message="Last connector / device error"
+                  description={status.lastConnectorError}
+                />
+              )}
             </Col>
           </Row>
         </Card>
+
+        {isCloudMode && !connectorOnline && (
+          <Alert
+            type="warning"
+            showIcon
+            className="mb-6"
+            style={{ borderRadius: 12 }}
+            message="Cloud Connector Mode"
+            description={
+              <div>
+                <p className="mb-2">
+                  Private IPs such as <strong>{device?.ipAddress || '192.168.0.6'}</strong> cannot be
+                  reached from InsForge. Run the Windows connector on a PC on the same LAN as the
+                  device. Store the device password only in <code>gateway/.env</code>, not in this
+                  browser.
+                </p>
+                <div className="font-mono text-xs bg-slate-900 text-emerald-400 p-3 rounded-lg my-2">
+                  cd gateway &amp;&amp; node index.js
+                </div>
+                <Space wrap>
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      void createConnectorToken.mutateAsync().then((r) => {
+                        setConnectorToken(r.token);
+                        notify('info', 'Connector token', 'Copy it into CONNECTOR_TOKEN in gateway/.env');
+                      });
+                    }}
+                  >
+                    Generate connector token
+                  </Button>
+                  {device?.hasConnectorToken && (
+                    <Text type="secondary">A token is configured (regenerate to rotate).</Text>
+                  )}
+                </Space>
+              </div>
+            }
+          />
+        )}
+
+        <Modal
+          open={Boolean(connectorToken)}
+          title="Connector token (copy now)"
+          onCancel={() => setConnectorToken(null)}
+          footer={[
+            <Button key="close" type="primary" onClick={() => setConnectorToken(null)}>
+              Done
+            </Button>,
+          ]}
+        >
+          <Input.TextArea readOnly value={connectorToken ?? ''} rows={3} />
+        </Modal>
 
         {connectProgress > 0 && (
           <Progress percent={connectProgress} status="active" className="mb-4" />
@@ -623,6 +745,7 @@ export default function DeviceSettingsPage() {
             model: 'DS-K1T320EFWX',
             port: 80,
             username: 'admin',
+            connectionMode: 'local_direct',
           }}
         >
           <Row gutter={[24, 24]}>
@@ -632,6 +755,23 @@ export default function DeviceSettingsPage() {
                 loading={deviceLoading}
                 style={{ borderRadius: 16, height: '100%' }}
               >
+                <Form.Item name="connectionMode" label="Connection mode">
+                  <Select
+                    options={[
+                      {
+                        value: 'local_direct',
+                        label: 'Local Direct (localhost / same LAN as API)',
+                      },
+                      {
+                        value: 'cloud_connector',
+                        label: 'Cloud Connector (InsForge + Windows agent)',
+                      },
+                    ]}
+                    onChange={(mode: ConnectionMode) => {
+                      void setConnectionMode.mutateAsync(mode);
+                    }}
+                  />
+                </Form.Item>
                 <Form.Item
                   name="name"
                   label="Device Name"

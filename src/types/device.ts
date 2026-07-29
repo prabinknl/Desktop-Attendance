@@ -11,6 +11,8 @@ export type DeviceAuthState =
 
 export type GatewayStatus = 'online' | 'offline';
 
+export type ConnectionMode = 'local_direct' | 'cloud_connector';
+
 export interface DevicePublic {
   id: string;
   name: string;
@@ -32,6 +34,8 @@ export interface DevicePublic {
   gatewayLastHeartbeat?: string | null;
   gatewayError?: string | null;
   lastConnectionSuccess?: string | null;
+  connectionMode?: ConnectionMode;
+  hasConnectorToken?: boolean;
 }
 
 export interface DeviceFormValues {
@@ -44,6 +48,7 @@ export interface DeviceFormValues {
   port: number;
   username: string;
   password: string;
+  connectionMode?: ConnectionMode;
 }
 
 export interface ConnectionTestResult {
@@ -85,6 +90,9 @@ export interface AttendanceLogEntry {
 
 export interface DeviceStatusResponse {
   status: DeviceStatus;
+  deviceOnline: boolean;
+  connectorOnline: boolean;
+  connectionMode: ConnectionMode;
   lastSync: string | null;
   lastAttendanceReceived: string | null;
   deviceTime: string | null;
@@ -94,6 +102,8 @@ export interface DeviceStatusResponse {
   gatewayLastHeartbeat?: string | null;
   gatewayError?: string | null;
   lastConnectionSuccess?: string | null;
+  lastDeviceAuthAt?: string | null;
+  lastConnectorError?: string | null;
 }
 
 export interface SyncResult {

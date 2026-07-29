@@ -40,6 +40,10 @@ export const env = {
    * with DEVICE_SYNC_ENABLED=false to avoid pointless scans and reconnects.
    */
   deviceSyncEnabled: (process.env.DEVICE_SYNC_ENABLED ?? 'true').toLowerCase() !== 'false',
+  /** Legacy shared secret; prefer per-device connector_token_hash when set. */
+  gatewaySecret: (process.env.GATEWAY_SECRET ?? '').trim(),
+  /** Expected connector heartbeat interval (seconds). */
+  connectorHeartbeatSeconds: Math.max(15, parseInt(process.env.CONNECTOR_HEARTBEAT_SECONDS ?? '30', 10)),
   adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? 'appnep@pacenp.com').trim().toLowerCase(),
   smtpHost: process.env.SMTP_HOST ?? '',
   smtpPort: parseInt(process.env.SMTP_PORT ?? '587', 10),

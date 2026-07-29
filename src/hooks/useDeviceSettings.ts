@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 import { deviceApi } from '../api/deviceApi';
-import type { AttendanceLogEntry, DeviceFormValues } from '../types/device';
+import type { AttendanceLogEntry, DeviceFormValues, ConnectionMode } from '../types/device';
 import { loadDeviceLogsCache, saveDeviceLogsCache } from '../lib/deviceLogsCache';
 import { punchCalendarDate } from '../lib/punchTime';
 
@@ -30,10 +31,19 @@ export function useDevice() {
 }
 
 export function useDeviceStatus() {
+  const fetchGen = useRef(0);
   return useQuery({
     queryKey: deviceQueryKeys.status,
-    queryFn: () => deviceApi.getStatus(),
+    queryFn: async () => {
+      const gen = ++fetchGen.current;
+      const data = await deviceApi.getStatus();
+      if (gen !== fetchGen.current) {
+        throw new Error('stale_status_request');
+      }
+      return data;
+    },
     refetchInterval: 10_000,
+    retry: (_, err) => !(err instanceof Error && err.message === 'stale_status_request'),
   });
 }
 
@@ -107,5 +117,25 @@ export function useDeviceMutations() {
     onSuccess: invalidateAll,
   });
 
-  return { connect, save, test, disconnect, sync, scan, updateSyncSettings };
+  const setConnectionMode = useMutation({
+    mutationFn: (mode: ConnectionMode) => deviceApi.setConnectionMode(mode),
+    onSuccess: invalidateAll,
+  });
+
+  const createConnectorToken = useMutation({
+    mutationFn: () => deviceApi.createConnectorToken(),
+    onSuccess: invalidateAll,
+  });
+
+  return {
+    connect,
+    save,
+    test,
+    disconnect,
+    sync,
+    scan,
+    updateSyncSettings,
+    setConnectionMode,
+    createConnectorToken,
+  };
 }
