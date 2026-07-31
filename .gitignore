@@ -18,6 +18,58 @@ server/.env
 server/data/
 *.local
 
+# Environment files
+.env
+.env.local
+.env.development
+.env.production
+.env.staging
+.env.*
+
+# Build output
+build
+out
+
+# Electron packaging / installer output
+release
+release-builds
+out-electron
+*.exe
+*.dmg
+*.AppImage
+*.snap
+*.deb
+*.rpm
+*.msi
+*.blockmap
+*.yml
+!package.json
+!tsconfig*.json
+!vite.config*.ts
+!postcss.config.js
+!tailwind.config.js
+!vercel.json
+!.oxlintrc.json
+!.vercelignore
+!index.html
+
+# Database credentials & local data
+*.sqlite
+*.sqlite3
+*.db
+server/data/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# API keys / secrets
+*.secret
+*.secrets
+secrets/
+credentials/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
