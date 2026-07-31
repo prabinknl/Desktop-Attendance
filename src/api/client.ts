@@ -1,11 +1,19 @@
 import axios, { AxiosError } from 'axios';
 
 /**
- * Local dev goes through the Vite proxy on a relative path; the hosted build
- * is served from a different domain than the API, so it needs an absolute URL
- * supplied at build time via VITE_API_BASE_URL.
+ * Local web dev goes through the Vite proxy on a relative path; the hosted
+ * build needs VITE_API_BASE_URL. The Electron shell exposes a loopback API
+ * URL via preload (attendanceDesktop.apiBaseUrl).
  */
-export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/$/, '');
+function resolveApiBaseUrl(): string {
+  const desktopUrl = window.attendanceDesktop?.apiBaseUrl;
+  if (typeof desktopUrl === 'string' && desktopUrl.trim()) {
+    return desktopUrl.replace(/\/$/, '');
+  }
+  return (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/$/, '');
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,

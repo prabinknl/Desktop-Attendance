@@ -1,17 +1,22 @@
 {
   "name": "attendence",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "dev:server": "tsx watch server/src/index.ts",
     "dev:all": "concurrently \"npm run dev:server\" \"npm run dev\"",
     "build": "tsc -b && vite build",
     "build:server": "tsc -p server/tsconfig.json && node -e \"require('fs').cpSync('server/src/db/migrations','server/dist/db/migrations',{recursive:true})\"",
+    "build:electron-ui": "vite build --config vite.config.electron.ts",
     "lint": "oxlint",
     "preview": "vite preview",
-    "deploy:api": "node scripts/deploy-api.mjs"
+    "deploy:api": "node scripts/deploy-api.mjs",
+    "electron:dev": "concurrently -k -n server,vite,electron -c blue,green,magenta \"npm run dev:server\" \"npm run dev\" \"wait-on http://127.0.0.1:3002 http://127.0.0.1:3001/api/health && electron .\"",
+    "electron:pack": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs --dir",
+    "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
@@ -58,7 +63,7 @@
     "react-dom": "^19.2.7",
     "react-hook-form": "^7.81.0",
     "react-router-dom": "^7.18.1",
-    "recharts": "^3.9.2",
+    "recharts": "^3.10.1",
     "tailwind-merge": "^3.6.0",
     "uuid": "^14.0.1",
     "zod": "^4.4.3"
@@ -74,15 +79,17 @@
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.5.2",
     "concurrently": "^10.0.3",
+    "electron": "^37.10.3",
+    "electron-builder": "^26.15.3",
     "oxlint": "^1.71.0",
     "postcss": "^8.5.19",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.23.1",
     "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "vite": "^8.1.1",
+    "wait-on": "^8.0.5"
   },
-  "description": "This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.",
-  "main": "postcss.config.js",
+  "description": "Attendance management app (web + Windows desktop via Electron).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/appnepgit/attendence.git"
@@ -93,5 +100,54 @@
   "bugs": {
     "url": "https://github.com/appnepgit/attendence/issues"
   },
-  "homepage": "https://github.com/appnepgit/attendence#readme"
+  "homepage": "https://github.com/appnepgit/attendence#readme",
+  "build": {
+    "appId": "com.attendance.desktop",
+    "productName": "Attendance",
+    "copyright": "Copyright © Attendance",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "electron/main.cjs",
+      "electron/preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "electron-resources/server",
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!.env",
+          "!**/.env"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Attendance-Setup-${version}.${ext}",
+      "executableName": "Attendance"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Attendance",
+      "uninstallDisplayName": "Attendance",
+      "deleteAppDataOnUninstall": false
+    },
+    "asar": true
+  }
 }

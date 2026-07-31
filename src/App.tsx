@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { NotificationProvider } from './contexts/NotificationContext';
@@ -7,6 +7,13 @@ import { DateSettingsProvider } from './contexts/DateSettingsContext';
 import { InvitationProvider } from './contexts/InvitationContext';
 import ProtectedRoute from './routes/ProtectedRoute';
 import AppShell from './components/layout/AppShell';
+
+/** Electron loads the UI from file:// — HashRouter avoids blank pages on refresh.
+ *  Hosted InsForge / Vercel builds keep BrowserRouter (pretty URLs + SPA rewrites). */
+const AppRouter =
+  typeof window !== 'undefined' && window.attendanceDesktop?.isElectron
+    ? HashRouter
+    : BrowserRouter;
 
 // Auth pages
 import LoginPage from './pages/auth/LoginPage';
@@ -61,7 +68,7 @@ export default function App() {
         <AuthProvider>
           <NotificationProvider>
             <InvitationProvider>
-              <BrowserRouter>
+              <AppRouter>
                 <Routes>
                   {/* Public routes */}
                   <Route path="/login" element={<LoginPage />} />
@@ -105,7 +112,7 @@ export default function App() {
                     </Route>
                   </Route>
                 </Routes>
-              </BrowserRouter>
+              </AppRouter>
             </InvitationProvider>
           </NotificationProvider>
         </AuthProvider>

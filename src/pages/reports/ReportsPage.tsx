@@ -237,7 +237,7 @@ export default function ReportsPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
               <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={d => formatDate(d, 'MMM dd')} />
               <YAxis tick={{ fontSize: 10 }} />
-              <Tooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} labelFormatter={l => formatDate(l, 'dd MMM')} />
+              <Tooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} labelFormatter={l => formatDate(String(l ?? ''), 'dd MMM')} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Area type="monotone" dataKey="present" stroke="#0ea5e9" strokeWidth={2} fill="url(#rg-present)" name="Present" />
               <Area type="monotone" dataKey="late" stroke="#f59e0b" strokeWidth={2} fill="none" name="Late" />
@@ -297,7 +297,7 @@ export default function ReportsPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
               <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={d => formatDate(d, 'MMM dd')} />
               <YAxis tick={{ fontSize: 10 }} domain={[0, 10]} />
-              <Tooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} labelFormatter={l => formatDate(l, 'dd MMM')} formatter={(v) => [`${(typeof v === 'number' ? v : Number(v ?? 0)).toFixed(1)}h`, 'Avg Hours']} />
+              <Tooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} labelFormatter={l => formatDate(String(l ?? ''), 'dd MMM')} formatter={(v) => [`${(typeof v === 'number' ? v : Number(v ?? 0)).toFixed(1)}h`, 'Avg Hours']} />
               <Line type="monotone" dataKey="hours" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3, fill: '#8b5cf6' }} name="Avg Hours" />
             </LineChart>
           </ResponsiveContainer>

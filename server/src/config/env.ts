@@ -15,6 +15,10 @@ const DEFAULT_CORS_ORIGINS = ['http://localhost:3002', 'http://127.0.0.1:3002'];
  * it when the server runs in the cloud.
  */
 function parseCorsOrigins(): string[] | boolean {
+  // Electron loads the UI from file:// (Origin: null) and calls the local API.
+  if ((process.env.ELECTRON_DESKTOP ?? '').trim() === '1') {
+    return true;
+  }
   const raw = (process.env.CORS_ORIGINS ?? '').trim();
   if (!raw) return DEFAULT_CORS_ORIGINS;
   if (raw === '*') return true;

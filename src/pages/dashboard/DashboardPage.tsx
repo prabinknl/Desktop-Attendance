@@ -205,7 +205,7 @@ export default function DashboardPage() {
               <YAxis tick={{ fontSize: 10 }} />
               <Tooltip
                 contentStyle={{ borderRadius: 12, border: '1px solid #e2e8f0', fontSize: 12 }}
-                labelFormatter={l => formatDate(l, 'dd MMM yyyy')}
+                labelFormatter={l => formatDate(String(l ?? ''), 'dd MMM yyyy')}
               />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Area type="monotone" dataKey="present" stroke="#0ea5e9" strokeWidth={2} fill="url(#present-grad)" name="Present" />
@@ -273,7 +273,7 @@ export default function DashboardPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" className="dark:stroke-slate-700" vertical={false} />
               <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={d => formatDate(d, 'EEE')} />
               <YAxis tick={{ fontSize: 10 }} />
-              <Tooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} labelFormatter={l => formatDate(l, 'EEE, dd MMM')} />
+              <Tooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} labelFormatter={l => formatDate(String(l ?? ''), 'EEE, dd MMM')} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Bar dataKey="present" fill="#0ea5e9" radius={[4, 4, 0, 0]} name="Present" stackId="a" />
               <Bar dataKey="late" fill="#f59e0b" radius={[0, 0, 0, 0]} name="Late" stackId="a" />
