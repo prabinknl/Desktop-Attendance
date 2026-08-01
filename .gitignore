@@ -27,7 +27,6 @@ server/data/
 .env.*
 
 # Build output
-build
 out
 
 # Electron packaging / installer output
@@ -42,7 +41,6 @@ out-electron
 *.rpm
 *.msi
 *.blockmap
-*.yml
 !package.json
 !tsconfig*.json
 !vite.config*.ts
