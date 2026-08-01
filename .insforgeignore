@@ -1,0 +1,11 @@
+node_modules
+dist
+dist-electron
+electron-resources
+release
+release-builds
+server
+.git
+*.exe
+*.zip
+*.dmg
