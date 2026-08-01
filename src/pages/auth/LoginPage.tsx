@@ -668,17 +668,27 @@ export default function LoginPage() {
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
                     Password
                   </label>
-                  <input
-                    {...loginForm.register('password')}
-                    type="password"
-                    placeholder="••••••••"
-                    autoComplete="current-password"
-                    autoFocus={selectedRole === 'admin'}
-                    className={cn(
-                      'input',
-                      loginForm.formState.errors.password && 'border-rose-400 focus:border-rose-400 focus:ring-rose-500/20',
-                    )}
-                  />
+                  <div className="relative">
+                    <input
+                      {...loginForm.register('password')}
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="••••••••"
+                      autoComplete="current-password"
+                      autoFocus={selectedRole === 'admin'}
+                      className={cn(
+                        'input pr-10',
+                        loginForm.formState.errors.password && 'border-rose-400 focus:border-rose-400 focus:ring-rose-500/20',
+                      )}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
                   {loginForm.formState.errors.password && (
                     <p className="text-xs text-rose-500 mt-1">{loginForm.formState.errors.password.message}</p>
                   )}
@@ -769,12 +779,22 @@ export default function LoginPage() {
 
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1.5">Confirm password</label>
-                  <input
-                    {...adminForm.register('confirmPassword')}
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    className={cn('input', adminForm.formState.errors.confirmPassword && 'border-rose-400')}
-                  />
+                  <div className="relative">
+                    <input
+                      {...adminForm.register('confirmPassword')}
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="••••••••"
+                      className={cn('input pr-10', adminForm.formState.errors.confirmPassword && 'border-rose-400')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
                   {adminForm.formState.errors.confirmPassword && (
                     <p className="text-xs text-rose-500 mt-1">{adminForm.formState.errors.confirmPassword.message}</p>
                   )}
