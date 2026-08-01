@@ -6,7 +6,7 @@ import { deviceApi } from '../api/deviceApi';
 import { authApi } from '../api/authApi';
 
 /** Only this email may register as admin (one admin account total). */
-export const ALLOWED_ADMIN_EMAIL = 'appnep@pacenp.com';
+export const ALLOWED_ADMIN_EMAIL = 'bpkhanal.app@gmail.com';
 
 const USERS_KEY = 'ams_auth_users';
 const SESSION_KEY = 'ams_user';

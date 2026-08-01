@@ -48,7 +48,7 @@ export const env = {
   gatewaySecret: (process.env.GATEWAY_SECRET ?? '').trim(),
   /** Expected connector heartbeat interval (seconds). */
   connectorHeartbeatSeconds: Math.max(15, parseInt(process.env.CONNECTOR_HEARTBEAT_SECONDS ?? '30', 10)),
-  adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? 'appnep@pacenp.com').trim().toLowerCase(),
+  adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? 'bpkhanal.app@gmail.com').trim().toLowerCase(),
   smtpHost: process.env.SMTP_HOST ?? '',
   smtpPort: parseInt(process.env.SMTP_PORT ?? '587', 10),
   smtpUser: process.env.SMTP_USER ?? '',
