@@ -30,4 +30,6 @@ jobs:
           VITE_INSFORGE_ANON_KEY: ${{ secrets.VITE_INSFORGE_ANON_KEY }}
 
       - name: Deploy Frontend Artifacts
-        run: npx @insforge/cli deploy --dir ./dist --token ${{ secrets.INSFORGE_DEPLOY_TOKEN }}
+        run: npx @insforge/cli deployments deploy ./dist
+        env:
+          INSFORGE_TOKEN: ${{ secrets.INSFORGE_DEPLOY_TOKEN }}
