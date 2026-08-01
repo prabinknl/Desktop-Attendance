@@ -4,6 +4,7 @@ import { runMigrations } from './db/migrate.js';
 import { setMemoryMode } from './models/DeviceModel.js';
 import { refreshSyncScheduler, startSyncSettingsWatcher } from './services/device/BackgroundSyncService.js';
 import { autoReconnectDevice } from './services/device/AutoReconnectService.js';
+import { getInsForgeStatus } from './services/insforge/insforgeClient.js';
 
 async function start() {
   try {
@@ -25,9 +26,12 @@ async function start() {
     console.log('[Server] Device sync disabled — the attendance machine is LAN-only');
   }
 
+  const insforgeStatus = await getInsForgeStatus();
+
   app.listen(env.port, () => {
     console.log(`[Server] API listening on port ${env.port}`);
     console.log(`[Server] Device sync: ${env.deviceSyncEnabled ? 'REAL Hikvision ISAPI' : 'disabled'}`);
+    console.log(`[Server] InsForge BaaS: ${insforgeStatus.connected ? 'Connected' : 'Not Connected'} (${insforgeStatus.message})`);
   });
 }
 

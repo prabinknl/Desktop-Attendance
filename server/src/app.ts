@@ -5,6 +5,7 @@ import authRoutes from './routes/authRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
 import coreRoutes from './routes/coreRoutes.js';
 import { env } from './config/env.js';
+import { getInsForgeStatus } from './services/insforge/insforgeClient.js';
 
 import { authorizeAccountantPermissions } from './middleware/authMiddleware.js';
 import gatewayRoutes from './routes/gatewayRoutes.js';
@@ -19,12 +20,14 @@ app.use(
 );
 app.use(express.json({ limit: '2mb' }));
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
+  const insforgeStatus = await getInsForgeStatus();
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     // The frontend hides device settings when the API cannot reach the LAN
     deviceSyncEnabled: env.deviceSyncEnabled,
+    insforge: insforgeStatus,
   });
 });
 

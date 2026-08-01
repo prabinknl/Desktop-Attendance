@@ -54,4 +54,6 @@ export const env = {
   smtpUser: process.env.SMTP_USER ?? '',
   smtpPass: process.env.SMTP_PASS ?? '',
   smtpFrom: process.env.SMTP_FROM ?? '',
+  insforgeBaseUrl: (process.env.INSFORGE_BASE_URL ?? '').trim(),
+  insforgeApiKey: (process.env.INSFORGE_API_KEY ?? '').trim(),
 };

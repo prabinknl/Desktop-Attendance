@@ -13,7 +13,6 @@
     "build:electron-ui": "vite build --config vite.config.electron.ts",
     "lint": "oxlint",
     "preview": "vite preview",
-
     "electron:dev": "concurrently -k -n server,vite,electron -c blue,green,magenta \"npm run dev:server\" \"npm run dev\" \"wait-on http://127.0.0.1:3002 http://127.0.0.1:3001/api/health && electron .\"",
     "electron:pack": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs --dir",
     "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs"
@@ -21,6 +20,7 @@
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
     "@hookform/resolvers": "^5.4.0",
+    "@insforge/sdk": "^1.5.2",
     "@radix-ui/react-accordion": "^1.2.16",
     "@radix-ui/react-alert-dialog": "^1.1.19",
     "@radix-ui/react-avatar": "^1.2.2",
