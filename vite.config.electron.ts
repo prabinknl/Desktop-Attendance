@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 /**
  * Electron-only frontend build.
  * Uses relative asset URLs (base: './') and HashRouter-friendly output
- * without changing the hosted InsForge / Vercel Vite config.
+ * without changing the hosted web Vite config.
  */
 export default defineConfig({
   plugins: [react()],

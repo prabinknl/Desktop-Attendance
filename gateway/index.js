@@ -36,7 +36,7 @@ const config = {
   port: Number(process.env.HIKVISION_PORT || 80),
   username: process.env.HIKVISION_USERNAME || 'admin',
   password: process.env.HIKVISION_PASSWORD || '',
-  apiUrl: (process.env.INSFORGE_API_URL || process.env.SERVER_URL || 'https://ew5ub4j6.ap-southeast.insforge.app/api').replace(/\/$/, ''),
+  apiUrl: (process.env.SERVER_URL || 'http://localhost:3001/api').replace(/\/$/, ''),
   connectorToken:
     process.env.CONNECTOR_TOKEN || process.env.GATEWAY_SECRET || 'default_gateway_secret',
   syncIntervalMs: Number(process.env.SYNC_INTERVAL_SECONDS || 30) * 1000,

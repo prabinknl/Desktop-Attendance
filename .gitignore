@@ -81,8 +81,7 @@ credentials/
 *.sln
 *.sw?
 
-# InsForge & AI agent skills
-.insforge
+# AI agent skills
 .agent
 .agents
 .augment

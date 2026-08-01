@@ -1,6 +1,6 @@
 /**
  * Frontend API client for the cloud attendance persistence layer.
- * Talks to the Express server which writes to PostgreSQL (InsForge cloud DB).
+ * Talks to the Express server which writes to PostgreSQL.
  * All methods are fire-and-forget safe — callers should catch errors and
  * fall back to localStorage if the server is unreachable.
  */

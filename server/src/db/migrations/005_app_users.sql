@@ -1,4 +1,4 @@
--- Table for saving user accounts (admin, hr, employee) in InsForge PostgreSQL Cloud DB
+-- Table for saving user accounts (admin, hr, employee) in PostgreSQL
 -- so accounts persist across computers, logouts, and browser restarts.
 
 CREATE TABLE IF NOT EXISTS app_users (

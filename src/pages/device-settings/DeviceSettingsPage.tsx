@@ -681,7 +681,7 @@ export default function DeviceSettingsPage() {
               <div>
                 <p className="mb-2">
                   Private IPs such as <strong>{device?.ipAddress || '192.168.0.6'}</strong> cannot be
-                  reached from InsForge. Run the Windows connector on a PC on the same LAN as the
+                  reached from the cloud. Run the Windows connector on a PC on the same LAN as the
                   device. Store the device password only in <code>gateway/.env</code>, not in this
                   browser.
                 </p>
@@ -764,7 +764,7 @@ export default function DeviceSettingsPage() {
                       },
                       {
                         value: 'cloud_connector',
-                        label: 'Cloud Connector (InsForge + Windows agent)',
+                        label: 'Cloud Connector (Windows agent)',
                       },
                     ]}
                     onChange={(mode: ConnectionMode) => {

@@ -1,75 +1,65 @@
-# Hikvision Local Gateway Agent
+# Hikvision Attendance Gateway Agent
 
-Lightweight local bridge service for the **Attendance Management System**. 
+## Overview
+The Hikvision attendance device (e.g. `DS-K1T320EFWX` at `192.168.0.6:80`) is located on your local office LAN. Because remote web servers cannot directly access private `192.168.x.x` LAN addresses, this gateway agent runs on any local computer connected to the same LAN as the attendance machine.
 
-The Hikvision attendance device (e.g. `DS-K1T320EFWX` at `192.168.0.6:80`) is located on your local office LAN. Because cloud web servers (InsForge) cannot directly access private `192.168.x.x` LAN addresses, this gateway agent runs on any local computer connected to the same LAN as the attendance machine.
+It authenticates with the Hikvision machine via ISAPI Digest Auth, polls attendance logs, and pushes health heartbeats and attendance records to your backend API over secure HTTPS.
 
-It authenticates with the Hikvision machine via ISAPI Digest Auth, polls attendance logs, and pushes health heartbeats and attendance records to your InsForge cloud application over secure HTTPS.
+## Architecture
 
----
+```
+[Hikvision Device on LAN] ← ISAPI Digest Auth → [Gateway Agent on LAN PC] → HTTPS → [Backend API]
+```
 
-## Requirements
-- **Node.js**: v18.0.0 or higher installed on the office Windows computer.
-- **Network**: The computer running this agent must be connected to the same local network as `192.168.0.6`.
+## Setup
 
----
+1. Install Node.js ≥ 18
+2. Navigate to the `gateway/` folder
+3. Copy `.env.example` to `.env` and fill in your credentials:
 
-## Quick Setup & Run
-
-### Step 1: Configure Credentials
-1. Open the `.env` file inside the `gateway/` folder.
-2. Edit your local device password and cloud API settings:
    ```env
-   # Local LAN Hikvision Credentials
    HIKVISION_IP=192.168.0.6
    HIKVISION_PORT=80
    HIKVISION_USERNAME=admin
-   HIKVISION_PASSWORD=your_device_password_here
+   HIKVISION_PASSWORD=your_device_web_password
 
-   # Cloud InsForge API Configuration
-   INSFORGE_API_URL=https://ew5ub4j6.ap-southeast.insforge.app/api
-# Prefer token from Device Settings → Generate connector token
-CONNECTOR_TOKEN=
-GATEWAY_SECRET=attendence_local_gateway_secret_2026
-
-# Polling & Sync Timers (in seconds)
-SYNC_INTERVAL_SECONDS=30
-HEARTBEAT_INTERVAL_SECONDS=30
+   # Backend API Configuration
+   SERVER_URL=http://localhost:3001/api
+   GATEWAY_SECRET=attendence_local_gateway_secret_2026
    ```
 
-### Step 2: Start the Gateway
-Open Command Prompt or PowerShell in the `gateway/` folder and run:
-```cmd
-node index.js
-```
+4. Start:
+   ```bash
+   node index.js
+   ```
 
-You will see log output verifying device connectivity:
-```text
+## Expected Output
+
+```
 ====================================================
- Hikvision Local Gateway & Attendance Sync Agent
+ Hikvision Windows Connector (Cloud Bridge)
 ====================================================
 [Config] Target Device: http://192.168.0.6:80 (user: admin)
-[Config] Cloud API URL: https://ew5ub4j6.ap-southeast.insforge.app/api
+[Config] Cloud API URL: http://localhost:3001/api
+[Config] Sync Interval: 30s
+[Config] Heartbeat Interval: 10s
 ====================================================
 
-[11:30:00 AM] Heartbeat: Device ONLINE (15ms) · Cloud API ACK
-[Sync] Downloaded 4 attendance events from device. Uploading to cloud...
-[Sync] Upload Success: Inserted 4, Duplicates 0, Failed 0
+[12:00:00] Heartbeat: device ONLINE (120ms)
+[Sync] 3 event(s) from device — uploading
+[Sync] OK inserted=3 dup=0 failed=0
 ```
 
----
+## Environment Variables
 
-## Automatic Windows Startup (Run on Boot)
-
-To run the gateway automatically whenever Windows starts:
-
-1. Double-click `register-startup.bat` inside the `gateway/` folder.
-2. It registers a hidden startup script in your Windows Startup folder (`shell:startup`).
-3. Now, whenever the computer turns on or logs in, the gateway runs silently in the background!
-
----
-
-## Security Assurance
-- The Hikvision administrator password is stored **ONLY** in `gateway/.env` on your local office computer.
-- It is **NEVER** sent across the internet, exposed to the web browser, or stored in cloud environment variables.
-- Duplicate prevention: Every attendance event is stamped with a unique external ID key (`hik_<serial>_<empId>_<eventTime>_<minor>`), guaranteeing zero duplicate punches in the cloud database.
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `HIKVISION_IP` | Yes | `192.168.0.6` | Device IP address |
+| `HIKVISION_PORT` | No | `80` | Device port |
+| `HIKVISION_USERNAME` | Yes | `admin` | Device login username |
+| `HIKVISION_PASSWORD` | Yes | — | Device login password |
+| `SERVER_URL` | Yes | `http://localhost:3001/api` | Backend API URL |
+| `CONNECTOR_TOKEN` | Recommended | — | Per-device token from Device Settings |
+| `GATEWAY_SECRET` | No | — | Legacy shared secret |
+| `SYNC_INTERVAL_SECONDS` | No | `30` | Polling interval |
+| `HEARTBEAT_INTERVAL_SECONDS` | No | `30` | Heartbeat interval |

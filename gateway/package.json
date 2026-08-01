@@ -1,7 +1,7 @@
 {
   "name": "hikvision-attendance-gateway",
   "version": "1.0.0",
-  "description": "Lightweight local gateway agent for connecting Hikvision ISAPI devices on LAN with InsForge cloud attendance system",
+  "description": "Lightweight local gateway agent for connecting Hikvision ISAPI devices on LAN with the attendance backend API",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -12,8 +12,7 @@
     "hikvision",
     "isapi",
     "attendance",
-    "gateway",
-    "insforge"
+    "gateway"
   ],
   "author": "",
   "license": "ISC"

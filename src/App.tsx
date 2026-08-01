@@ -9,7 +9,7 @@ import ProtectedRoute from './routes/ProtectedRoute';
 import AppShell from './components/layout/AppShell';
 
 /** Electron loads the UI from file:// — HashRouter avoids blank pages on refresh.
- *  Hosted InsForge / Vercel builds keep BrowserRouter (pretty URLs + SPA rewrites). */
+ *  Hosted web builds keep BrowserRouter (pretty URLs + SPA rewrites). */
 const AppRouter =
   typeof window !== 'undefined' && window.attendanceDesktop?.isElectron
     ? HashRouter
