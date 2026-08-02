@@ -41,3 +41,4 @@ jobs:
 
       - name: Deploy Frontend Artifacts
         run: npx @insforge/cli deployments deploy ./dist -y
+
