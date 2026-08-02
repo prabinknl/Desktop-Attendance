@@ -29,7 +29,14 @@ jobs:
         run: npm ci
 
       - name: Authenticate InsForge CLI
-        run: npx @insforge/cli@latest login --user-api-key "${{ secrets.INSFORGE_USER_API_KEY }}" --json
+        env:
+          INSFORGE_USER_API_KEY: ${{ secrets.INSFORGE_USER_API_KEY }}
+        run: |
+          if [ -z "$INSFORGE_USER_API_KEY" ]; then
+            echo "::error::Missing GitHub secret INSFORGE_USER_API_KEY (create a uak_ key in InsForge → Profile → API Keys)."
+            exit 1
+          fi
+          npx @insforge/cli@latest login --user-api-key "$INSFORGE_USER_API_KEY" --json
 
       - name: Link InsForge project
         run: |
