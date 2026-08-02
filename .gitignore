@@ -94,4 +94,6 @@ credentials/
 .windsurf
 
 # InsForge & AI agent skills
-.insforge
+.insforge/*
+!.insforge/project.json
+

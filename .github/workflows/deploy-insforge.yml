@@ -39,6 +39,10 @@ jobs:
           fi
           npx @insforge/cli login --user-api-key "$INSFORGE_API_KEY" -y
 
+      - name: Link InsForge Project
+        run: npx @insforge/cli link --project-id 37e52add-2bac-45c2-a61a-ff17fcfd7b78 -y
+
       - name: Deploy Frontend Artifacts
         run: npx @insforge/cli deployments deploy ./dist -y
+
 
