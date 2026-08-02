@@ -11,11 +11,14 @@
     "build": "tsc -b && vite build",
     "build:server": "tsc -p server/tsconfig.json && node -e \"require('fs').cpSync('server/src/db/migrations','server/dist/db/migrations',{recursive:true})\"",
     "build:electron-ui": "vite build --config vite.config.electron.ts",
+    "build:icon": "node electron/scripts/generate-icon.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "electron:dev": "concurrently -k -n server,vite,electron -c blue,green,magenta \"npm run dev:server\" \"npm run dev\" \"wait-on http://127.0.0.1:3002 http://127.0.0.1:3001/api/health && electron .\"",
     "electron:pack": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs --dir",
-    "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs"
+    "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs",
+    "dist": "npm run build:icon && npm run electron:build",
+    "dist:dir": "npm run electron:pack"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
@@ -82,7 +85,9 @@
     "electron": "^37.10.3",
     "electron-builder": "^26.15.3",
     "oxlint": "^1.71.0",
+    "png-to-ico": "^3.0.2",
     "postcss": "^8.5.19",
+    "sharp": "^0.35.3",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.23.1",
     "typescript": "~6.0.2",
@@ -91,12 +96,13 @@
   },
   "description": "Attendance management app (web + Windows desktop via Electron).",
   "keywords": [],
-  "author": "",
+  "author": "APPNEP",
   "license": "ISC",
   "build": {
-    "appId": "com.attendance.desktop",
-    "productName": "Attendance",
-    "copyright": "Copyright © Attendance",
+    "appId": "com.appnep.attendance.desktop",
+    "productName": "Attendance Desktop",
+    "copyright": "Copyright © APPNEP",
+    "compression": "maximum",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -105,6 +111,7 @@
       "dist-electron/**/*",
       "electron/main.cjs",
       "electron/preload.cjs",
+      "build/icon.ico",
       "package.json"
     ],
     "extraResources": [
@@ -125,20 +132,39 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Attendance-Setup-${version}.${ext}",
-      "executableName": "Attendance"
+      "executableName": "Attendance Desktop",
+      "legalTrademarks": "Attendance Desktop is a trademark of APPNEP",
+      "signtoolOptions": {
+        "publisherName": "APPNEP"
+      }
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Attendance",
-      "uninstallDisplayName": "Attendance",
-      "deleteAppDataOnUninstall": false
+      "shortcutName": "Attendance Desktop",
+      "uninstallDisplayName": "Attendance Desktop",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "artifactName": "Attendance Desktop Setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "Attendance Desktop.${ext}"
     },
     "asar": true
   }

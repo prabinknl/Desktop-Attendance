@@ -1,8 +1,11 @@
 /**
- * Electron main process for Attendence.
+ * Electron main process for Attendance Desktop.
  * Dev: loads the Vite app at http://127.0.0.1:3002 (API via Vite proxy).
  * Prod: serves dist-electron/ over localhost and proxies /api to the cloud API
  * so the frontend can keep using relative /api (no secrets baked in).
+ *
+ * User data (Chromium profile, caches, optional desktop config) lives under
+ * %APPDATA%\Attendance Desktop — never under Program Files.
  */
 const { app, BrowserWindow, shell, dialog } = require('electron');
 const http = require('http');
@@ -11,7 +14,17 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
+const APP_DISPLAY_NAME = 'Attendance Desktop';
 const isDev = !app.isPackaged;
+
+// Keep session / localStorage / caches outside the install directory.
+app.setName(APP_DISPLAY_NAME);
+try {
+  app.setPath('userData', path.join(app.getPath('appData'), APP_DISPLAY_NAME));
+} catch (err) {
+  console.warn('[Electron] Could not set userData path:', err);
+}
+
 const DEV_URL = process.env.ELECTRON_DEV_URL || 'http://127.0.0.1:3002';
 /** Public API origin only — never put passwords or service-role keys here. */
 const DEFAULT_API_ORIGIN =
@@ -21,6 +34,17 @@ const API_ORIGIN = (process.env.ELECTRON_API_TARGET || DEFAULT_API_ORIGIN).repla
 let mainWindow = null;
 let staticServer = null;
 let staticServerPort = null;
+
+function resolveAppIcon() {
+  const candidates = [
+    path.join(__dirname, '..', 'build', 'icon.ico'),
+    path.join(process.resourcesPath || '', 'icon.ico'),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
 
 function getDistPath() {
   // Packaged builds use vite.config.electron.ts → dist-electron/
@@ -171,7 +195,7 @@ function assertProductionBuildExists(distPath) {
       `Missing production build files at:\n${indexHtml}\n\n` +
       'Run "npm run electron:build" or "npm run electron:pack" first.';
     console.error('[Electron]', message);
-    dialog.showErrorBox('Attendence — missing build', message);
+    dialog.showErrorBox(`${APP_DISPLAY_NAME} — missing build`, message);
     throw new Error(message);
   }
 }
@@ -187,10 +211,13 @@ async function resolveStartUrl() {
 }
 
 function createWindow(startUrl) {
+  const icon = resolveAppIcon();
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     show: false,
+    title: APP_DISPLAY_NAME,
+    ...(icon ? { icon } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -237,7 +264,7 @@ function createWindow(startUrl) {
   mainWindow.loadURL(startUrl).catch((err) => {
     console.error('[Electron] Failed to load UI:', err);
     dialog.showErrorBox(
-      'Attendence — startup failure',
+      `${APP_DISPLAY_NAME} — startup failure`,
       isDev
         ? `Could not open the development URL:\n${startUrl}\n\nIs Vite running? (${err.message})`
         : `Could not load the desktop UI.\n\n${err.message}`,
@@ -257,7 +284,7 @@ async function bootstrap() {
     console.error('[Electron] Startup failed:', err);
     if (!err.message?.includes('Missing production build')) {
       dialog.showErrorBox(
-        'Attendence — startup failure',
+        `${APP_DISPLAY_NAME} — startup failure`,
         err instanceof Error ? err.message : String(err),
       );
     }
