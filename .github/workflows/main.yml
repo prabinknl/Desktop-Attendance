@@ -1,31 +1,12 @@
-name: Deploy to InsForge
+- name: Authenticate InsForge CLI
+  env:
+    INSFORGE_API_KEY: ${{ secrets.INSFORGE_API_KEY }}
+  run: |
+    if [ -z "$INSFORGE_API_KEY" ]; then
+      echo "::error::INSFORGE_API_KEY secret is missing! Please add it in GitHub Settings -> Secrets and variables -> Actions."
+      exit 1
+    fi
+    npx @insforge/cli login --user-api-key "$INSFORGE_API_KEY" -y
 
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build application
-        run: npm run build
-
-      - name: Deploy to InsForge
-        run: npx @insforge/cli@0.2.2 deployments deploy ./dist --yes
-        env:
-          INSFORGE_TOKEN: ${{ secrets.INSFORGE_TOKEN }}
+- name: Deploy Frontend Artifacts
+  run: npx @insforge/cli deployments deploy ./dist -y
