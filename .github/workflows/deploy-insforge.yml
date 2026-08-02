@@ -29,7 +29,15 @@ jobs:
           VITE_INSFORGE_APP_URL: ${{ secrets.VITE_INSFORGE_APP_URL }}
           VITE_INSFORGE_ANON_KEY: ${{ secrets.VITE_INSFORGE_ANON_KEY }}
 
-      - name: Deploy Frontend Artifacts
-        run: npx @insforge/cli deployments deploy ./dist
+      - name: Authenticate InsForge CLI
         env:
-          INSFORGE_TOKEN: ${{ secrets.INSFORGE_DEPLOY_TOKEN }}
+          INSFORGE_API_KEY: ${{ secrets.INSFORGE_API_KEY }}
+        run: |
+          if [ -z "$INSFORGE_API_KEY" ]; then
+            echo "::error::INSFORGE_API_KEY secret is missing! Please add it in GitHub Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          npx @insforge/cli login --user-api-key "$INSFORGE_API_KEY" -y
+
+      - name: Deploy Frontend Artifacts
+        run: npx @insforge/cli deployments deploy ./dist -y
