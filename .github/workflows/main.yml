@@ -40,4 +40,4 @@ jobs:
           npx @insforge/cli login --user-api-key "$INSFORGE_API_KEY" -y
 
       - name: Deploy Frontend Artifacts
-        run: npx @insforge/cli deployments deploy ./dist -y
+        run: npx @insforge/cli deployments deploy . -y
