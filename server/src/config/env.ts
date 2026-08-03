@@ -44,6 +44,8 @@ export const env = {
    * with DEVICE_SYNC_ENABLED=false to avoid pointless scans and reconnects.
    */
   deviceSyncEnabled: (process.env.DEVICE_SYNC_ENABLED ?? 'true').toLowerCase() !== 'false',
+  /** True when the API was started by the Electron desktop shell (same LAN as the device). */
+  electronDesktop: (process.env.ELECTRON_DESKTOP ?? '').trim() === '1',
   /** Legacy shared secret; prefer per-device connector_token_hash when set. */
   gatewaySecret: (process.env.GATEWAY_SECRET ?? '').trim(),
   /** Expected connector heartbeat interval (seconds). */

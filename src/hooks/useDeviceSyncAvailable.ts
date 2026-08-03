@@ -7,17 +7,22 @@ import apiClient from '../api/client';
  * /health. An unreachable server is treated as available so the page stays
  * discoverable during local dev when the API simply has not been started yet.
  *
- * Returns `{ available, loading }` so consumers can distinguish "still
- * probing" from "definitively disabled" — preventing a flash where
- * Device Settings appears for one second then vanishes.
+ * Returns `{ available, loading, runtime, lanDeviceAccess }` so the Device
+ * Settings page can warn when the Electron shell is still talking to cloud.
  */
-let probe: Promise<boolean> | null = null;
+export interface ApiHealthInfo {
+  deviceSyncEnabled?: boolean;
+  runtime?: 'electron-desktop' | 'server' | string;
+  lanDeviceAccess?: boolean;
+}
 
-function probeDeviceSync(): Promise<boolean> {
+let probe: Promise<ApiHealthInfo> | null = null;
+
+function probeHealth(): Promise<ApiHealthInfo> {
   probe ??= apiClient
-    .get<{ deviceSyncEnabled?: boolean }>('/health')
-    .then(({ data }) => data?.deviceSyncEnabled !== false)
-    .catch(() => true);
+    .get<ApiHealthInfo>('/health')
+    .then(({ data }) => data ?? {})
+    .catch(() => ({ deviceSyncEnabled: true, runtime: 'unknown', lanDeviceAccess: true }));
   return probe;
 }
 
@@ -26,24 +31,31 @@ export interface DeviceSyncProbe {
   available: boolean;
   /** True while the /health probe is still in-flight. */
   loading: boolean;
+  /** electron-desktop means the installer-spawned local API is active. */
+  runtime: string;
+  /** True when this API process can open sockets to private LAN IPs. */
+  lanDeviceAccess: boolean;
 }
 
 export function useDeviceSyncAvailable(): DeviceSyncProbe {
   const [available, setAvailable] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [runtime, setRuntime] = useState('unknown');
+  const [lanDeviceAccess, setLanDeviceAccess] = useState(true);
 
   useEffect(() => {
     let active = true;
-    probeDeviceSync().then((value) => {
-      if (active) {
-        setAvailable(value);
-        setLoading(false);
-      }
+    probeHealth().then((info) => {
+      if (!active) return;
+      setAvailable(info.deviceSyncEnabled !== false);
+      setRuntime(info.runtime ?? 'unknown');
+      setLanDeviceAccess(info.lanDeviceAccess !== false);
+      setLoading(false);
     });
     return () => {
       active = false;
     };
   }, []);
 
-  return { available, loading };
+  return { available, loading, runtime, lanDeviceAccess };
 }

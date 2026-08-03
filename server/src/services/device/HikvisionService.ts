@@ -10,12 +10,23 @@ import type {
   DeviceInfo,
 } from '../../types/index.js';
 
-const REQUEST_TIMEOUT_MS = 12_000;
+const REQUEST_TIMEOUT_MS = 8_000;
 /** Fast TCP check before any AcsEvent variant probing. */
-const REACHABILITY_TIMEOUT_MS = 1_500;
+const REACHABILITY_TIMEOUT_MS = 2_000;
 /** Many terminals cap AcsEvent maxResults at 10–30; keep pages small for compatibility. */
 const PAGE_SIZE = 20;
 const MAX_PAGES = 100;
+
+/**
+ * Hikvision ISAPI often hangs on HTTP keep-alive sockets (browser works, Node times out).
+ * Always use Connection: close and no pooling for device calls.
+ */
+const httpAgent = new http.Agent({ keepAlive: false, maxSockets: 8 });
+const httpsAgent = new https.Agent({
+  keepAlive: false,
+  maxSockets: 8,
+  rejectUnauthorized: false,
+});
 
 /** True when the physical device is offline / unreachable (do not probe more variants). */
 export function isDeviceUnreachableError(err: unknown): boolean {
@@ -45,7 +56,7 @@ function deviceUnreachableError(message: string, cause?: unknown): Error {
   });
 }
 
-/** Quick TCP connect — fails in ~1.5s when the machine is off the network. */
+/** Quick TCP connect — fails fast when the machine is off the network. */
 function probeTcpPort(host: string, port: number, timeoutMs = REACHABILITY_TIMEOUT_MS): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -60,17 +71,10 @@ function probeTcpPort(host: string, port: number, timeoutMs = REACHABILITY_TIMEO
     socket.once('connect', () => done(true));
     socket.once('timeout', () => done(false));
     socket.once('error', () => done(false));
-    socket.connect(port, host);
+    // Force IPv4 for LAN attendance terminals.
+    socket.connect({ port, host, family: 4 });
   });
 }
-
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 4, keepAliveMsecs: 30_000 });
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  maxSockets: 4,
-  keepAliveMsecs: 30_000,
-  rejectUnauthorized: false,
-});
 
 /** Parse WWW-Authenticate header for digest auth parameters. */
 function parseDigestHeader(header: string): Record<string, string> {
@@ -177,9 +181,14 @@ function rawIsapiRequest(
   authHeader?: string,
   body?: string,
   contentType = 'application/xml',
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<RequestResult> {
   const useHttps = config.port === 443 || config.useHttps === true;
   const transport = useHttps ? https : http;
+  const hostHeader =
+    config.port === 80 || config.port === 443
+      ? config.ipAddress
+      : `${config.ipAddress}:${config.port}`;
 
   return new Promise((resolve, reject) => {
     const options: http.RequestOptions = {
@@ -187,11 +196,14 @@ function rawIsapiRequest(
       port: config.port,
       path: apiPath,
       method,
-      timeout: REQUEST_TIMEOUT_MS,
+      // Force IPv4 — Hikvision LAN devices are almost never on IPv6.
+      family: 4,
+      timeout: timeoutMs,
       agent: useHttps ? httpsAgent : httpAgent,
       headers: {
+        Host: hostHeader,
         Accept: 'application/json, application/xml, */*',
-        Connection: 'keep-alive',
+        Connection: 'close',
         ...(body
           ? { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(body) }
           : {}),
@@ -214,7 +226,11 @@ function rawIsapiRequest(
     });
     req.on('timeout', () => {
       req.destroy();
-      reject(deviceUnreachableError('Request timeout — device did not respond'));
+      reject(
+        deviceUnreachableError(
+          `Request timeout — device did not respond (${config.ipAddress}:${config.port}${apiPath})`,
+        ),
+      );
     });
     if (body) req.write(body);
     req.end();
@@ -562,7 +578,7 @@ export class HikvisionService implements IDeviceAdapter {
     eventAttribute?: string;
   };
 
-  constructor(private readonly config: DeviceConnectionConfig) { }
+  constructor(private config: DeviceConnectionConfig) { }
 
   async connect(): Promise<void> {
     const result = await this.testConnection();
@@ -662,12 +678,45 @@ export class HikvisionService implements IDeviceAdapter {
       }
     };
 
-    // Prefer configured port; if auth fails on HTTP 80, also try HTTPS 443
+    // Prefer configured port, then common Hikvision ports (80 / 8000 / 443).
+    const preferred = Number(this.config.port) || 80;
+    const portsToTry = [preferred, 80, 8000, 443].filter(
+      (port, index, all) => all.indexOf(port) === index,
+    );
+
     let result = await tryOnce(this.config);
-    if (
+    let workingPort = preferred;
+    let workingHttps = this.config.useHttps === true;
+
+    if (!result.online && result.authState !== 'authentication_failed') {
+      for (const port of portsToTry) {
+        if (port === preferred && this.config.useHttps !== true) continue;
+        const candidate = {
+          ...this.config,
+          port,
+          useHttps: port === 443 ? true : this.config.useHttps,
+        };
+        console.log(
+          `[Device] Saved port unavailable — trying ${this.config.ipAddress}:${port}`,
+        );
+        const alt = await tryOnce(candidate);
+        if (alt.online) {
+          result = alt;
+          workingPort = port;
+          workingHttps = candidate.useHttps === true;
+          break;
+        }
+        if (alt.authState === 'authentication_failed') {
+          result = alt;
+          workingPort = port;
+          workingHttps = candidate.useHttps === true;
+          break;
+        }
+      }
+    } else if (
       !result.online
       && result.authState === 'authentication_failed'
-      && this.config.port === 80
+      && preferred === 80
       && this.config.useHttps !== true
     ) {
       const httpsTry = await tryOnce({
@@ -675,15 +724,27 @@ export class HikvisionService implements IDeviceAdapter {
         port: 443,
         useHttps: true,
       });
-      if (httpsTry.online) {
-        logDeviceAction({
-          ip: this.config.ipAddress,
-          action: 'testConnection',
-          result: 'ok',
-          message: 'authenticated via https:443',
-        });
-        return httpsTry;
+      if (httpsTry.online || httpsTry.authState === 'authentication_failed') {
+        result = httpsTry;
+        workingPort = 443;
+        workingHttps = true;
       }
+    }
+
+    if (result.online || result.authState === 'authentication_failed') {
+      // Remember the port that answered so later ISAPI calls use it.
+      this.config.port = workingPort;
+      this.config.useHttps = workingHttps;
+    }
+
+    if (result.online && workingPort !== preferred) {
+      result = {
+        ...result,
+        message: `${result.message} (using port ${workingPort})`,
+        resolvedPort: workingPort,
+      };
+    } else if (result.online || result.authState === 'authentication_failed') {
+      result = { ...result, resolvedPort: workingPort };
     }
 
     logDeviceAction({

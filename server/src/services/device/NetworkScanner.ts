@@ -22,7 +22,7 @@ function probePort(host: string, port: number, timeoutMs = 600): Promise<boolean
     socket.once('connect', () => done(true));
     socket.once('timeout', () => done(false));
     socket.once('error', () => done(false));
-    socket.connect(port, host);
+    socket.connect({ port, host, family: 4 });
   });
 }
 
@@ -43,7 +43,12 @@ async function probeHikvisionIsapi(
         port,
         path: '/ISAPI/System/deviceInfo',
         method: 'GET',
+        family: 4,
         timeout: 1500,
+        headers: {
+          Connection: 'close',
+          Accept: 'application/xml, */*',
+        },
         ...(useHttps ? { rejectUnauthorized: false } : {}),
       } as http.RequestOptions,
       (res) => {
@@ -58,7 +63,6 @@ async function probeHikvisionIsapi(
           const hasIsapiBody =
             /<DeviceInfo[\s>]|<model[\s>]|ISAPI|Hikvision/i.test(data);
 
-          // Require Digest challenge or genuine ISAPI/Hikvision body — never invent identity
           if (!hasDigestChallenge && !hasIsapiBody) {
             resolve(null);
             return;
@@ -82,7 +86,11 @@ async function probeHikvisionIsapi(
   });
 }
 
-function getLocalSubnets(): string[] {
+export function getLocalNetworkInfo(): {
+  addresses: Array<{ address: string; subnet: string }>;
+  subnets: string[];
+} {
+  const addresses: Array<{ address: string; subnet: string }> = [];
   const subnets = new Set<string>();
   const interfaces = os.networkInterfaces();
   for (const iface of Object.values(interfaces)) {
@@ -90,22 +98,25 @@ function getLocalSubnets(): string[] {
     for (const addr of iface) {
       if (addr.family === 'IPv4' && !addr.internal) {
         const parts = addr.address.split('.');
-        subnets.add(`${parts[0]}.${parts[1]}.${parts[2]}`);
+        const subnet = `${parts[0]}.${parts[1]}.${parts[2]}`;
+        addresses.push({ address: addr.address, subnet });
+        subnets.add(subnet);
       }
     }
   }
-  return [...subnets];
+  return { addresses, subnets: [...subnets] };
 }
 
 /**
  * Scan the local network for Hikvision ISAPI devices only.
  * Does not return hardcoded / mock devices. Does not invent MAC addresses.
- * If no local subnet is available, discovery is reported as unavailable.
  */
 export async function scanNetwork(): Promise<ScanResult> {
-  const subnets = getLocalSubnets();
+  const netInfo = getLocalNetworkInfo();
+  const subnets = netInfo.subnets;
 
   if (subnets.length === 0) {
+    console.info('[Device] No local IP/subnet detected — computer may be offline');
     logDeviceAction({
       action: 'scanNetwork',
       result: 'error',
@@ -115,9 +126,18 @@ export async function scanNetwork(): Promise<ScanResult> {
       devices: [],
       discoveryAvailable: false,
       message:
-        'Automatic Hikvision discovery is not available. Enter the device IP manually.',
+        'Computer is not connected to a local network. Connect to Wi-Fi or LAN, then use Scan Again.',
     };
   }
+
+  console.log(
+    `[Device] Local IP and subnet detected: ${netInfo.addresses
+      .map((a) => `${a.address} (subnet ${a.subnet}.0/24)`)
+      .join(', ')}`,
+  );
+  console.log(
+    `[Device] Subnet scan started on ${subnets.join(', ')} ports ${HIKVISION_PORTS.join(',')}`,
+  );
 
   const results: DiscoveredDevice[] = [];
   const seen = new Set<string>();
@@ -138,6 +158,7 @@ export async function scanNetwork(): Promise<ScanResult> {
             if (!hik) return;
 
             seen.add(key);
+            console.log(`[Device] Compatible device found: ${ip}:${port} model=${hik.model}`);
             results.push({
               brand: 'hikvision',
               model: hik.model,
@@ -160,11 +181,11 @@ export async function scanNetwork(): Promise<ScanResult> {
   });
 
   if (results.length === 0) {
+    console.info('[Device] Device not found on the local network');
     return {
       devices: [],
       discoveryAvailable: true,
-      message:
-        'No Hikvision ISAPI devices found on the local network. Enter the device IP manually.',
+      message: 'Device not found on the local network',
     };
   }
 

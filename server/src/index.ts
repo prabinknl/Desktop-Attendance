@@ -20,8 +20,8 @@ async function start() {
     await refreshSyncScheduler();
     startSyncSettingsWatcher();
 
-    // Auto-reconnect saved attendance machine on startup (if network-reachable)
-    autoReconnectDevice();
+    // Auto-reconnect saved machine on startup, then keep a single reconnect watcher
+    void autoReconnectDevice();
   } else {
     console.log('[Server] Device sync disabled — the attendance machine is LAN-only');
   }
