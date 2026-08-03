@@ -11,6 +11,8 @@ pg.types.setTypeParser(PG_TYPE_DATE, (value: string) => value);
 
 export const pool = new Pool({
   connectionString: env.databaseUrl,
+  connectionTimeoutMillis: 8_000,
+  idleTimeoutMillis: 30_000,
 });
 
 pool.on('error', (err) => {

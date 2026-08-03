@@ -216,6 +216,29 @@ export async function updateDeviceMeta(
   await query(`UPDATE devices SET ${sets.join(', ')} WHERE id = $${idx}`, values);
 }
 
+/** Update the working LAN address on the existing device row (no duplicate records). */
+export async function updateDeviceAddress(
+  id: string,
+  ipAddress: string,
+  port: number,
+): Promise<void> {
+  clearDeviceAdapterCache();
+
+  if (isMemoryMode()) {
+    memoryStore.updateMeta({ ip_address: ipAddress, port });
+    return;
+  }
+
+  try {
+    await query(
+      'UPDATE devices SET ip_address = $1, port = $2, updated_at = NOW() WHERE id = $3',
+      [ipAddress, port, id],
+    );
+  } catch {
+    memoryStore.updateMeta({ ip_address: ipAddress, port });
+  }
+}
+
 export function getAdapterForDevice(device: DeviceRecord) {
   // Reuse the live adapter so AcsEvent + digest strategies stay warm across syncs.
   return getOrCreateDeviceAdapter(device);

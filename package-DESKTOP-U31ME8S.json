@@ -85,7 +85,9 @@
     "electron": "^37.10.3",
     "electron-builder": "^26.15.3",
     "oxlint": "^1.71.0",
+    "png-to-ico": "^3.0.2",
     "postcss": "^8.5.19",
+    "sharp": "^0.35.3",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.23.1",
     "typescript": "~6.0.2",
@@ -94,12 +96,13 @@
   },
   "description": "Attendance management app (web + Windows desktop via Electron).",
   "keywords": [],
-  "author": "",
+  "author": "APPNEP",
   "license": "ISC",
   "build": {
-    "appId": "com.attendance.desktop",
-    "productName": "Attendance",
-    "copyright": "Copyright © Attendance",
+    "appId": "com.appnep.attendance.desktop",
+    "productName": "Attendance Desktop",
+    "copyright": "Copyright © APPNEP",
+    "compression": "maximum",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -108,6 +111,7 @@
       "dist-electron/**/*",
       "electron/main.cjs",
       "electron/preload.cjs",
+      "build/icon.ico",
       "package.json"
     ],
     "extraResources": [
@@ -119,13 +123,6 @@
           "!.env",
           "!**/.env"
         ]
-      },
-      {
-        "from": "electron-resources/server/node_modules",
-        "to": "server/node_modules",
-        "filter": [
-          "**/*"
-        ]
       }
     ],
     "win": {
@@ -135,22 +132,40 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Attendance-Setup-${version}.${ext}",
-      "executableName": "Attendance"
+      "executableName": "Attendance Desktop",
+      "legalTrademarks": "Attendance Desktop is a trademark of APPNEP",
+      "signtoolOptions": {
+        "publisherName": "APPNEP"
+      }
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Attendance",
-      "uninstallDisplayName": "Attendance",
-      "deleteAppDataOnUninstall": false
+      "shortcutName": "Attendance Desktop",
+      "uninstallDisplayName": "Attendance Desktop",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "artifactName": "Attendance Desktop Setup.${ext}"
     },
-    "asar": true,
-    "afterPack": "electron/scripts/after-pack.cjs"
+    "portable": {
+      "artifactName": "Attendance Desktop.${ext}"
+    },
+    "asar": true
   }
 }

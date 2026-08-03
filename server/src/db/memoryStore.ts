@@ -23,7 +23,10 @@ let memoryDevice: DeviceRecord | null = null;
 let memoryLogs: MemoryLog[] = [];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../data');
+/** Electron sets ATTENDANCE_DATA_DIR to a writable userData folder. */
+const DATA_DIR = path.resolve(
+  process.env.ATTENDANCE_DATA_DIR?.trim() || path.join(__dirname, '../../data'),
+);
 const STORE_FILE = path.join(DATA_DIR, 'memory-store.json');
 
 function loadFromDisk() {

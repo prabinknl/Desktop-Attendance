@@ -1,18 +1,20 @@
 'use strict';
 
 /**
- * Minimal bridge for the Attendance desktop shell.
- * Main process serves the UI on a loopback port and proxies /api to the cloud API,
- * so the renderer should use a same-origin relative /api base URL.
+ * Secure bridge for the Attendance desktop shell.
+ * Device passwords and tokens are never exposed here.
+ * Local Hikvision access runs in the main-process Express API; the renderer
+ * only receives a same-origin relative /api base URL.
  */
-const { contextBridge } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld(
   'attendanceDesktop',
   Object.freeze({
     isElectron: true,
+    /** Same-origin relative path — Electron main proxies to the local API. */
     apiBaseUrl: '/api',
-    getApiBaseUrl: async () => '/api',
+    getApiBaseUrl: () => ipcRenderer.invoke('desktop:get-api-base-url'),
     platform: process.platform,
   }),
 );
