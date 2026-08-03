@@ -53,6 +53,24 @@ function isPrivateLanIp(ip: string): boolean {
   );
 }
 
+/** Cloud API cannot open sockets to office LAN IPs — fail immediately with a clear message. */
+function cloudCannotReachLanMessage(ip: string): string {
+  return (
+    `Cannot reach ${ip} from the cloud API. The desktop app must use its local LAN service. ` +
+    'Reinstall the latest Attendance Desktop build (Local Direct), or run the Windows connector.'
+  );
+}
+
+/** True when this API process is on the same LAN as the attendance machine. */
+function canReachPrivateLanDirectly(): boolean {
+  if (env.electronDesktop) return true;
+  // Local development server on the office network
+  if (env.deviceSyncEnabled && env.nodeEnv !== 'production') return true;
+  // Opt-in for a self-hosted production API that runs on the office LAN
+  if (env.deviceSyncEnabled && (process.env.ALLOW_LAN_DEVICE_SYNC ?? '').trim() === '1') return true;
+  return false;
+}
+
 async function pollConnectorCommand(
   type: 'test' | 'sync',
   timeoutMs = 5000,
@@ -190,6 +208,16 @@ export const deviceController = {
       await updateDeviceStatus(saved.id, 'connecting');
       const record = await getActiveDeviceRecord();
       if (!record) throw new Error('Device not found after save');
+
+      if (isPrivateLanIp(payload.ipAddress) && !canReachPrivateLanDirectly()) {
+        await updateDeviceStatus(record.id, 'offline');
+        res.status(502).json({
+          success: false,
+          message: cloudCannotReachLanMessage(payload.ipAddress),
+        });
+        return;
+      }
+
       const realAdapter = getAdapterForDevice(record);
       const testResult = await realAdapter.testConnection();
       if (!testResult.online) {
@@ -298,6 +326,20 @@ export const deviceController = {
           data: gatewayOfflineResult(
             'Cloud server cannot access a private LAN IP. Switch to Cloud Connector Mode and run the Windows connector.',
           ),
+        });
+        return;
+      }
+
+      if (isPrivateLanIp(payload.ipAddress) && !canReachPrivateLanDirectly()) {
+        res.json({
+          success: true,
+          data: {
+            online: false,
+            authState: 'offline' as const,
+            latencyMs: 0,
+            message: cloudCannotReachLanMessage(payload.ipAddress),
+            fromRealDevice: false,
+          },
         });
         return;
       }

@@ -22,7 +22,7 @@ function probePort(host: string, port: number, timeoutMs = 600): Promise<boolean
     socket.once('connect', () => done(true));
     socket.once('timeout', () => done(false));
     socket.once('error', () => done(false));
-    socket.connect(port, host);
+    socket.connect({ port, host, family: 4 });
   });
 }
 
@@ -43,7 +43,12 @@ async function probeHikvisionIsapi(
         port,
         path: '/ISAPI/System/deviceInfo',
         method: 'GET',
+        family: 4,
         timeout: 1500,
+        headers: {
+          Connection: 'close',
+          Accept: 'application/xml, */*',
+        },
         ...(useHttps ? { rejectUnauthorized: false } : {}),
       } as http.RequestOptions,
       (res) => {

@@ -61,6 +61,7 @@ import { punchCalendarDate } from '../../lib/punchTime';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
 import CalendarDateInput from '../../components/ui/CalendarDateInput';
+import { useDeviceSyncAvailable } from '../../hooks/useDeviceSyncAvailable';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -120,6 +121,11 @@ export default function DeviceSettingsPage() {
   const logDateFrom = dateRange.from;
   const logDateTo = dateRange.to;
   const calendar = dateSettings.calendarSystem;
+  const { runtime, lanDeviceAccess, loading: healthLoading } = useDeviceSyncAvailable();
+  const isElectronShell = typeof window !== 'undefined' && Boolean(window.attendanceDesktop?.isElectron);
+  const localLanApiActive = runtime === 'electron-desktop' || (!isElectronShell && lanDeviceAccess);
+  const wrongApiBackend =
+    isElectronShell && !healthLoading && runtime !== 'electron-desktop' && !lanDeviceAccess;
 
   const { data: device, isLoading: deviceLoading } = useDevice();
   const { data: status } = useDeviceStatus();
@@ -577,6 +583,35 @@ export default function DeviceSettingsPage() {
             real device — not just a reachable IP.
           </Paragraph>
         </div>
+
+        {wrongApiBackend && (
+          <Alert
+            type="error"
+            showIcon
+            className="mb-6"
+            style={{ borderRadius: 12 }}
+            message="Desktop is not using the local LAN API"
+            description={
+              <span>
+                The browser can open <code>http://192.168.0.6</code>, but this app build is still
+                calling the cloud API, which cannot reach your attendance machine. Install the latest{' '}
+                <strong>Attendance Desktop Setup.exe</strong> from this project&apos;s{' '}
+                <code>release/</code> folder, then restart and try Connect again.
+              </span>
+            }
+          />
+        )}
+
+        {!healthLoading && localLanApiActive && !wrongApiBackend && (
+          <Alert
+            type="success"
+            showIcon
+            className="mb-6"
+            style={{ borderRadius: 12 }}
+            message="Local LAN API active"
+            description="This app can talk to Hikvision devices on your office network (ports 80 / 8000 / 443)."
+          />
+        )}
 
         <Card
           className="mb-6"

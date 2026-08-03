@@ -22,11 +22,19 @@ app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', async (_req, res) => {
   const insforgeStatus = await getInsForgeStatus();
+  const lanDeviceAccess =
+    env.electronDesktop ||
+    (env.deviceSyncEnabled && env.nodeEnv !== 'production') ||
+    (env.deviceSyncEnabled && (process.env.ALLOW_LAN_DEVICE_SYNC ?? '').trim() === '1');
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     // The frontend hides device settings when the API cannot reach the LAN
     deviceSyncEnabled: env.deviceSyncEnabled,
+    /** electron-desktop = local Express spawned by the installer (can reach Hikvision). */
+    runtime: env.electronDesktop ? 'electron-desktop' : 'server',
+    /** True when this process can talk to private LAN IPs. */
+    lanDeviceAccess,
     insforge: insforgeStatus,
   });
 });
