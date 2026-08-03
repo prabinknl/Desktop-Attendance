@@ -562,7 +562,7 @@ export class HikvisionService implements IDeviceAdapter {
     eventAttribute?: string;
   };
 
-  constructor(private readonly config: DeviceConnectionConfig) { }
+  constructor(private config: DeviceConnectionConfig) { }
 
   async connect(): Promise<void> {
     const result = await this.testConnection();
@@ -662,12 +662,45 @@ export class HikvisionService implements IDeviceAdapter {
       }
     };
 
-    // Prefer configured port; if auth fails on HTTP 80, also try HTTPS 443
+    // Prefer configured port, then common Hikvision ports (80 / 8000 / 443).
+    const preferred = Number(this.config.port) || 80;
+    const portsToTry = [preferred, 80, 8000, 443].filter(
+      (port, index, all) => all.indexOf(port) === index,
+    );
+
     let result = await tryOnce(this.config);
-    if (
+    let workingPort = preferred;
+    let workingHttps = this.config.useHttps === true;
+
+    if (!result.online && result.authState !== 'authentication_failed') {
+      for (const port of portsToTry) {
+        if (port === preferred && this.config.useHttps !== true) continue;
+        const candidate = {
+          ...this.config,
+          port,
+          useHttps: port === 443 ? true : this.config.useHttps,
+        };
+        console.log(
+          `[Device] Saved port unavailable — trying ${this.config.ipAddress}:${port}`,
+        );
+        const alt = await tryOnce(candidate);
+        if (alt.online) {
+          result = alt;
+          workingPort = port;
+          workingHttps = candidate.useHttps === true;
+          break;
+        }
+        if (alt.authState === 'authentication_failed') {
+          result = alt;
+          workingPort = port;
+          workingHttps = candidate.useHttps === true;
+          break;
+        }
+      }
+    } else if (
       !result.online
       && result.authState === 'authentication_failed'
-      && this.config.port === 80
+      && preferred === 80
       && this.config.useHttps !== true
     ) {
       const httpsTry = await tryOnce({
@@ -675,15 +708,27 @@ export class HikvisionService implements IDeviceAdapter {
         port: 443,
         useHttps: true,
       });
-      if (httpsTry.online) {
-        logDeviceAction({
-          ip: this.config.ipAddress,
-          action: 'testConnection',
-          result: 'ok',
-          message: 'authenticated via https:443',
-        });
-        return httpsTry;
+      if (httpsTry.online || httpsTry.authState === 'authentication_failed') {
+        result = httpsTry;
+        workingPort = 443;
+        workingHttps = true;
       }
+    }
+
+    if (result.online || result.authState === 'authentication_failed') {
+      // Remember the port that answered so later ISAPI calls use it.
+      this.config.port = workingPort;
+      this.config.useHttps = workingHttps;
+    }
+
+    if (result.online && workingPort !== preferred) {
+      result = {
+        ...result,
+        message: `${result.message} (using port ${workingPort})`,
+        resolvedPort: workingPort,
+      };
+    } else if (result.online || result.authState === 'authentication_failed') {
+      result = { ...result, resolvedPort: workingPort };
     }
 
     logDeviceAction({

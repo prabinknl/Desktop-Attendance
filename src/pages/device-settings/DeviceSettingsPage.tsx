@@ -75,21 +75,31 @@ const brandLabels: Record<DeviceBrand, string> = {
 function statusLabel(
   status?: string,
   authState?: string,
-  opts?: { connectorOnline?: boolean; deviceOnline?: boolean; connectionMode?: ConnectionMode },
+  opts?: {
+    connectorOnline?: boolean;
+    deviceOnline?: boolean;
+    connectionMode?: ConnectionMode;
+    hasDevice?: boolean;
+  },
 ): string {
   if (opts?.connectionMode === 'cloud_connector') {
     if (!opts.connectorOnline) return 'Connector Offline';
-    if (opts.deviceOnline) return 'Device Online';
+    if (opts.deviceOnline) return 'Connected';
     if (authState === 'authentication_failed') return 'Authentication failed';
     return 'Device Offline';
   }
   if (authState === 'authentication_failed') return 'Authentication failed';
   if (authState === 'gateway_offline') return 'Connector not running';
-  if (authState === 'reachable') return 'Reachable (not authenticated)';
+  if (authState === 'reachable') return 'IP responds but is not a Hikvision attendance device';
+  if (authState === 'isapi_unsupported') return 'IP responds but is not a Hikvision attendance device';
   if (status === 'syncing') return 'Syncing…';
-  if (status === 'online' || authState === 'authenticated') return 'Device Online';
+  if (status === 'online' || authState === 'authenticated') return 'Connected';
   if (status === 'connecting') return 'Connecting…';
-  return 'Device Offline';
+  if (!opts?.hasDevice) return 'Device Offline';
+  if (authState === 'offline' || authState === 'device_unreachable') {
+    return 'Device not found on the local network';
+  }
+  return 'Device not found on the local network';
 }
 
 export default function DeviceSettingsPage() {
@@ -592,9 +602,18 @@ export default function DeviceSettingsPage() {
                       connectorOnline,
                       deviceOnline: isOnline,
                       connectionMode,
+                      hasDevice: Boolean(device?.id),
                     })}
                   </Title>
                   <Text type="secondary">{device?.name ?? 'No device configured'}</Text>
+                  {device?.ipAddress && (
+                    <div>
+                      <Text type="secondary">
+                        {device.ipAddress}:{device.port}
+                        {device.model ? ` · ${device.model}` : ''}
+                      </Text>
+                    </div>
+                  )}
                 </div>
               </Space>
             </Col>
@@ -1115,7 +1134,18 @@ export default function DeviceSettingsPage() {
           title="Network Scan — Hikvision ISAPI"
           open={scanOpen}
           onCancel={() => setScanOpen(false)}
-          footer={null}
+          footer={
+            scan.isPending
+              ? null
+              : [
+                  <Button key="again" icon={<RadarChartOutlined />} onClick={() => void handleScan()}>
+                    Scan Again
+                  </Button>,
+                  <Button key="close" type="primary" onClick={() => setScanOpen(false)}>
+                    Close
+                  </Button>,
+                ]
+          }
           width={800}
         >
           {scan.isPending ? (
@@ -1137,7 +1167,7 @@ export default function DeviceSettingsPage() {
                 pagination={false}
                 locale={{
                   emptyText:
-                    'Automatic Hikvision discovery found nothing. Enter the device IP manually.',
+                    'Device not found on the local network. Enter the IP, port, username, and password manually, or click Scan Again.',
                 }}
               />
             </>

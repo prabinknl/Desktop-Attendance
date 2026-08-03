@@ -101,6 +101,8 @@ export interface ConnectionTestResult {
   latencyMs: number;
   message: string;
   fromRealDevice?: boolean;
+  /** Port that answered (may differ from the requested port after fallback). */
+  resolvedPort?: number;
   deviceInfo?: {
     model?: string;
     serialNumber?: string;

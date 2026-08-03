@@ -11,6 +11,7 @@ import {
   toStatusResponse,
   regenerateConnectorToken,
   updateConnectionMode,
+  updateDeviceAddress,
   setPendingCommand,
   getCommandResult,
 } from '../models/DeviceModel.js';
@@ -143,11 +144,15 @@ export const deviceController = {
       return;
     }
 
+    // Desktop with DEVICE_SYNC_ENABLED talks to the machine on the LAN directly.
+    // Cloud-hosted API (sync disabled) cannot reach private LAN IPs — use connector.
     const connectionMode: ConnectionMode =
       payload.connectionMode ??
-      (!env.deviceSyncEnabled || isPrivateLanIp(payload.ipAddress)
-        ? 'cloud_connector'
-        : 'local_direct');
+      (env.deviceSyncEnabled
+        ? 'local_direct'
+        : isPrivateLanIp(payload.ipAddress)
+          ? 'cloud_connector'
+          : 'local_direct');
 
     if (connectionMode === 'cloud_connector' && !env.deviceSyncEnabled && isPrivateLanIp(payload.ipAddress)) {
       console.log(
@@ -186,7 +191,13 @@ export const deviceController = {
       const record = await getActiveDeviceRecord();
       if (!record) throw new Error('Device not found after save');
       const realAdapter = getAdapterForDevice(record);
-      await realAdapter.connect();
+      const testResult = await realAdapter.testConnection();
+      if (!testResult.online) {
+        throw new Error(testResult.message);
+      }
+      if (testResult.resolvedPort && testResult.resolvedPort !== record.port) {
+        await updateDeviceAddress(record.id, record.ip_address, testResult.resolvedPort);
+      }
 
       const info = await realAdapter.getDeviceInfo();
       await updateDeviceMeta(record.id, {
@@ -242,7 +253,12 @@ export const deviceController = {
       }
 
       const record = await getActiveDeviceRecord();
-      const mode = record ? resolveConnectionMode(record) : 'local_direct';
+      // Desktop local API (DEVICE_SYNC_ENABLED) always probes the LAN directly.
+      const mode: ConnectionMode = env.deviceSyncEnabled
+        ? 'local_direct'
+        : record
+          ? resolveConnectionMode(record)
+          : 'local_direct';
       const presence = record ? computeDevicePresence(record) : null;
       const connectorAlive = presence?.connectorOnline ?? false;
 
@@ -302,6 +318,11 @@ export const deviceController = {
 
       const result = await testAdapter.testConnection();
       if (result.online && record) {
+        if (result.resolvedPort && result.resolvedPort !== record.port) {
+          await updateDeviceAddress(record.id, payload.ipAddress, result.resolvedPort);
+        } else if (payload.ipAddress !== record.ip_address) {
+          await updateDeviceAddress(record.id, payload.ipAddress, result.resolvedPort ?? Number(payload.port));
+        }
         await updateDeviceStatus(record.id, 'online');
       } else if (
         !result.online &&
@@ -548,74 +569,43 @@ export const deviceController = {
 
   /**
    * POST /api/device/reconnect
-   * Silently re-authenticates the saved device using stored credentials.
-   * Called automatically on user login so the device reconnects when the
-   * machine and API server are on the same network.
-   * Returns { connected: true } or { connected: false, reason } — never 5xx,
-   * so callers can safely fire-and-forget.
+   * Re-authenticates the saved device (saved IP first, then local subnet scan).
+   * Called on login and by the auto-reconnect watcher. Never returns 5xx.
+   * Never includes passwords in the response.
    */
   async reconnect(_req: import('express').Request, res: import('express').Response) {
     try {
-      const record = await getActiveDeviceRecord();
-      if (!record) {
-        res.json({ success: true, connected: false, reason: 'no_device_configured' });
-        return;
-      }
+      const { tryReconnectOnce } = await import('../services/device/AutoReconnectService.js');
+      const outcome = await tryReconnectOnce();
 
-      if (!env.deviceSyncEnabled || resolveConnectionMode(record) === 'cloud_connector') {
-        res.json({ success: true, connected: false, reason: 'connector_mode' });
-        return;
-      }
-
-      const presence = computeDevicePresence(record);
-      if (presence.deviceOnline) {
+      if (outcome.connected) {
         const pub = await getActiveDevice();
+        logDeviceAction({
+          ip: outcome.ipAddress,
+          action: 'reconnect',
+          result: 'ok',
+          message: `model=${outcome.model ?? ''}`,
+        });
         res.json({ success: true, connected: true, data: pub });
         return;
       }
 
-      // Need stored password to re-authenticate
-      const { decryptPassword: _dp } = await import('../services/crypto/passwordCrypto.js');
-      if (!record.password_encrypted) {
-        res.json({ success: true, connected: false, reason: 'no_credentials' });
-        return;
-      }
-      // password is read by the adapter via getAdapterForDevice(record) internally
-
-      await updateDeviceStatus(record.id, 'connecting');
-
-      const adapter = getAdapterForDevice(record);
-      await adapter.connect();
-
-      const info = await adapter.getDeviceInfo();
-      await updateDeviceMeta(record.id, {
-        status: 'online',
-        model: info.model,
-        macAddress: info.macAddress,
-        deviceTime: info.deviceTime,
-      });
-
-      await refreshSyncScheduler();
-
-      const pub = await getActiveDevice();
       logDeviceAction({
-        ip: record.ip_address,
         action: 'reconnect',
-        result: 'ok',
-        message: `model=${info.model}`,
+        result: 'error',
+        message: outcome.message,
       });
-      console.log(`[Device] Auto-reconnected: ${record.name} @ ${record.ip_address} (${info.model})`);
-      res.json({ success: true, connected: true, data: pub });
+      console.info(`[Device] Auto-reconnect skipped: ${outcome.message}`);
+      res.json({
+        success: true,
+        connected: false,
+        reason: outcome.reason,
+        message: outcome.message,
+      });
     } catch (err) {
-      // Reconnect failure is expected when the machine is offline — not an error
       const message = err instanceof Error ? err.message : 'Reconnect failed';
-      const record = await getActiveDeviceRecord().catch(() => null);
-      if (record) {
-        await updateDeviceStatus(record.id, 'offline').catch(() => {});
-      }
       logDeviceAction({ action: 'reconnect', result: 'error', message });
       console.info(`[Device] Auto-reconnect skipped: ${message}`);
-      // Always 200 so the frontend can ignore the result
       res.json({ success: true, connected: false, reason: message });
     }
   },
