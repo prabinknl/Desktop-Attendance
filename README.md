@@ -46,7 +46,7 @@ A premium, modern Attendance Management System (AMS) built with React, Vite, Tai
    PORT=3001
    NODE_ENV=development
    DATABASE_URL=your_postgres_connection_string
-   ADMIN_SIGNUP_EMAIL=bpkhanal.app@gmail.com
+   ADMIN_SIGNUP_EMAIL=appnep@pacenp.com
    SMTP_HOST=smtp.hostinger.com
    SMTP_PORT=465
    SMTP_USER=v-code@appnep.com

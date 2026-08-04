@@ -43,7 +43,8 @@ function tryCleanWinUnpacked(dir) {
   return true;
 }
 
-let outDir = canWrite(preferredOut) ? preferredOut : fallbackOut;
+const isOneDrive = /onedrive/i.test(root);
+let outDir = !isOneDrive && canWrite(preferredOut) ? preferredOut : fallbackOut;
 fs.mkdirSync(outDir, { recursive: true });
 
 if (outDir === preferredOut && !tryCleanWinUnpacked(outDir)) {

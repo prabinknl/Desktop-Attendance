@@ -7,6 +7,7 @@
 'use strict';
 
 const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const http = require('http');
 const https = require('https');
 const net = require('net');
@@ -886,14 +887,107 @@ ipcMain.handle('desktop:get-api-base-url', () => {
 
 ipcMain.handle('desktop:get-local-api-origin', () => getLocalApiOrigin());
 
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'prabinknl',
+    repo: 'Desktop-Attendance',
+  });
+
+  const sendStatus = (status, data = {}) => {
+    appendStartupLog(`[AutoUpdater] ${status} ${JSON.stringify(data)}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('updater:status', { status, ...data });
+    }
+  };
+
+  autoUpdater.on('checking-for-update', () => {
+    sendStatus('checking-for-update');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    sendStatus('update-available', {
+      version: info?.version,
+      releaseDate: info?.releaseDate,
+      releaseNotes: info?.releaseNotes,
+    });
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    sendStatus('update-not-available', {
+      version: info?.version,
+    });
+  });
+
+  autoUpdater.on('error', (err) => {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    appendStartupLog(`[AutoUpdater Error] ${errorMsg}`);
+    sendStatus('error', { error: errorMsg });
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    sendStatus('download-progress', {
+      bytesPerSecond: progressObj.bytesPerSecond,
+      percent: progressObj.percent,
+      transferred: progressObj.transferred,
+      total: progressObj.total,
+    });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    sendStatus('update-downloaded', {
+      version: info?.version,
+      releaseDate: info?.releaseDate,
+    });
+  });
+}
+
+function checkAutoUpdateOnLaunch() {
+  if (isDev) {
+    appendStartupLog('[AutoUpdater] Skipping auto update check in development mode');
+    return;
+  }
+  try {
+    appendStartupLog('[AutoUpdater] Checking for updates automatically on app launch...');
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+      appendStartupLog(`[AutoUpdater check error] ${err?.message || String(err)}`);
+    });
+  } catch (err) {
+    appendStartupLog(`[AutoUpdater launch error] ${err?.message || String(err)}`);
+  }
+}
+
+ipcMain.handle('desktop:get-app-version', () => app.getVersion());
+
+ipcMain.handle('desktop:check-for-updates', async () => {
+  if (isDev) {
+    return { status: 'dev-mode', version: app.getVersion(), isDev: true };
+  }
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { status: 'checking', version: app.getVersion(), updateInfo: result?.updateInfo };
+  } catch (err) {
+    return { status: 'error', error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
+ipcMain.handle('desktop:restart-and-install', () => {
+  autoUpdater.quitAndInstall(false, true);
+});
+
 async function bootstrap() {
   try {
     ensureLogsDir();
+    setupAutoUpdater();
     await ensureApiServer();
     const startUrl = await resolveStartUrl();
     appendStartupLog(`[Electron] UI start URL: ${startUrl}`);
     appendStartupLog(`[Electron] API proxy target: ${getApiProxyOrigin()}`);
     createWindow(startUrl);
+    checkAutoUpdateOnLaunch();
   } catch (err) {
     console.error('[Electron] Startup failed:', err);
     appendStartupLog(`[Electron] Startup failed: ${err instanceof Error ? err.message : String(err)}`);

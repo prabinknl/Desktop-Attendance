@@ -43,16 +43,13 @@ export async function sendAdminCode(req: Request, res: Response) {
       });
     }
 
-    const responseMsg = mail.devFallback
-      ? `SMTP not configured. Dev Mode code generated: ${code}`
-      : `Verification code sent to ${email}`;
+    const responseMsg = `Verification code sent to ${email}`;
 
     return res.json({
       success: true,
       message: responseMsg,
       emailSent: true,
       email,
-      devCode: mail.devFallback ? code : undefined,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to send verification code';

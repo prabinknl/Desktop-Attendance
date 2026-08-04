@@ -145,7 +145,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (selectedRole === 'admin' && mode === 'login') {
-      loginForm.setValue('email', adminUserName);
+      loginForm.setValue('email', adminUserName || ALLOWED_ADMIN_EMAIL);
       loginForm.setValue('password', '');
     } else if (mode === 'login' && selectedRole && selectedRole !== 'admin') {
       loginForm.setValue('email', '');
@@ -327,12 +327,7 @@ export default function LoginPage() {
       }
       setOtpEmailSent(true);
       setOtpSendError(null);
-      if (res.devCode) {
-        setVerificationCode(res.devCode);
-        toast('info', 'Dev Mode: Code Generated', `Code auto-filled: ${res.devCode}. Click Verify & Sign Up.`);
-      } else {
-        toast('success', 'Code sent', `Check ${signupEmail} for the verification code.`);
-      }
+      toast('success', 'Code sent', `Check ${signupEmail} for the verification code.`);
     } catch (err) {
       const message =
         err instanceof Error
@@ -649,13 +644,10 @@ export default function LoginPage() {
                   <input
                     {...loginForm.register('email')}
                     type="text"
-                    readOnly={selectedRole === 'admin'}
-                    tabIndex={selectedRole === 'admin' ? -1 : undefined}
-                    placeholder={selectedRole === 'admin' ? (adminUserName || 'No admin yet — please sign up') : 'User name'}
+                    placeholder="User name or email"
                     autoComplete="username"
                     className={cn(
                       'input',
-                      selectedRole === 'admin' && 'input-email-dim',
                       loginForm.formState.errors.email && 'border-rose-400 focus:border-rose-400 focus:ring-rose-500/20',
                     )}
                   />

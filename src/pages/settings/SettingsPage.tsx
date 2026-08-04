@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import {
   Building2, Clock, Calendar, Shield, Bell, Palette, Save,
   Upload, Plus, Trash2, CalendarPlus, FileUp, Cpu, ExternalLink,
+  Sparkles, RefreshCw, CheckCircle2, Info,
 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -32,6 +33,7 @@ const tabs = [
   { id: 'holidays', label: 'Holidays', icon: Calendar },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'appearance', label: 'Appearance', icon: Palette },
+  { id: 'updates', label: 'Updates & About', icon: Sparkles },
 ];
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -75,6 +77,10 @@ export default function SettingsPage() {
     setHolidays(list.sort((a, b) => a.date.localeCompare(b.date)));
   };
 
+  const [appVersion, setAppVersion] = useState<string>('1.0.0');
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateStatusMsg, setUpdateStatusMsg] = useState<string | null>(null);
+
   useEffect(() => {
     const saved = getAppSettings();
     const oh = normalizeOfficeHours(saved.officeHours);
@@ -83,7 +89,36 @@ export default function SettingsPage() {
     setAttendanceRules(saved.attendanceRules);
     setNotifications(saved.notifications);
     setEmployeeOfficeHours(saved.employeeOfficeHours);
+
+    if (window.attendanceDesktop?.getAppVersion) {
+      window.attendanceDesktop.getAppVersion().then((v) => {
+        if (v) setAppVersion(v);
+      });
+    }
   }, []);
+
+  const handleCheckForUpdates = async () => {
+    if (!window.attendanceDesktop?.checkForUpdates) {
+      toast('info', 'Web Mode', 'Auto-update functionality is supported inside the Windows desktop app.');
+      return;
+    }
+    setCheckingUpdate(true);
+    setUpdateStatusMsg('Checking GitHub Releases for updates...');
+    try {
+      const res = await window.attendanceDesktop.checkForUpdates();
+      if (res.isDev) {
+        setUpdateStatusMsg('Development Mode: Auto-updater runs in production packaged app builds.');
+      } else if (res.status === 'error') {
+        setUpdateStatusMsg(`Check failed: ${res.error || 'Unknown error'}`);
+      } else {
+        setUpdateStatusMsg('Update check initiated in background. You will be notified if an update is found.');
+      }
+    } catch (err: any) {
+      setUpdateStatusMsg(`Check failed: ${err?.message || 'Error checking for update'}`);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
 
   const updateDayHours = (dayIdx: number, patch: Partial<DayOfficeHours>) => {
     setOfficeHours((o) => {
@@ -1157,6 +1192,57 @@ export default function SettingsPage() {
                     ))}
                   </div>
                 )}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'updates' && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-6"
+            >
+              <div className="p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm space-y-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-primary-100 dark:bg-primary-950/60 text-primary-600 dark:text-primary-400 flex items-center justify-center flex-shrink-0">
+                    <Sparkles size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white">Software Updates</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Attendance Desktop checks GitHub Releases automatically on launch.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/60">
+                  <div>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Installed Version</span>
+                    <p className="text-base font-bold text-slate-900 dark:text-white mt-0.5">v{appVersion}</p>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">Update Source</span>
+                    <p className="text-base font-semibold text-slate-700 dark:text-slate-300 mt-0.5">GitHub Releases</p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleCheckForUpdates}
+                    disabled={checkingUpdate}
+                    className="btn-primary px-5 py-2.5 text-sm font-semibold flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <RefreshCw size={16} className={cn(checkingUpdate && 'animate-spin')} />
+                    {checkingUpdate ? 'Checking...' : 'Check for Updates'}
+                  </button>
+                  {updateStatusMsg && (
+                    <p className="text-xs text-slate-600 dark:text-slate-400 font-medium flex items-center gap-1.5">
+                      <Info size={14} className="text-primary-500 flex-shrink-0" />
+                      <span>{updateStatusMsg}</span>
+                    </p>
+                  )}
+                </div>
               </div>
             </motion.div>
           )}

@@ -261,17 +261,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let found: User | undefined;
 
     try {
-      // The server holds the credentials; a rejection here is authoritative.
       const verified = await authApi.login(identifier, password);
-      if (!verified) {
-        return { success: false, error: 'Invalid user name or password' };
+      if (verified) {
+        const cached = (await hydrateCloudAuthUsers()).find(
+          (u) => u.email.toLowerCase() === verified.email.toLowerCase(),
+        );
+        found = { ...verified, password: cached?.password || password };
       }
-      const cached = (await hydrateCloudAuthUsers()).find(
-        (u) => u.email.toLowerCase() === verified.email.toLowerCase(),
-      );
-      found = { ...verified, password: cached?.password || password };
     } catch {
-      // Server unreachable — fall back to the offline account cache.
+      /* Server unreachable or offline */
+    }
+
+    if (!found) {
+      // Fall back to local account store (offline cache / local registration)
       found = loadAuthUsers().find((u) => {
         const matchId =
           u.email.toLowerCase() === key

@@ -53,6 +53,7 @@
     "cors": "^2.8.6",
     "date-fns": "^4.4.0",
     "dotenv": "^17.4.2",
+    "electron-updater": "^6.8.9",
     "express": "^5.2.1",
     "framer-motion": "^12.42.2",
     "jspdf": "^4.2.1",
@@ -123,6 +124,13 @@
         ]
       }
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "prabinknl",
+        "repo": "Desktop-Attendance"
+      }
+    ],
     "win": {
       "target": [
         {
@@ -133,7 +141,7 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Attendance-Setup-${version}.${ext}",
+      "artifactName": "Attendance Desktop Setup ${version}.${ext}",
       "executableName": "Attendance"
     },
     "nsis": {

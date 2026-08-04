@@ -60,13 +60,10 @@ export async function sendAdminVerificationEmail(input: {
   code: string;
 }): Promise<{ sent: boolean; devFallback?: boolean; error?: string }> {
   if (!smtpConfigured()) {
-    console.log('\n==========================================================');
-    console.log(`[Auth DEV MODE] SMTP not configured in server/.env`);
-    console.log(`[Auth DEV MODE] Verification Code for ${input.to}: ${input.code}`);
-    console.log('==========================================================\n');
+    console.warn('[Auth] SMTP credentials (SMTP_USER/SMTP_PASS) are not configured in server/.env');
     return {
-      sent: true,
-      devFallback: true,
+      sent: false,
+      error: 'SMTP credentials (SMTP_USER and SMTP_PASS) are not configured in server/.env. Please set your SMTP credentials to send verification emails.',
     };
   }
 

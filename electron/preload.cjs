@@ -16,5 +16,17 @@ contextBridge.exposeInMainWorld(
     apiBaseUrl: '/api',
     getApiBaseUrl: () => ipcRenderer.invoke('desktop:get-api-base-url'),
     platform: process.platform,
+    getAppVersion: () => ipcRenderer.invoke('desktop:get-app-version'),
+    checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
+    restartAndInstall: () => ipcRenderer.invoke('desktop:restart-and-install'),
+    onUpdateStatus: (callback) => {
+      if (typeof callback !== 'function') return () => {};
+      const handler = (_event, value) => callback(value);
+      ipcRenderer.on('updater:status', handler);
+      return () => {
+        ipcRenderer.removeListener('updater:status', handler);
+      };
+    },
   }),
 );
+

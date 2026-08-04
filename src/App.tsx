@@ -35,6 +35,7 @@ import DeviceSettingsPage from './pages/device-settings/DeviceSettingsPage';
 import EmployeeAttendanceReportPage from './pages/dashboard/EmployeeAttendanceReportPage';
 import { useDeviceSyncAvailable } from './hooks/useDeviceSyncAvailable';
 import { useAuth } from './contexts/AuthContext';
+import AutoUpdateNotifier from './components/common/AutoUpdateNotifier';
 
 /** Admin users always see Device Settings. Non-admin staff are redirected to
  *  the dashboard only after the /health probe has definitively responded with
@@ -69,6 +70,7 @@ export default function App() {
           <NotificationProvider>
             <InvitationProvider>
               <AppRouter>
+                <AutoUpdateNotifier />
                 <Routes>
                   {/* Public routes */}
                   <Route path="/login" element={<LoginPage />} />
