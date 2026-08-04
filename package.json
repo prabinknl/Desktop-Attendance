@@ -115,16 +115,11 @@
         "from": "electron-resources/server",
         "to": "server",
         "filter": [
-          "**/*",
+          "dist/**/*",
+          "package.json",
+          ".env.example",
           "!.env",
           "!**/.env"
-        ]
-      },
-      {
-        "from": "electron-resources/server/node_modules",
-        "to": "server/node_modules",
-        "filter": [
-          "**/*"
         ]
       }
     ],

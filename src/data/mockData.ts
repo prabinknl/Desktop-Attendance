@@ -2,9 +2,9 @@ import type { Department, Shift, Employee, Attendance, LeaveRequest, Notificatio
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 /** Admin / employee accounts are created via Sign up on the login page.
- *  Seed HR/manager remain for staff demos. Admin email allowed for signup: bpkhanal.app@gmail.com */
+ *  Seed HR/manager remain for staff demos. Admin email allowed for signup: appnep@pacenp.com */
 export const mockUsers: User[] = [
-  { id: 'u1', name: 'Desk-Atten Admin', email: 'bpkhanal.app@gmail.com', role: 'admin', password: 'admin123', phone: '+977-9800000000', timezone: 'Asia/Kathmandu', avatar: 'https://api.dicebear.com/9.x/avataaars/svg?seed=DeskAttenAdmin&top=shortFlat&facialHairProbability=100&facialHair=beardMedium' },
+  { id: 'u1', name: 'Desk-Atten Admin', email: 'appnep@pacenp.com', role: 'admin', password: 'admin123', phone: '+977-9800000000', timezone: 'Asia/Kathmandu', avatar: 'https://api.dicebear.com/9.x/avataaars/svg?seed=DeskAttenAdmin&top=shortFlat&facialHairProbability=100&facialHair=beardMedium' },
   { id: 'u2', name: 'Sara HR', email: 'hr@company.com', role: 'hr', password: 'hr123', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=sara' },
   { id: 'u3', name: 'Rajan Manager', email: 'manager@company.com', role: 'dept_manager', password: 'mgr123', departmentId: 'd1', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=rajan' },
   { id: 'u4', name: 'Priya Employee', email: 'employee@company.com', role: 'employee', password: 'emp123', departmentId: 'd1', avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=priya' },

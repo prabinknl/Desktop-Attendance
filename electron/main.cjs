@@ -9,14 +9,17 @@
 const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const http = require('http');
 const https = require('https');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ELECTRON_DEV_URL || 'http://127.0.0.1:3002';
 const DEFAULT_API_PORT = 3001;
+const HEALTH_TIMEOUT_MS = 60_000;
+const HEALTH_INTERVAL_MS = 400;
 
 /** Optional override — when unset, desktop always uses the local Express API. */
 const API_TARGET_OVERRIDE = (process.env.ELECTRON_API_TARGET || '').replace(/\/$/, '');
@@ -29,9 +32,75 @@ let apiProcess = null;
 let apiPort = DEFAULT_API_PORT;
 let apiStartedByUs = false;
 let isQuitting = false;
+/** @type {number | null} */
+let apiExitCode = null;
+/** @type {string | null} */
+let apiExitSignal = null;
+/** @type {fs.WriteStream | null} */
+let apiLogStream = null;
 
 function getDistPath() {
   return path.join(__dirname, '..', 'dist-electron');
+}
+
+function getLogsDir() {
+  return path.join(app.getPath('userData'), 'logs');
+}
+
+function ensureLogsDir() {
+  const dir = getLogsDir();
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    /* ignore */
+  }
+  return dir;
+}
+
+function getApiLogPath() {
+  return path.join(ensureLogsDir(), 'api-startup.log');
+}
+
+function appendStartupLog(message) {
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  try {
+    fs.appendFileSync(getApiLogPath(), line, 'utf8');
+  } catch {
+    /* ignore */
+  }
+  console.log(message);
+}
+
+function openApiLogStream() {
+  try {
+    apiLogStream = fs.createWriteStream(getApiLogPath(), { flags: 'a' });
+    apiLogStream.write(`\n===== API session ${new Date().toISOString()} =====\n`);
+  } catch (err) {
+    apiLogStream = null;
+    console.warn('[Electron] Could not open API log stream:', err.message);
+  }
+}
+
+function writeApiLog(chunk, streamLabel) {
+  const text = String(chunk);
+  if (apiLogStream) {
+    try {
+      apiLogStream.write(`[${streamLabel}] ${text}`);
+      if (!text.endsWith('\n')) apiLogStream.write('\n');
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function closeApiLogStream() {
+  if (!apiLogStream) return;
+  try {
+    apiLogStream.end();
+  } catch {
+    /* ignore */
+  }
+  apiLogStream = null;
 }
 
 function getLocalApiOrigin() {
@@ -202,7 +271,6 @@ function getDesktopDataDir() {
 
 function resolveEnvFilePaths() {
   const candidates = [];
-  // Prefer writable per-user config (created on first launch).
   candidates.push(getUserServerEnvPath());
   if (!isDev) {
     candidates.push(path.join(process.resourcesPath, 'server', '.env'));
@@ -240,7 +308,6 @@ function generateEncryptionKey() {
 /**
  * First launch of the installed app: create %APPDATA%/<name>/server.env so the
  * local API can encrypt device passwords and reach the LAN Hikvision machine.
- * Older builds proxied to a cloud API that cannot see 192.168.x.x.
  */
 function ensureDesktopServerEnv() {
   const userEnvPath = getUserServerEnvPath();
@@ -251,14 +318,13 @@ function ensureDesktopServerEnv() {
     exampleCandidates.push(path.join(process.resourcesPath, 'server', '.env.example'));
   }
   exampleCandidates.push(path.join(__dirname, '..', 'server', '.env.example'));
-  // Unpacked/dev: reuse the developer server/.env so desktop shares DB + key.
   const devEnvPath = path.join(__dirname, '..', 'server', '.env');
 
   let seedText = '';
   if (fs.existsSync(devEnvPath)) {
     try {
       seedText = fs.readFileSync(devEnvPath, 'utf8');
-      console.log(`[Electron] Seeding desktop server.env from ${devEnvPath}`);
+      appendStartupLog(`[Electron] Seeding desktop server.env from ${devEnvPath}`);
     } catch {
       seedText = '';
     }
@@ -268,7 +334,7 @@ function ensureDesktopServerEnv() {
       if (!fs.existsSync(examplePath)) continue;
       try {
         seedText = fs.readFileSync(examplePath, 'utf8');
-        console.log(`[Electron] Seeding desktop server.env from ${examplePath}`);
+        appendStartupLog(`[Electron] Seeding desktop server.env from ${examplePath}`);
         break;
       } catch {
         /* try next */
@@ -303,7 +369,7 @@ function ensureDesktopServerEnv() {
   try {
     fs.mkdirSync(path.dirname(userEnvPath), { recursive: true });
     fs.writeFileSync(userEnvPath, `${lines.join('\n')}\n`, 'utf8');
-    console.log(`[Electron] Created ${userEnvPath}`);
+    appendStartupLog(`[Electron] Created ${userEnvPath}`);
   } catch (err) {
     console.warn('[Electron] Could not create server.env:', err.message);
   }
@@ -325,8 +391,10 @@ function loadDesktopEnv() {
     ELECTRON_DESKTOP: '1',
     DEVICE_SYNC_ENABLED: process.env.DEVICE_SYNC_ENABLED ?? 'true',
     PORT: String(apiPort),
+    HOST: '127.0.0.1',
     CORS_ORIGINS: process.env.CORS_ORIGINS ?? '*',
     ATTENDANCE_DATA_DIR: dataDir,
+    NODE_ENV: 'production',
   };
 
   for (const filePath of resolveEnvFilePaths()) {
@@ -334,10 +402,17 @@ function loadDesktopEnv() {
     try {
       const parsed = parseEnvFile(fs.readFileSync(filePath, 'utf8'));
       for (const [key, value] of Object.entries(parsed)) {
-        if (key === 'PORT' || key === 'ELECTRON_DESKTOP' || key === 'ATTENDANCE_DATA_DIR') continue;
+        if (
+          key === 'PORT' ||
+          key === 'HOST' ||
+          key === 'ELECTRON_DESKTOP' ||
+          key === 'ATTENDANCE_DATA_DIR'
+        ) {
+          continue;
+        }
         env[key] = value;
       }
-      console.log(`[Electron] Loaded server env from ${filePath}`);
+      appendStartupLog(`[Electron] Loaded server env from ${filePath}`);
       break;
     } catch (err) {
       console.warn(`[Electron] Failed reading ${filePath}:`, err.message);
@@ -345,13 +420,14 @@ function loadDesktopEnv() {
   }
 
   env.PORT = String(apiPort);
+  env.HOST = '127.0.0.1';
   env.ELECTRON_DESKTOP = '1';
   env.ATTENDANCE_DATA_DIR = dataDir;
   if (!env.DEVICE_SYNC_ENABLED) env.DEVICE_SYNC_ENABLED = 'true';
   if (!env.CORS_ORIGINS) env.CORS_ORIGINS = '*';
   if (!env.ENCRYPTION_KEY || String(env.ENCRYPTION_KEY).length !== 64) {
     env.ENCRYPTION_KEY = generateEncryptionKey();
-    console.warn('[Electron] Generated ephemeral ENCRYPTION_KEY (server.env was incomplete)');
+    appendStartupLog('[Electron] Generated ephemeral ENCRYPTION_KEY (server.env was incomplete)');
   }
   return env;
 }
@@ -360,7 +436,7 @@ function resolveServerEntry() {
   if (isDev) {
     const compiled = path.join(__dirname, '..', 'server', 'dist', 'index.js');
     if (fs.existsSync(compiled)) {
-      return { entry: compiled, useTsx: false, cwd: path.join(__dirname, '..') };
+      return { entry: compiled, useTsx: false, cwd: path.join(__dirname, '..', 'server') };
     }
     return {
       entry: path.join(__dirname, '..', 'server', 'src', 'index.ts'),
@@ -405,29 +481,171 @@ function probeHealth(port) {
   });
 }
 
-function waitForHealth(port, timeoutMs = 45000) {
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+    tester.once('error', () => resolve(false));
+    tester.once('listening', () => {
+      tester.close(() => resolve(true));
+    });
+    tester.listen(port, '127.0.0.1');
+  });
+}
+
+function findFreePort(startPort, maxAttempts = 20) {
+  return (async () => {
+    for (let i = 0; i < maxAttempts; i++) {
+      const candidate = startPort + i;
+      if (await isPortFree(candidate)) return candidate;
+    }
+    throw new Error(`No free local port found near ${startPort}`);
+  })();
+}
+
+function execFileAsync(file, args) {
+  return new Promise((resolve) => {
+    execFile(file, args, { windowsHide: true, timeout: 8000 }, (err, stdout, stderr) => {
+      resolve({
+        ok: !err,
+        stdout: String(stdout || ''),
+        stderr: String(stderr || ''),
+      });
+    });
+  });
+}
+
+/**
+ * If port is held by a previous Attendance.exe (ELECTRON_RUN_AS_NODE) child,
+ * terminate only that PID so we can reclaim DEFAULT_API_PORT.
+ */
+async function tryKillStaleAttendanceApiOnPort(port) {
+  if (process.platform !== 'win32') return false;
+
+  const netstat = await execFileAsync('cmd.exe', [
+    '/c',
+    `netstat -ano | findstr :${port} | findstr LISTENING`,
+  ]);
+  if (!netstat.ok || !netstat.stdout.trim()) return false;
+
+  const pids = new Set();
+  for (const line of netstat.stdout.split(/\r?\n/)) {
+    const parts = line.trim().split(/\s+/);
+    const pid = Number(parts[parts.length - 1]);
+    if (Number.isFinite(pid) && pid > 0) pids.add(pid);
+  }
+
+  let killed = false;
+  for (const pid of pids) {
+    if (pid === process.pid) continue;
+    const wmic = await execFileAsync('cmd.exe', [
+      '/c',
+      `wmic process where ProcessId=${pid} get ExecutablePath /value`,
+    ]);
+    const exePath = (wmic.stdout.match(/ExecutablePath=(.+)/i) || [])[1]?.trim() || '';
+    const isAttendance =
+      /Attendance\.exe$/i.test(exePath) ||
+      exePath.toLowerCase() === String(process.execPath).toLowerCase();
+    if (!isAttendance) {
+      appendStartupLog(
+        `[Electron] Port ${port} held by non-Attendance PID ${pid} (${exePath || 'unknown'}); leaving it alone`,
+      );
+      continue;
+    }
+    appendStartupLog(`[Electron] Killing stale Attendance API PID ${pid} on port ${port}`);
+    await execFileAsync('taskkill', ['/PID', String(pid), '/F', '/T']);
+    killed = true;
+  }
+
+  if (killed) {
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return killed;
+}
+
+function waitForHealth(port, options = {}) {
+  const timeoutMs = options.timeoutMs ?? HEALTH_TIMEOUT_MS;
+  const intervalMs = options.intervalMs ?? HEALTH_INTERVAL_MS;
+  const isProcessAlive = options.isProcessAlive;
+  const getLogTail = options.getLogTail;
   const started = Date.now();
+
   return new Promise((resolve, reject) => {
     const attempt = () => {
+      if (typeof isProcessAlive === 'function' && !isProcessAlive()) {
+        const tail = typeof getLogTail === 'function' ? getLogTail() : '';
+        reject(
+          new Error(
+            `API process exited before becoming healthy on port ${port}` +
+              (apiExitCode != null ? ` (exit code ${apiExitCode}` : '') +
+              (apiExitSignal ? `, signal ${apiExitSignal}` : '') +
+              (apiExitCode != null || apiExitSignal ? ')' : '') +
+              (tail ? `\n\nLast API output:\n${tail}` : ''),
+          ),
+        );
+        return;
+      }
+
       probeHealth(port).then((result) => {
         if (result.ok) {
           resolve(true);
           return;
         }
         if (Date.now() - started > timeoutMs) {
-          reject(new Error(`API health check timed out on port ${port}`));
+          const tail = typeof getLogTail === 'function' ? getLogTail() : '';
+          reject(
+            new Error(
+              `API health check timed out on port ${port} after ${timeoutMs}ms` +
+                (tail
+                  ? `\n\nLast API output:\n${tail}`
+                  : `\n\nNo API output was captured.\nLog file: ${getApiLogPath()}`),
+            ),
+          );
           return;
         }
-        setTimeout(attempt, 400);
+        setTimeout(attempt, intervalMs);
       });
     };
     attempt();
   });
 }
 
+async function chooseApiPort() {
+  apiPort = DEFAULT_API_PORT;
+
+  const existing = await probeHealth(apiPort);
+  if (existing.ok && existing.deviceSyncEnabled) {
+    appendStartupLog(`[Electron] Reusing existing LAN-capable API on port ${apiPort}`);
+    apiStartedByUs = false;
+    return { reuse: true };
+  }
+
+  if (existing.ok && !existing.deviceSyncEnabled) {
+    apiPort = await findFreePort(DEFAULT_API_PORT + 2);
+    appendStartupLog(
+      `[Electron] Port ${DEFAULT_API_PORT} has device sync disabled; starting local API on ${apiPort}`,
+    );
+    return { reuse: false };
+  }
+
+  const free = await isPortFree(apiPort);
+  if (!free) {
+    const killed = await tryKillStaleAttendanceApiOnPort(apiPort);
+    if (killed && (await isPortFree(apiPort))) {
+      appendStartupLog(`[Electron] Reclaimed port ${apiPort} after killing stale Attendance API`);
+      return { reuse: false };
+    }
+    apiPort = await findFreePort(DEFAULT_API_PORT + 1);
+    appendStartupLog(
+      `[Electron] Port ${DEFAULT_API_PORT} busy; starting local API on ${apiPort}`,
+    );
+  }
+
+  return { reuse: false };
+}
+
 async function ensureApiServer() {
   if (API_TARGET_OVERRIDE) {
-    console.log(`[Electron] Using ELECTRON_API_TARGET override: ${API_TARGET_OVERRIDE}`);
+    appendStartupLog(`[Electron] Using ELECTRON_API_TARGET override: ${API_TARGET_OVERRIDE}`);
     return;
   }
 
@@ -435,27 +653,43 @@ async function ensureApiServer() {
     return;
   }
 
-  const existing = await probeHealth(apiPort);
-  if (existing.ok && existing.deviceSyncEnabled) {
-    console.log(`[Electron] Reusing existing LAN-capable API on port ${apiPort}`);
-    apiStartedByUs = false;
+  ensureLogsDir();
+  openApiLogStream();
+
+  const choice = await chooseApiPort();
+  if (choice.reuse) {
+    closeApiLogStream();
     return;
-  }
-  if (existing.ok && !existing.deviceSyncEnabled) {
-    // Port taken by a cloud-style API that cannot reach Hikvision on LAN.
-    apiPort = DEFAULT_API_PORT + 2;
-    console.warn(
-      `[Electron] Port ${DEFAULT_API_PORT} has device sync disabled; starting local API on ${apiPort}`,
-    );
   }
 
   const { entry, useTsx, cwd } = resolveServerEntry();
+  appendStartupLog(`[Electron] Resolved API entry: ${entry}`);
+  appendStartupLog(`[Electron] API cwd: ${cwd}`);
+  appendStartupLog(`[Electron] API port: ${apiPort}`);
+  appendStartupLog(`[Electron] Packaged: ${app.isPackaged}`);
+  if (!isDev) {
+    appendStartupLog(`[Electron] resourcesPath: ${process.resourcesPath}`);
+  }
+
   if (!fs.existsSync(entry)) {
     throw new Error(
       `Attendance API entry not found:\n${entry}\n\n` +
-        'Run "npm run build:server" before packaging, and ensure server/.env ' +
-        `(or ${getUserServerEnvPath()}) exists.`,
+        'The installer is missing the compiled backend. Rebuild with "npm run electron:build".\n' +
+        `Log: ${getApiLogPath()}`,
     );
+  }
+
+  if (!isDev) {
+    const expressPkg = path.join(cwd, 'node_modules', 'express', 'package.json');
+    if (!fs.existsSync(expressPkg)) {
+      throw new Error(
+        'Attendance API dependencies are missing from this install.\n\n' +
+          `Expected: ${expressPkg}\n\n` +
+          'electron-builder skipped gitignored node_modules. Rebuild with afterPack ' +
+          '(npm run electron:build) and reinstall.\n' +
+          `Log: ${getApiLogPath()}`,
+      );
+    }
   }
 
   const env = loadDesktopEnv();
@@ -474,7 +708,8 @@ async function ensureApiServer() {
     env.ELECTRON_RUN_AS_NODE = '1';
   }
 
-  console.log(`[Electron] Starting local API for LAN device access: ${args.join(' ')}`);
+  appendStartupLog(`[Electron] Starting API: ${command} ${args.join(' ')}`);
+
   /** @type {string[]} */
   const apiLogTail = [];
   const pushApiLog = (chunk) => {
@@ -482,9 +717,13 @@ async function ensureApiServer() {
     if (!text) return;
     for (const line of text.split(/\r?\n/)) {
       apiLogTail.push(line);
-      if (apiLogTail.length > 40) apiLogTail.shift();
+      if (apiLogTail.length > 80) apiLogTail.shift();
     }
   };
+  const getLogTail = () => apiLogTail.slice(-20).join('\n');
+
+  apiExitCode = null;
+  apiExitSignal = null;
 
   apiProcess = spawn(command, args, {
     cwd,
@@ -496,39 +735,53 @@ async function ensureApiServer() {
 
   apiProcess.stdout?.on('data', (chunk) => {
     pushApiLog(chunk);
+    writeApiLog(chunk, 'stdout');
     console.log(`[API] ${String(chunk).trimEnd()}`);
   });
   apiProcess.stderr?.on('data', (chunk) => {
     pushApiLog(chunk);
+    writeApiLog(chunk, 'stderr');
     console.error(`[API] ${String(chunk).trimEnd()}`);
   });
+  apiProcess.on('error', (err) => {
+    appendStartupLog(`[Electron] Failed to spawn API: ${err.message}`);
+    pushApiLog(`spawn error: ${err.message}`);
+  });
   apiProcess.on('exit', (code, signal) => {
-    console.log(`[Electron] API exited code=${code} signal=${signal}`);
+    apiExitCode = code;
+    apiExitSignal = signal;
+    appendStartupLog(`[Electron] API exited code=${code} signal=${signal}`);
     apiProcess = null;
     if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) {
       dialog.showErrorBox(
         'Attendance API stopped',
-        'The local attendance service exited unexpectedly. Device sync and API calls will fail until you restart the app.',
+        'The local attendance service exited unexpectedly. Device sync and API calls will fail until you restart the app.\n\n' +
+          `Log: ${getApiLogPath()}`,
       );
     }
   });
 
   try {
-    await waitForHealth(apiPort);
+    await waitForHealth(apiPort, {
+      timeoutMs: HEALTH_TIMEOUT_MS,
+      intervalMs: HEALTH_INTERVAL_MS,
+      isProcessAlive: () => Boolean(apiProcess && apiProcess.exitCode == null),
+      getLogTail,
+    });
   } catch (err) {
-    const detail = apiLogTail.length
-      ? `\n\nLast API output:\n${apiLogTail.slice(-12).join('\n')}`
-      : '\n\nNo API output was captured. Check that resources/server/node_modules was installed.';
-    throw new Error(
-      `${err instanceof Error ? err.message : String(err)}${detail}`,
-    );
+    const detail = err instanceof Error ? err.message : String(err);
+    appendStartupLog(`[Electron] API startup failed: ${detail}`);
+    stopApiServer();
+    throw new Error(`${detail}\n\nResolved entry: ${entry}\nPort: ${apiPort}\nLog: ${getApiLogPath()}`);
   }
-  console.log(`[Electron] Local API ready at ${getLocalApiOrigin()}/api`);
+
+  appendStartupLog(`[Electron] Local API ready at ${getLocalApiOrigin()}/api`);
 }
 
 function stopApiServer() {
   if (!apiStartedByUs || !apiProcess) {
     apiProcess = null;
+    closeApiLogStream();
     return;
   }
   const child = apiProcess;
@@ -550,6 +803,7 @@ function stopApiServer() {
       /* ignore */
     }
   }
+  closeApiLogStream();
 }
 
 async function resolveStartUrl() {
@@ -634,13 +888,15 @@ ipcMain.handle('desktop:get-local-api-origin', () => getLocalApiOrigin());
 
 async function bootstrap() {
   try {
+    ensureLogsDir();
     await ensureApiServer();
     const startUrl = await resolveStartUrl();
-    console.log(`[Electron] UI start URL: ${startUrl}`);
-    console.log(`[Electron] API proxy target: ${getApiProxyOrigin()}`);
+    appendStartupLog(`[Electron] UI start URL: ${startUrl}`);
+    appendStartupLog(`[Electron] API proxy target: ${getApiProxyOrigin()}`);
     createWindow(startUrl);
   } catch (err) {
     console.error('[Electron] Startup failed:', err);
+    appendStartupLog(`[Electron] Startup failed: ${err instanceof Error ? err.message : String(err)}`);
     if (!err.message?.includes('Missing production build')) {
       dialog.showErrorBox(
         'Attendance — startup failure',
@@ -687,6 +943,7 @@ app.on('before-quit', () => {
 });
 
 app.on('will-quit', () => {
+  isQuitting = true;
   stopApiServer();
 });
 

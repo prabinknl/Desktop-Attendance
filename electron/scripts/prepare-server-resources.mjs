@@ -95,4 +95,11 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
+const expressPkg = path.join(outDir, 'node_modules', 'express', 'package.json');
+if (!fs.existsSync(expressPkg)) {
+  console.error(`[prepare-server-resources] express missing after npm install: ${expressPkg}`);
+  process.exit(1);
+}
+
 console.log(`[prepare-server-resources] Ready at ${outDir}`);
+console.log('[prepare-server-resources] express: OK');

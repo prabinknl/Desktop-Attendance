@@ -50,8 +50,8 @@ async function start() {
   // Bind the HTTP port first so Electron's health check does not time out
   // while PostgreSQL / InsForge are still connecting.
   await new Promise<void>((resolve, reject) => {
-    const server = app.listen(env.port, () => {
-      console.log(`[Server] API listening on port ${env.port}`);
+    const server = app.listen(env.port, env.host, () => {
+      console.log(`[Server] API listening on http://${env.host}:${env.port}`);
       resolve();
     });
     server.once('error', reject);

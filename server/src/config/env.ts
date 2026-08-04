@@ -28,6 +28,11 @@ function parseCorsOrigins(): string[] | boolean {
 
 export const env = {
   port: parseInt(process.env.PORT ?? '3001', 10),
+  /**
+   * Listen address. Desktop Electron sets HOST=127.0.0.1 so the API is not
+   * exposed on the LAN. Cloud/server deploys typically use 0.0.0.0.
+   */
+  host: (process.env.HOST ?? '0.0.0.0').trim() || '0.0.0.0',
   corsOrigins: parseCorsOrigins(),
   nodeEnv: process.env.NODE_ENV ?? 'development',
   databaseUrl:
@@ -48,7 +53,7 @@ export const env = {
   gatewaySecret: (process.env.GATEWAY_SECRET ?? '').trim(),
   /** Expected connector heartbeat interval (seconds). */
   connectorHeartbeatSeconds: Math.max(15, parseInt(process.env.CONNECTOR_HEARTBEAT_SECONDS ?? '30', 10)),
-  adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? 'bpkhanal.app@gmail.com').trim().toLowerCase(),
+  adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? 'appnep@pacenp.com').trim().toLowerCase(),
   smtpHost: process.env.SMTP_HOST ?? '',
   smtpPort: parseInt(process.env.SMTP_PORT ?? '587', 10),
   smtpUser: process.env.SMTP_USER ?? '',
