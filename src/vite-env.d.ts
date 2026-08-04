@@ -12,11 +12,46 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
+interface UpdateProgress {
+  bytesPerSecond: number;
+  percent: number;
+  transferred: number;
+  total: number;
+}
+
+interface UpdateStatusPayload {
+  status:
+    | 'checking-for-update'
+    | 'update-available'
+    | 'update-not-available'
+    | 'download-progress'
+    | 'update-downloaded'
+    | 'error';
+  version?: string;
+  releaseDate?: string;
+  releaseNotes?: string | Array<{ version: string; note: string }>;
+  error?: string;
+  bytesPerSecond?: number;
+  percent?: number;
+  transferred?: number;
+  total?: number;
+}
+
 interface AttendanceDesktopBridge {
-  readonly isElectron: true;
-  readonly apiBaseUrl: string;
-  getApiBaseUrl: () => Promise<string>;
-  readonly platform: string;
+  readonly isElectron?: boolean;
+  readonly apiBaseUrl?: string;
+  getApiBaseUrl?: () => Promise<string>;
+  readonly platform?: string;
+  getAppVersion?: () => Promise<string>;
+  checkForUpdates?: () => Promise<{
+    status: string;
+    version?: string;
+    isDev?: boolean;
+    error?: string;
+    updateInfo?: unknown;
+  }>;
+  restartAndInstall?: () => Promise<void>;
+  onUpdateStatus?: (callback: (payload: UpdateStatusPayload) => void) => () => void;
 }
 
 interface Window {
