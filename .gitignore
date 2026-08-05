@@ -97,3 +97,6 @@ credentials/
 .insforge/*
 !.insforge/project.json
 
+# Nested clone
+Desktop-Attendance/
+
