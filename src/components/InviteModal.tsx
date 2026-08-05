@@ -76,13 +76,14 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
       setEmailError('');
       setSending(true);
       try {
-        const { link } = createInvitation(email.trim().toLowerCase(), selectedRole!);
+        const { token, link } = createInvitation(email.trim().toLowerCase(), selectedRole!);
         setInviteLink(link);
 
         const res = await authApi.sendInviteEmail({
           email: email.trim().toLowerCase(),
           role: selectedRole!,
           inviteLink: link,
+          token,
         });
 
         if (res.success) {

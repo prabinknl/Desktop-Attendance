@@ -92,16 +92,37 @@ export async function verifyAdminCode(req: Request, res: Response) {
   }
 }
 
+import { InvitationModel } from '../models/InvitationModel.js';
+
 export async function sendInviteEmail(req: Request, res: Response) {
   try {
     const email = String(req.body?.email ?? '').trim().toLowerCase();
     const role = String(req.body?.role ?? '').trim();
     const inviteLink = String(req.body?.inviteLink ?? '').trim();
+    let token = String(req.body?.token ?? '').trim();
+
+    if (!token && inviteLink) {
+      const match = inviteLink.match(/\/invite\/([a-f0-9]+)/i);
+      if (match) token = match[1];
+    }
 
     if (!email || !role || !inviteLink) {
       return res.status(400).json({
         success: false,
         message: 'Email, role, and inviteLink are required.',
+      });
+    }
+
+    if (token) {
+      const now = new Date();
+      const expires = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      await InvitationModel.save({
+        token,
+        email,
+        role,
+        created_at: now.toISOString(),
+        expires_at: expires.toISOString(),
+        used: false,
       });
     }
 
@@ -125,6 +146,60 @@ export async function sendInviteEmail(req: Request, res: Response) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to send invitation email';
     console.error('[Auth] sendInviteEmail failed:', message);
+    return res.status(500).json({ success: false, message });
+  }
+}
+
+export async function getInvitationByToken(req: Request, res: Response) {
+  try {
+    const token = String(req.params.token ?? '').trim();
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Token is required.' });
+    }
+
+    const inv = await InvitationModel.getByToken(token);
+    if (!inv) {
+      return res.status(404).json({ success: false, message: 'Invitation not found.' });
+    }
+
+    if (inv.used) {
+      return res.status(410).json({ success: false, message: 'This invitation has already been used.' });
+    }
+
+    if (new Date() > new Date(inv.expires_at)) {
+      return res.status(410).json({ success: false, message: 'This invitation link has expired.' });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        token: inv.token,
+        email: inv.email,
+        role: inv.role,
+        createdAt: inv.created_at,
+        expiresAt: inv.expires_at,
+        used: inv.used,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to fetch invitation';
+    console.error('[Auth] getInvitationByToken failed:', message);
+    return res.status(500).json({ success: false, message });
+  }
+}
+
+export async function markInvitationUsed(req: Request, res: Response) {
+  try {
+    const token = String(req.params.token ?? '').trim();
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Token is required.' });
+    }
+
+    await InvitationModel.markUsed(token);
+    return res.json({ success: true, message: 'Invitation marked as used.' });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to mark invitation used';
+    console.error('[Auth] markInvitationUsed failed:', message);
     return res.status(500).json({ success: false, message });
   }
 }

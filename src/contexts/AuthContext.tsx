@@ -174,7 +174,7 @@ export async function hydrateCloudAuthUsers(): Promise<User[]> {
       localStorage.setItem(USERS_KEY, JSON.stringify(merged));
       return merged;
     }
-  } catch {}
+  } catch { }
   return loadAuthUsers();
 }
 

@@ -18,9 +18,19 @@ type MemoryLog = {
   raw_data?: string | null;
 };
 
+export type InvitationRecord = {
+  token: string;
+  email: string;
+  role: string;
+  created_at: string;
+  expires_at: string;
+  used: boolean;
+};
+
 /** In-memory fallback when PostgreSQL is unavailable — persisted to disk so restarts keep data. */
 let memoryDevice: DeviceRecord | null = null;
 let memoryLogs: MemoryLog[] = [];
+let memoryInvitations: InvitationRecord[] = [];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Electron sets ATTENDANCE_DATA_DIR to a writable userData folder. */
@@ -36,6 +46,7 @@ function loadFromDisk() {
     const parsed = JSON.parse(raw) as {
       device?: DeviceRecord | null;
       logs?: MemoryLog[];
+      invitations?: InvitationRecord[];
     };
     if (parsed.device && typeof parsed.device === 'object') {
       memoryDevice = parsed.device;
@@ -43,8 +54,11 @@ function loadFromDisk() {
     if (Array.isArray(parsed.logs)) {
       memoryLogs = parsed.logs;
     }
+    if (Array.isArray(parsed.invitations)) {
+      memoryInvitations = parsed.invitations;
+    }
     console.log(
-      `[MemoryStore] Restored from disk: device=${memoryDevice ? memoryDevice.id : 'none'} logs=${memoryLogs.length}`,
+      `[MemoryStore] Restored from disk: device=${memoryDevice ? memoryDevice.id : 'none'} logs=${memoryLogs.length} invitations=${memoryInvitations.length}`,
     );
   } catch (err) {
     console.warn('[MemoryStore] Could not load persisted store:', err instanceof Error ? err.message : err);
@@ -57,7 +71,7 @@ function saveToDisk() {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
     const payload = JSON.stringify(
-      { device: memoryDevice, logs: memoryLogs, savedAt: new Date().toISOString() },
+      { device: memoryDevice, logs: memoryLogs, invitations: memoryInvitations, savedAt: new Date().toISOString() },
       null,
       2,
     );
@@ -160,6 +174,27 @@ export const memoryStore = {
   /** Clear all in-memory logs (never seed demo data). */
   clearLogs(): void {
     memoryLogs = [];
+    saveToDisk();
+  },
+
+  saveInvitation(inv: InvitationRecord): void {
+    memoryInvitations = [
+      inv,
+      ...memoryInvitations.filter((i) => i.token !== inv.token),
+    ];
+    saveToDisk();
+  },
+
+  getInvitation(token: string): InvitationRecord | null {
+    const inv = memoryInvitations.find((i) => i.token === token);
+    if (!inv) return null;
+    return inv;
+  },
+
+  markInvitationUsed(token: string): void {
+    memoryInvitations = memoryInvitations.map((i) =>
+      i.token === token ? { ...i, used: true } : i,
+    );
     saveToDisk();
   },
 };

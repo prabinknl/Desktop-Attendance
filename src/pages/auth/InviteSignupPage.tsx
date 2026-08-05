@@ -40,11 +40,11 @@ function employeeDisplayName(e: Employee) {
 export default function InviteSignupPage() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
-  const { getInvitation, markUsed } = useInvitations();
+  const { getInvitation, fetchInvitation, markUsed } = useInvitations();
   const { signupEmployee, signupAccountant, isEmployeeRegistered } = useAuth();
   const { toast } = useNotifications();
 
-  const [invite, setInvite] = useState<ReturnType<typeof getInvitation>>(null);
+  const [invite, setInvite] = useState<import('../../contexts/InvitationContext').Invitation | null>(null);
   const [loading, setLoading] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -67,10 +67,19 @@ export default function InviteSignupPage() {
 
   useEffect(() => {
     if (!token) { setLoading(false); return; }
-    const inv = getInvitation(token);
-    setInvite(inv);
-    setLoading(false);
-  }, [token, getInvitation]);
+    let isMounted = true;
+    (async () => {
+      let inv = getInvitation(token);
+      if (!inv) {
+        inv = await fetchInvitation(token);
+      }
+      if (isMounted) {
+        setInvite(inv);
+        setLoading(false);
+      }
+    })();
+    return () => { isMounted = false; };
+  }, [token, getInvitation, fetchInvitation]);
 
   useEffect(() => {
     if (invite?.role === 'employee') {

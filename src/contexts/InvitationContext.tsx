@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useCallback, type ReactNode } from 'react';
+import { authApi } from '../api/authApi';
 
 export type InviteRole = 'accountant' | 'employee';
 
@@ -34,6 +35,7 @@ function generateToken(): string {
 interface InvitationContextType {
   createInvitation: (email: string, role: InviteRole) => { token: string; link: string };
   getInvitation: (token: string) => Invitation | null;
+  fetchInvitation: (token: string) => Promise<Invitation | null>;
   markUsed: (token: string) => void;
   getAllInvitations: () => Invitation[];
   deleteInvitation: (token: string) => void;
@@ -75,11 +77,30 @@ export function InvitationProvider({ children }: { children: ReactNode }) {
     return invite;
   }, []);
 
+  const fetchInvitation = useCallback(async (token: string): Promise<Invitation | null> => {
+    const local = loadInvitations().find((i) => i.token === token);
+    if (local && !local.used && new Date() <= new Date(local.expiresAt)) {
+      return local;
+    }
+
+    const remote = await authApi.getInvitation(token);
+    if (remote) {
+      const invites = loadInvitations();
+      const filtered = invites.filter((i) => i.token !== remote.token);
+      saveInvitations([...filtered, remote]);
+      if (!remote.used && new Date() <= new Date(remote.expiresAt)) {
+        return remote;
+      }
+    }
+    return null;
+  }, []);
+
   const markUsed = useCallback((token: string) => {
     const invites = loadInvitations().map((i) =>
       i.token === token ? { ...i, used: true } : i
     );
     saveInvitations(invites);
+    authApi.markInvitationUsed(token);
   }, []);
 
   const getAllInvitations = useCallback(() => loadInvitations(), []);
@@ -92,6 +113,7 @@ export function InvitationProvider({ children }: { children: ReactNode }) {
     <InvitationContext.Provider value={{
       createInvitation,
       getInvitation,
+      fetchInvitation,
       markUsed,
       getAllInvitations,
       deleteInvitation,

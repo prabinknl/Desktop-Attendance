@@ -29,9 +29,26 @@ export const authApi = {
     return data;
   },
 
-  sendInviteEmail: async (input: { email: string; role: string; inviteLink: string }) => {
+  sendInviteEmail: async (input: { email: string; role: string; inviteLink: string; token?: string }) => {
     const { data } = await apiClient.post<{ success: boolean; message?: string; emailSent?: boolean }>('/auth/admin/send-invite', input);
     return data;
+  },
+
+  getInvitation: async (token: string) => {
+    try {
+      const { data } = await apiClient.get<{ success: boolean; data?: import('../contexts/InvitationContext').Invitation }>(`/auth/invitations/${token}`);
+      return data.success && data.data ? data.data : null;
+    } catch {
+      return null;
+    }
+  },
+
+  markInvitationUsed: async (token: string) => {
+    try {
+      await apiClient.post(`/auth/invitations/${token}/use`);
+    } catch {
+      /* ignore offline errors */
+    }
   },
 
   /** Account list without passwords — the server never returns credentials. */
