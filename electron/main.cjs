@@ -19,6 +19,8 @@ const { spawn, execFile } = require('child_process');
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ELECTRON_DEV_URL || 'http://127.0.0.1:3002';
 const DEFAULT_API_PORT = 3001;
+/** Invite links embed this origin, so the UI port must survive a restart. */
+const DEFAULT_UI_PORT = 3010;
 const HEALTH_TIMEOUT_MS = 60_000;
 const HEALTH_INTERVAL_MS = 400;
 
@@ -222,22 +224,42 @@ function serveStatic(req, res, distPath) {
       tryFile(candidate, false);
       return;
     }
+    // Returning index.html for a missing .js/.css request would hand the
+    // browser HTML where it expects a script, leaving a blank page.
+    if (path.extname(urlPath)) {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
+    }
     tryFile(path.join(distPath, 'index.html'), false);
   });
 }
 
-function startProductionServer(distPath) {
+async function startProductionServer(distPath) {
+  const uiPort = await findFreePort(DEFAULT_UI_PORT);
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
-      if ((req.url || '').startsWith('/api')) {
+      const rawUrl = req.url || '/';
+      if (rawUrl.startsWith('/api')) {
         proxyApiRequest(req, res);
         return;
       }
+
+      // The UI is built with relative asset URLs and runs on HashRouter, so a
+      // path-style deep link (an emailed /invite/<token>) is redirected to its
+      // hash form instead of breaking asset resolution.
+      const [pathname, query] = rawUrl.split('?');
+      if (pathname !== '/' && !path.extname(pathname)) {
+        res.writeHead(302, { Location: `/#${pathname}${query ? `?${query}` : ''}` });
+        res.end();
+        return;
+      }
+
       serveStatic(req, res, distPath);
     });
 
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(uiPort, '127.0.0.1', () => {
       const address = server.address();
       if (!address || typeof address === 'string') {
         reject(new Error('Failed to bind local desktop static server.'));
@@ -365,6 +387,7 @@ function ensureDesktopServerEnv() {
   if (parsed.INSFORGE_BASE_URL) lines.push(`INSFORGE_BASE_URL=${parsed.INSFORGE_BASE_URL}`);
   if (parsed.INSFORGE_API_KEY) lines.push(`INSFORGE_API_KEY=${parsed.INSFORGE_API_KEY}`);
   if (parsed.ADMIN_SIGNUP_EMAIL) lines.push(`ADMIN_SIGNUP_EMAIL=${parsed.ADMIN_SIGNUP_EMAIL}`);
+  if (parsed.APP_PUBLIC_URL) lines.push(`APP_PUBLIC_URL=${parsed.APP_PUBLIC_URL}`);
   if (parsed.CORS_ORIGINS) lines.push(`CORS_ORIGINS=${parsed.CORS_ORIGINS}`);
 
   try {

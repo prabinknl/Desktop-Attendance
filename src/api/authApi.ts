@@ -1,4 +1,10 @@
 import apiClient from './client';
+import type { Invitation } from '../contexts/InvitationContext';
+import {
+  logInviteClientDebug,
+  normalizeInviteToken,
+  type InvitationLookupResult,
+} from '../lib/inviteToken';
 
 interface SendCodeResponse {
   success: boolean;
@@ -19,7 +25,7 @@ interface VerifyCodeResponse {
 type CloudUser = Omit<import('../types').User, 'password'>;
 
 export const authApi = {
-  sendAdminCode: async (input: { name: string; email: string }) => {
+  sendAdminCode: async (input: { name: string; email?: string; emails?: string[] }) => {
     const { data } = await apiClient.post<SendCodeResponse>('/auth/admin/send-code', input);
     return data;
   },
@@ -29,17 +35,74 @@ export const authApi = {
     return data;
   },
 
-  sendInviteEmail: async (input: { email: string; role: string; inviteLink: string; token?: string }) => {
-    const { data } = await apiClient.post<{ success: boolean; message?: string; emailSent?: boolean }>('/auth/admin/send-invite', input);
+  sendInviteEmail: async (input: { email: string; role: string; inviteLink?: string; token?: string; code?: string }) => {
+    const { data } = await apiClient.post<{ success: boolean; message?: string; emailSent?: boolean; inviteLink?: string; code?: string }>('/auth/admin/send-invite', input);
     return data;
   },
 
-  getInvitation: async (token: string) => {
+  getInvitation: async (token: string): Promise<InvitationLookupResult> => {
+    const normalized = normalizeInviteToken(token);
+    if (!normalized) {
+      return {
+        ok: false,
+        reason: 'invalid_token',
+        message: 'Invalid invitation token.',
+      };
+    }
+
     try {
-      const { data } = await apiClient.get<{ success: boolean; data?: import('../contexts/InvitationContext').Invitation }>(`/auth/invitations/${token}`);
-      return data.success && data.data ? data.data : null;
-    } catch {
-      return null;
+      const { data, status } = await apiClient.get<{
+        success: boolean;
+        code?: string;
+        message?: string;
+        data?: Invitation;
+      }>(`/auth/invitations/${normalized}`, {
+        validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s >= 500,
+      });
+
+      if (status === 200 && data.success && data.data) {
+        logInviteClientDebug('validated', {
+          token: normalized,
+          createdAt: data.data.createdAt,
+          expiresAt: data.data.expiresAt,
+          status: 'valid',
+        });
+        return { ok: true, invitation: data.data };
+      }
+
+      const reason =
+        data.code === 'invalid_token'
+          ? 'invalid_token'
+          : data.code === 'already_used'
+            ? 'already_used'
+            : data.code === 'expired'
+              ? 'expired'
+              : status === 404 || data.code === 'not_found'
+                ? 'not_found'
+                : 'server_error';
+
+      logInviteClientDebug('rejected', {
+        token: normalized,
+        reason,
+        status: reason,
+      });
+
+      return {
+        ok: false,
+        reason,
+        message: data.message ?? 'Could not validate invitation.',
+      };
+    } catch (error) {
+      logInviteClientDebug('network-error', {
+        token: normalized,
+        reason: 'network',
+        status: 'network',
+      });
+      return {
+        ok: false,
+        reason: 'network',
+        message: error instanceof Error ? error.message : 'Could not reach the server.',
+      };
     }
   },
 
@@ -73,6 +136,103 @@ export const authApi = {
       { validateStatus: (status) => status === 200 || status === 401 },
     );
     return data.success ? data.data ?? null : null;
+  },
+
+  createClientAdminInvite: async (input: {
+    email: string;
+    phone: string;
+    companyName?: string;
+    planType: 'free' | 'paid';
+    durationDays: number;
+  }) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      emailSent?: boolean;
+      smsSent?: boolean;
+      message?: string;
+      inviteLink?: string;
+      devSmsCode?: string;
+    }>('/auth/client-admin/invite', input);
+    return data;
+  },
+
+  validateClientAdminInvite: async (token: string): Promise<InvitationLookupResult> => {
+    const normalized = normalizeInviteToken(token);
+    if (!normalized) {
+      return { ok: false, reason: 'invalid_token', message: 'Invalid invitation token.' };
+    }
+
+    try {
+      const { data, status } = await apiClient.get<{
+        success: boolean;
+        code?: string;
+        message?: string;
+        data?: Invitation;
+      }>('/auth/client-admin/invitations/validate', {
+        params: { token: normalized },
+        validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s >= 500,
+      });
+
+      if (status === 200 && data.success && data.data) {
+        logInviteClientDebug('validated-client-admin', {
+          token: normalized,
+          createdAt: data.data.createdAt,
+          expiresAt: data.data.expiresAt,
+          status: 'valid',
+        });
+        return { ok: true, invitation: data.data };
+      }
+
+      const reason =
+        data.code === 'invalid_token'
+          ? 'invalid_token'
+          : data.code === 'already_used'
+            ? 'already_used'
+            : data.code === 'expired'
+              ? 'expired'
+              : status === 404 || data.code === 'not_found'
+                ? 'not_found'
+                : 'server_error';
+
+      return { ok: false, reason, message: data.message ?? 'Could not validate invitation.' };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'network',
+        message: error instanceof Error ? error.message : 'Could not reach server.',
+      };
+    }
+  },
+
+  resendClientAdminSms: async (token: string) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      smsSent?: boolean;
+      code?: string;
+      message?: string;
+      remainingSeconds?: number;
+      devSmsCode?: string;
+    }>('/auth/client-admin/resend-sms', { token }, {
+      validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s === 429 || s >= 500,
+    });
+    return data;
+  },
+
+  signupClientAdmin: async (input: {
+    token: string;
+    name: string;
+    password: string;
+    smsCode: string;
+  }) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      code?: string;
+      message?: string;
+      data?: CloudUser;
+    }>('/auth/client-admin/signup', input, {
+      validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s === 429 || s >= 500,
+    });
+    return data;
   },
 
   syncCloudUser: async (user: import('../types').User) => {

@@ -25,6 +25,22 @@ export type InvitationRecord = {
   created_at: string;
   expires_at: string;
   used: boolean;
+  id?: string;
+  client_id?: string;
+  phone?: string;
+  company_name?: string;
+  plan_type?: 'free' | 'paid';
+  duration_days?: number;
+  access_start_at?: string;
+  access_expires_at?: string;
+  token_hash?: string;
+  sms_code_hash?: string;
+  sms_expires_at?: string;
+  sms_attempts?: number;
+  sms_last_sent_at?: string;
+  status?: 'pending' | 'accepted' | 'expired' | 'cancelled';
+  created_by?: string;
+  updated_at?: string;
 };
 
 /** In-memory fallback when PostgreSQL is unavailable — persisted to disk so restarts keep data. */
@@ -191,9 +207,23 @@ export const memoryStore = {
     return inv;
   },
 
+  getInvitationByTokenHash(tokenHash: string): InvitationRecord | null {
+    const inv = memoryInvitations.find((i) => i.token_hash === tokenHash || i.token === tokenHash);
+    if (!inv) return null;
+    return inv;
+  },
+
+  getPendingInvitationByEmail(email: string, role: string): InvitationRecord | null {
+    const norm = email.trim().toLowerCase();
+    const inv = memoryInvitations.find(
+      (i) => i.email.trim().toLowerCase() === norm && i.role === role && (!i.status || i.status === 'pending') && !i.used
+    );
+    return inv || null;
+  },
+
   markInvitationUsed(token: string): void {
     memoryInvitations = memoryInvitations.map((i) =>
-      i.token === token ? { ...i, used: true } : i,
+      i.token === token || i.token_hash === token ? { ...i, used: true, status: 'accepted' } : i,
     );
     saveToDisk();
   },

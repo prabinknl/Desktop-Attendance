@@ -52,6 +52,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const toast = useCallback((type: ToastItem['type'], title: string, message?: string) => {
     const id = generateId('toast');
     setToasts(prev => [...prev, { id, type, title, message }]);
+
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4000);

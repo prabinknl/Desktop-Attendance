@@ -1,6 +1,6 @@
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-export type UserRole = 'admin' | 'owner' | 'account' | 'hr' | 'dept_manager' | 'employee' | 'client';
+export type UserRole = 'admin' | 'account' | 'hr' | 'dept_manager' | 'employee' | 'owner';
 
 export type AttendanceStatus =
   | 'present'
@@ -62,16 +62,12 @@ export interface User {
   employeeId?: string;
   departmentId?: string;
   password: string; // hashed in real app
-  companyName?: string;
   planType?: 'free' | 'paid';
   freeDays?: number;
   paidDays?: number;
   durationDays?: number;
+  companyName?: string;
   appStatus?: 'running' | 'paused';
-  status?: 'active' | 'pending' | 'paused' | 'deleted';
-  deletedAt?: string;
-  deletedBy?: string;
-  clientId?: string;
 }
 
 export interface Department {
@@ -88,35 +84,30 @@ export interface Shift {
   id: string;
   name: string;
   startTime: string; // "HH:mm"
-  endTime: string;   // "HH:mm"
+  endTime: string; // "HH:mm"
   breakMinutes: number;
   graceMinutes: number;
   workingHours: number;
-  workingDays: number[]; // 0=Sun, 1=Mon ... 6=Sat
+  workingDays: number[]; // 0=Sun, 1=Mon, ..., 6=Sat
   createdAt: string;
 }
 
 export interface Employee {
   id: string;
-  employeeId: string;
+  employeeId: string; // e.g. "EMP-001"
   firstName: string;
   lastName: string;
   email: string;
   phone: string;
+  avatar?: string;
   departmentId: string;
-  designation: string;
-  managerId?: string;
-  joiningDate: string;
+  shiftId: string;
+  role: UserRole;
   employmentType: EmploymentType;
   status: EmployeeStatus;
-  shiftId: string;
-  address?: string;
-  emergencyContact?: {
-    name: string;
-    phone: string;
-    relation: string;
-  };
-  avatar?: string;
+  joinDate: string;
+  designation: string;
+  leaveBalance: Record<LeaveType, number>;
   createdAt: string;
   updatedAt: string;
 }
@@ -124,68 +115,54 @@ export interface Employee {
 export interface Attendance {
   id: string;
   employeeId: string;
-  departmentId: string;
   date: string; // "YYYY-MM-DD"
-  shiftId: string;
-  checkIn?: string;  // "HH:mm"
-  checkOut?: string; // "HH:mm"
-  manualCheckIn?: string;  // "HH:mm" - admin manual check in time override
-  manualCheckOut?: string; // "HH:mm" - admin manual check out time override
-  checkInEdited?: boolean;
-  checkOutEdited?: boolean;
-  checkInEditedBy?: string;
-  checkOutEditedBy?: string;
-  checkInEditedAt?: string;
-  checkOutEditedAt?: string;
-  breakMinutes: number;
-  workingHours: number;
-  overtime: number;
-  lateMinutes: number;
+  checkIn?: string; // "HH:mm:ss"
+  checkOut?: string; // "HH:mm:ss"
   status: AttendanceStatus;
-  location?: string;
-  remarks?: string;
-  /** When true, device sync must not overwrite this row. */
-  manualOverride?: boolean;
-  source?: string;
-  createdBy: string;
-  updatedBy?: string;
+  workHours: number;
+  overtimeHours: number;
+  notes?: string;
+  deviceSynced?: boolean;
+  deviceId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PunchRequest {
+  id: string;
+  employeeId: string;
+  date: string;
+  kind: PunchRequestKind;
+  checkIn?: string;
+  checkOut?: string;
+  reason: string;
+  status: PunchRequestStatus;
+  createdAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
 }
 
 export interface LeaveRequest {
   id: string;
   employeeId: string;
-  leaveType: LeaveType;
-  fromDate: string;
-  toDate: string;
+  type: LeaveType;
+  startDate: string;
+  endDate: string;
   totalDays: number;
   reason: string;
-  attachmentUrl?: string;
   status: LeaveStatus;
-  comments?: string;
-  approvedBy?: string;
-  createdAt: string;
-  updatedAt: string;
+  appliedDate: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  rejectionReason?: string;
 }
 
-/** Pending add/edit of check-in / check-out until a manager approves. */
-export interface PunchTimeRequest {
+export interface Holiday {
   id: string;
-  employeeId: string;
-  attendanceId?: string;
-  date: string;
-  kind: PunchRequestKind;
-  requestedCheckIn?: string;
-  requestedCheckOut?: string;
-  previousCheckIn?: string;
-  previousCheckOut?: string;
-  reason: string;
-  status: PunchRequestStatus;
-  comments?: string;
-  approvedBy?: string;
-  createdAt: string;
-  updatedAt: string;
+  name: string;
+  date: string; // "YYYY-MM-DD"
+  type: 'public' | 'optional' | 'restricted';
+  description?: string;
 }
 
 export interface Notification {
@@ -195,46 +172,17 @@ export interface Notification {
   message: string;
   read: boolean;
   userId: string;
-  relatedId?: string;
   createdAt: string;
-}
-
-export interface Holiday {
-  id: string;
-  name: string;
-  date: string;
-  type: 'public' | 'optional' | 'restricted';
-  source?: 'manual' | 'google' | 'hamro_patro';
+  link?: string;
 }
 
 export interface AuditLog {
   id: string;
   userId: string;
+  userName: string;
+  userRole: UserRole;
   action: string;
-  resource: string;
-  resourceId: string;
-  details?: string;
-  ipAddress?: string;
-  createdAt: string;
-}
-
-// ─── Dashboard Stats ──────────────────────────────────────────────────────────
-
-export interface DashboardStats {
-  totalEmployees: number;
-  presentToday: number;
-  absentToday: number;
-  lateToday: number;
-  onLeaveToday: number;
-  attendancePercentage: number;
-}
-
-// ─── Report Types ─────────────────────────────────────────────────────────────
-
-export interface ReportFilter {
-  startDate: string;
-  endDate: string;
-  departmentId?: string;
-  employeeId?: string;
-  status?: AttendanceStatus;
+  details: string;
+  timestamp: string;
+  ip?: string;
 }

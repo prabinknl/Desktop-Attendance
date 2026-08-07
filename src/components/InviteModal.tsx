@@ -1,12 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, X, Copy, Check, ChevronDown, Send, Users, BriefcaseBusiness } from 'lucide-react';
+import { Mail, X, Copy, Check, ChevronDown, Send, Users, BriefcaseBusiness, Building2 } from 'lucide-react';
 import { useInvitations, type InviteRole } from '../contexts/InvitationContext';
 import { useNotifications } from '../contexts/NotificationContext';
+import { useAuth } from '../contexts/AuthContext';
 import { cn } from '../lib/utils';
 import { authApi } from '../api/authApi';
 
 const ROLES: { id: InviteRole; label: string; desc: string; color: string; icon: React.ElementType }[] = [
+  {
+    id: 'client',
+    label: 'Client / Admin',
+    desc: 'Create or invite organization client account',
+    color: 'bg-indigo-500',
+    icon: Building2,
+  },
   {
     id: 'accountant',
     label: 'Accountant',
@@ -29,14 +37,18 @@ interface InviteModalProps {
 }
 
 export default function InviteModal({ open, onClose }: InviteModalProps) {
+  const { user } = useAuth();
   const { createInvitation } = useInvitations();
   const { toast } = useNotifications();
+
+  // Show only Accountant and Employee roles for admin/client invites (hide Client/Admin option unless user is owner)
+  const availableRoles = user?.role === 'owner' ? ROLES : ROLES.filter((r) => r.id !== 'client');
 
   const [step, setStep] = useState<'role' | 'email' | 'done'>('role');
   const [selectedRole, setSelectedRole] = useState<InviteRole | null>(null);
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState('');
-  const [inviteLink, setInviteLink] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [copied, setCopied] = useState(false);
   const [sending, setSending] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
@@ -49,7 +61,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
         setSelectedRole(null);
         setEmail('');
         setEmailError('');
-        setInviteLink('');
+        setInviteCode('');
         setCopied(false);
         setSending(false);
       }, 300);
@@ -77,25 +89,28 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
       setSending(true);
       try {
         const { token, link } = createInvitation(email.trim().toLowerCase(), selectedRole!);
-        setInviteLink(link);
+        setInviteCode(token);
 
         const res = await authApi.sendInviteEmail({
           email: email.trim().toLowerCase(),
           role: selectedRole!,
           inviteLink: link,
           token,
+          code: token,
         });
 
+        if (res.code) setInviteCode(res.code);
+
         if (res.success) {
-          toast('success', `Invitation email sent to ${email.trim()}`);
+          toast('success', `Invitation code sent to ${email.trim()}`);
         } else {
-          toast('warning', res.message || 'Invitation link generated, but email could not be sent.');
+          toast('warning', res.message || 'Invitation code generated, but email could not be sent.');
         }
         setStep('done');
       } catch (err) {
         console.error('Failed to send invitation email:', err);
         const msg = err instanceof Error ? err.message : 'Could not send invitation email.';
-        toast('warning', `${msg} Link is generated, you can copy and share it manually.`);
+        toast('warning', `${msg} Code generated, you can share it manually.`);
         setStep('done');
       } finally {
         setSending(false);
@@ -103,11 +118,11 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
     }
   }
 
-  async function copyLink() {
+  async function copyCode() {
     try {
-      await navigator.clipboard.writeText(inviteLink);
+      await navigator.clipboard.writeText(inviteCode);
       setCopied(true);
-      toast('success', 'Invite link copied!');
+      toast('success', 'Invite code copied!');
       setTimeout(() => setCopied(false), 2500);
     } catch {
       toast('error', 'Could not copy. Please copy manually.');
@@ -153,7 +168,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
                     <p className="text-xs text-slate-400">
                       {step === 'role' && 'Choose a role to invite'}
                       {step === 'email' && `Invite as ${roleInfo?.label}`}
-                      {step === 'done' && 'Invitation ready!'}
+                      {step === 'done' && 'Invitation code ready!'}
                     </p>
                   </div>
                 </div>
@@ -197,7 +212,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
                       <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
                         Select the role for the person you want to invite:
                       </p>
-                      {ROLES.map((role) => {
+                      {availableRoles.map((role) => {
                         const Icon = role.icon;
                         const isSelected = selectedRole === role.id;
                         return (
@@ -289,7 +304,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
                           <p className="text-rose-500 text-xs mt-1">{emailError}</p>
                         )}
                         <p className="text-xs text-slate-400 mt-1.5">
-                          An invite link will be sent to their email. They can use it to sign up.
+                          An invitation code will be sent to their email address. They will enter it when signing up.
                         </p>
                       </div>
 
@@ -309,11 +324,11 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
                           {sending ? (
                             <>
                               <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                              Sending...
+                              Sending Code...
                             </>
                           ) : (
                             <>
-                              <Send size={15} /> Generate Link
+                              <Send size={15} /> Send Code
                             </>
                           )}
                         </button>
@@ -334,42 +349,42 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
                         <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center mx-auto mb-3">
                           <Check size={32} className="text-emerald-500" />
                         </div>
-                        <p className="font-semibold text-slate-900 dark:text-white">Invite link generated!</p>
+                        <p className="font-semibold text-slate-900 dark:text-white">Invitation code sent!</p>
                         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                          Share this link with <strong className="text-slate-700 dark:text-slate-300">{email}</strong>
+                          Code sent to <strong className="text-slate-700 dark:text-slate-300">{email}</strong>
                         </p>
                       </div>
 
-                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                        <p className="text-xs text-slate-400 mb-1 font-medium uppercase tracking-wide">Invite Link</p>
-                        <div className="flex items-center gap-2">
-                          <p className="text-xs text-slate-700 dark:text-slate-300 font-mono flex-1 truncate">
-                            {inviteLink}
+                      <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center">
+                        <p className="text-xs text-slate-400 mb-1.5 font-medium uppercase tracking-wide">Invitation Code</p>
+                        <div className="flex items-center justify-center gap-3">
+                          <p className="text-3xl font-extrabold text-primary-600 dark:text-primary-400 font-mono tracking-widest">
+                            {inviteCode}
                           </p>
                           <button
-                            onClick={copyLink}
+                            onClick={copyCode}
                             className={cn(
-                              'flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all',
+                              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ml-2',
                               copied
                                 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
                                 : 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300 hover:bg-primary-200 dark:hover:bg-primary-900/50',
                             )}
                           >
                             {copied ? <Check size={13} /> : <Copy size={13} />}
-                            {copied ? 'Copied!' : 'Copy'}
+                            {copied ? 'Copied!' : 'Copy Code'}
                           </button>
                         </div>
                       </div>
 
                       <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
                         <p className="text-xs text-amber-700 dark:text-amber-300">
-                          ⏰ This link expires in <strong>7 days</strong>. The invitee must open it to create their account.
+                          ⏰ This invitation code expires in <strong>4 hours</strong>. The invitee must enter this code when signing up.
                         </p>
                       </div>
 
                       <div className="flex gap-3">
                         <button
-                          onClick={() => { setStep('role'); setSelectedRole(null); setEmail(''); setInviteLink(''); }}
+                          onClick={() => { setStep('role'); setSelectedRole(null); setEmail(''); setInviteCode(''); }}
                           className="btn flex-1 py-3 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl text-sm"
                         >
                           New Invite

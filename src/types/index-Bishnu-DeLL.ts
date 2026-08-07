@@ -1,6 +1,6 @@
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-export type UserRole = 'admin' | 'owner' | 'account' | 'hr' | 'dept_manager' | 'employee' | 'client';
+export type UserRole = 'admin' | 'account' | 'hr' | 'dept_manager' | 'employee' | 'owner';
 
 export type AttendanceStatus =
   | 'present'
@@ -62,16 +62,6 @@ export interface User {
   employeeId?: string;
   departmentId?: string;
   password: string; // hashed in real app
-  companyName?: string;
-  planType?: 'free' | 'paid';
-  freeDays?: number;
-  paidDays?: number;
-  durationDays?: number;
-  appStatus?: 'running' | 'paused';
-  status?: 'active' | 'pending' | 'paused' | 'deleted';
-  deletedAt?: string;
-  deletedBy?: string;
-  clientId?: string;
 }
 
 export interface Department {

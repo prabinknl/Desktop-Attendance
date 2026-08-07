@@ -7,7 +7,7 @@ import { z } from 'zod';
 import {
   Eye, EyeOff, ArrowRight, Clock, Users, BarChart3, Lock, ArrowLeft, Search, Check, Mail,
 } from 'lucide-react';
-import { useAuth, ALLOWED_ADMIN_EMAIL, hydrateCloudAuthUsers } from '../../contexts/AuthContext';
+import { useAuth, ALLOWED_ADMIN_EMAIL, OWNER_SIGNIN_EMAILS, formatEmailList, hydrateCloudAuthUsers } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { EmployeeAPI } from '../../data/store';
 import { deviceApi } from '../../api/deviceApi';
@@ -18,7 +18,7 @@ import type { Employee } from '../../types';
 
 type AuthMode = 'login' | 'signup-admin' | 'signup-employee' | 'signup-accountant' | 'admin-credentials';
 type AdminStep = 'details' | 'verify';
-type PortalRole = 'admin' | 'accountant' | 'employee';
+type PortalRole = 'admin' | 'owner' | 'accountant' | 'employee';
 type AuthAction = 'login' | 'signup';
 
 const portalRoles: { id: PortalRole; label: string; color: string; activeColor: string }[] = [
@@ -89,6 +89,7 @@ function isMachineEmployee(e: Employee) {
 export default function LoginPage() {
   const {
     login,
+    loginOwner,
     logout,
     signupAdmin,
     signupEmployee,
@@ -102,8 +103,12 @@ export default function LoginPage() {
   const [selectedRole, setSelectedRole] = useState<PortalRole | null>(null);
   const [authAction, setAuthAction] = useState<AuthAction>('login');
   const [mode, setMode] = useState<AuthMode>('login');
+  const [ownerMode, setOwnerMode] = useState<'intro' | 'code'>('intro');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [ownerCode, setOwnerCode] = useState('');
+  const [ownerCodeSentAt, setOwnerCodeSentAt] = useState<number | null>(null);
+  const [ownerResendSeconds, setOwnerResendSeconds] = useState(0);
 
   const [adminStep, setAdminStep] = useState<AdminStep>('details');
   const [verificationCode, setVerificationCode] = useState('');
@@ -178,6 +183,19 @@ export default function LoginPage() {
     return () => { cancelled = true; };
   }, [mode]);
 
+  useEffect(() => {
+    if (!ownerCodeSentAt) return;
+    const tick = () => {
+      const remaining = Math.max(0, 60 - Math.floor((Date.now() - ownerCodeSentAt) / 1000));
+      setOwnerResendSeconds(remaining);
+      if (remaining === 0) return;
+      const id = window.setTimeout(tick, 1000);
+      return () => window.clearTimeout(id);
+    };
+    const id = window.setTimeout(tick, 1000);
+    return () => window.clearTimeout(id);
+  }, [ownerCodeSentAt]);
+
   const availableEmployees = useMemo(() => {
     const q = employeeSearch.trim().toLowerCase();
     return machineEmployees
@@ -198,6 +216,16 @@ export default function LoginPage() {
     setEmailVerified(false);
     setOtpEmailSent(false);
     setOtpSendError(null);
+  };
+
+  const handleOwnerClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (!e.ctrlKey && !e.metaKey) {
+      return;
+    }
+    setSelectedRole('owner');
+    setOwnerMode('intro');
+    setMode('login');
+    setAuthAction('login');
   };
 
   const selectRole = (role: PortalRole) => {
@@ -277,6 +305,7 @@ export default function LoginPage() {
       roleOk =
         !selectedRole
         || (selectedRole === 'admin' && role === 'admin')
+        || (selectedRole === 'owner' && role === 'owner')
         || (selectedRole === 'employee' && role === 'employee')
         || (selectedRole === 'accountant' && (role === 'hr' || role === 'dept_manager'));
     } catch {
@@ -335,6 +364,57 @@ export default function LoginPage() {
           : 'Could not send verification email. Check SMTP settings and try again.';
       setOtpSendError(message);
       toast('error', 'Could not send code', message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendOwnerVerificationCode = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const res = await authApi.sendAdminCode({ name: 'Owner', emails: OWNER_SIGNIN_EMAILS });
+      if (!res.success || !res.emailSent) {
+        toast('error', 'Verification failed', res.message || 'Could not send the owner verification code.');
+        return;
+      }
+      setOwnerCode('');
+      setOwnerCodeSentAt(Date.now());
+      setOwnerResendSeconds(60);
+      setOwnerMode('code');
+      toast('success', 'Verification code sent', `A verification code was sent to ${formatEmailList(OWNER_SIGNIN_EMAILS)}.`);
+      if (res.devCode) {
+        toast('info', `Verification Code: ${res.devCode}`, `Dev Mode: code is ${res.devCode}`);
+      }
+    } catch (err) {
+      toast('error', 'Network error', err instanceof Error ? err.message : 'Could not reach the server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyOwnerCode = async () => {
+    const trimmed = ownerCode.trim();
+    if (!/^\d{6}$/.test(trimmed)) {
+      toast('error', 'Invalid code', 'Enter the 6-digit verification code.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const verified = await authApi.verifyAdminCode({ email: OWNER_SIGNIN_EMAILS[0], code: trimmed });
+      if (!verified.success || !verified.verified) {
+        toast('error', 'Verification failed', verified.message || 'Invalid or expired code.');
+        return;
+      }
+      const result = await loginOwner();
+      if (!result.success) {
+        toast('error', 'Owner sign in failed', result.error || 'Could not sign in as owner.');
+        return;
+      }
+      toast('success', 'Welcome back!', 'Owner sign in completed.');
+      navigate('/dashboard');
+    } catch (err) {
+      toast('error', 'Network error', err instanceof Error ? err.message : 'Could not verify the code.');
     } finally {
       setLoading(false);
     }
@@ -536,9 +616,27 @@ export default function LoginPage() {
             ))}
           </motion.div>
         </div>
+
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.8 }}
+          className="absolute bottom-10 left-16 z-20"
+        >
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleOwnerClick}
+              className="text-[13px] font-semibold leading-none text-slate-700 hover:text-slate-900 transition-colors cursor-pointer select-none border-none bg-transparent p-0"
+              aria-label="Owner sign in"
+            >
+              owner
+            </button>
+            <span className="text-[13px] font-semibold leading-none text-slate-700">appnep.com सर्वाधिकार सुरक्षित</span>
+          </div>
+        </motion.div>
       </div>
 
-      {/* ── Right panel ── */}
       <div className="flex-1 flex items-center justify-center px-8 py-16 lg:px-16 lg:py-20">
         <motion.div
           initial={{ opacity: 0, y: 24 }}
@@ -568,12 +666,16 @@ export default function LoginPage() {
                 {mode !== 'login' ? 'Back to Log in' : 'Back to roles'}
               </button>
             )}
-            <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-3">{title}</h2>
-            <p className="text-slate-500 dark:text-slate-400">{subtitle}</p>
+            <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-3">
+              {selectedRole === 'owner' && ownerMode === 'intro' ? 'Owner Sign In' : title}
+            </h2>
+            <p className="text-slate-500 dark:text-slate-400">
+              {selectedRole === 'owner' && ownerMode === 'intro' ? 'Sign in with the fixed owner account.' : subtitle}
+            </p>
           </div>
 
           {/* Role selection — Admin / Accountant / Employee */}
-          {mode !== 'admin-credentials' && (
+          {mode !== 'admin-credentials' && selectedRole !== 'owner' && (
             <div className="mb-6">
               <p className="text-xs font-medium text-slate-500 mb-2">Continue as:</p>
               <div className="flex gap-2 flex-wrap">
@@ -595,8 +697,67 @@ export default function LoginPage() {
             </div>
           )}
 
+          {selectedRole === 'owner' && ownerMode === 'intro' && (
+            <div className="space-y-5">
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Verification code will be sent to {formatEmailList(OWNER_SIGNIN_EMAILS)}.
+              </p>
+              <button
+                type="button"
+                onClick={sendOwnerVerificationCode}
+                className="btn-primary w-full py-2.5 text-base font-semibold"
+                disabled={loading}
+              >
+                {loading ? 'Sending...' : 'Send Verification Code'}
+              </button>
+            </div>
+          )}
+
+          {selectedRole === 'owner' && ownerMode === 'code' && (
+            <form
+              className="space-y-5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void verifyOwnerCode();
+              }}
+            >
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Verification code</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={ownerCode}
+                  onChange={(e) => setOwnerCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="123456"
+                  className="input"
+                  autoFocus
+                />
+                <p className="text-xs text-slate-500 mt-1">Enter the 6-digit code sent to {formatEmailList(OWNER_SIGNIN_EMAILS)}.</p>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={loading || ownerCode.length !== 6}
+                  className="btn-primary flex-1 py-2.5 text-base font-semibold disabled:opacity-60"
+                >
+                  {loading ? 'Verifying...' : 'Verify Code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={sendOwnerVerificationCode}
+                  disabled={loading || ownerResendSeconds > 0}
+                  className="btn-secondary px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                >
+                  {ownerResendSeconds > 0 ? `Resend (${ownerResendSeconds}s)` : 'Resend Code'}
+                </button>
+              </div>
+            </form>
+          )}
+
           {/* Log in / Sign up — shown after a role is chosen */}
-          {selectedRole && mode !== 'admin-credentials' && (
+          {selectedRole && selectedRole !== 'owner' && mode !== 'admin-credentials' && (
             <div className="mb-6">
               <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
                 <button
@@ -628,7 +789,7 @@ export default function LoginPage() {
           )}
 
           <AnimatePresence mode="wait">
-            {mode === 'login' && selectedRole && (
+            {mode === 'login' && selectedRole && selectedRole !== 'owner' && (
               <motion.form
                 key="login"
                 initial={{ opacity: 0, x: 12 }}
@@ -859,21 +1020,22 @@ export default function LoginPage() {
                   <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
                     Only users invited by an Administrator can sign up for an{' '}
                     <strong>{selectedRole === 'accountant' ? 'Accountant' : 'Employee'}</strong> account.
-                    Please ask your Administrator to send an invite link to your email.
+                    Please ask your Administrator to send an invitation code to your email.
                   </p>
                 </div>
 
                 <div className="space-y-3 pt-2">
                   <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                    Received an invite code or link?
+                    Enter your 6-digit Invitation Code
                   </label>
                   <div className="flex gap-2">
                     <input
                       type="text"
                       value={inviteInputToken}
                       onChange={(e) => setInviteInputToken(e.target.value)}
-                      placeholder="Paste invite link or token code..."
-                      className="input flex-1"
+                      placeholder="e.g. 849201"
+                      maxLength={64}
+                      className="input flex-1 font-mono tracking-wider font-semibold text-center"
                     />
                     <button
                       type="button"
@@ -882,12 +1044,17 @@ export default function LoginPage() {
                         if (!trimmed) return;
                         const match = trimmed.match(/\/invite\/([a-f0-9]+)/i);
                         const token = match ? match[1] : trimmed;
-                        navigate(`/invite/${token}`);
+                        const normalized = token.match(/^[a-f0-9]{6,64}$/i) ? token.toLowerCase() : null;
+                        if (!normalized) {
+                          toast('error', 'Invalid invitation code', 'Enter a valid 6-digit invitation code sent to your email by your administrator.');
+                          return;
+                        }
+                        navigate(`/invite/${normalized}`);
                       }}
                       disabled={!inviteInputToken.trim()}
-                      className="btn-primary px-4 py-2.5 text-sm font-semibold disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap"
+                      className="btn-primary px-5 py-2.5 text-sm font-semibold disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap"
                     >
-                      Open <ArrowRight size={14} />
+                      Continue <ArrowRight size={14} />
                     </button>
                   </div>
                 </div>

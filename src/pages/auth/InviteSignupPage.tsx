@@ -13,6 +13,11 @@ import { deviceApi } from '../../api/deviceApi';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { cn } from '../../lib/utils';
 import type { Employee } from '../../types';
+import {
+  extractInviteTokenFromLocation,
+  normalizeInviteToken,
+  type InvitationErrorReason,
+} from '../../lib/inviteToken';
 
 const schema = z.object({
   name: z.string().min(2, 'Full name is required'),
@@ -37,14 +42,49 @@ function employeeDisplayName(e: Employee) {
   return `${e.firstName} ${e.lastName}`.trim() || e.employeeId;
 }
 
+const INVITE_ERROR_COPY: Record<InvitationErrorReason, { title: string; body: string }> = {
+  expired: {
+    title: 'Invitation link expired',
+    body: 'This invitation is no longer valid. Please ask your administrator to send a new one.',
+  },
+  invalid_token: {
+    title: 'Invalid invitation link',
+    body: 'The invitation link is malformed. Please check the link or ask your administrator for a new invite.',
+  },
+  not_found: {
+    title: 'Invitation not found',
+    body: 'We could not find this invitation. It may have been revoked or created on a different server.',
+  },
+  already_used: {
+    title: 'Invitation already used',
+    body: 'This invitation has already been used to create an account. Try signing in instead.',
+  },
+  network: {
+    title: 'Unable to verify invitation',
+    body: 'Could not reach the server to validate your invitation. Check your connection and try again.',
+  },
+  server_error: {
+    title: 'Server error',
+    body: 'Something went wrong while validating your invitation. Please try again shortly.',
+  },
+};
+
 export default function InviteSignupPage() {
-  const { token } = useParams<{ token: string }>();
+  const { token: routeToken } = useParams<{ token: string }>();
+  const resolvedToken = useMemo(() => {
+    if (routeToken) {
+      const normalized = normalizeInviteToken(routeToken);
+      if (normalized) return normalized;
+    }
+    return extractInviteTokenFromLocation(window.location);
+  }, [routeToken]);
   const navigate = useNavigate();
-  const { getInvitation, fetchInvitation, markUsed } = useInvitations();
+  const { fetchInvitation, markUsed } = useInvitations();
   const { signupEmployee, signupAccountant, isEmployeeRegistered } = useAuth();
   const { toast } = useNotifications();
 
   const [invite, setInvite] = useState<import('../../contexts/InvitationContext').Invitation | null>(null);
+  const [inviteError, setInviteError] = useState<InvitationErrorReason | null>(null);
   const [loading, setLoading] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -66,20 +106,28 @@ export default function InviteSignupPage() {
   const selectedEmpId = watch('employeeId');
 
   useEffect(() => {
-    if (!token) { setLoading(false); return; }
+    if (!resolvedToken) {
+      setInvite(null);
+      setInviteError('invalid_token');
+      setLoading(false);
+      return;
+    }
     let isMounted = true;
     (async () => {
-      let inv = getInvitation(token);
-      if (!inv) {
-        inv = await fetchInvitation(token);
-      }
+      const result = await fetchInvitation(resolvedToken);
       if (isMounted) {
-        setInvite(inv);
+        if (result.ok) {
+          setInvite(result.invitation);
+          setInviteError(null);
+        } else {
+          setInvite(null);
+          setInviteError(result.reason);
+        }
         setLoading(false);
       }
     })();
     return () => { isMounted = false; };
-  }, [token, getInvitation, fetchInvitation]);
+  }, [resolvedToken, fetchInvitation]);
 
   useEffect(() => {
     if (invite?.role === 'employee') {
@@ -117,7 +165,7 @@ export default function InviteSignupPage() {
   }, [availableEmployees, empSearch]);
 
   const onSubmit = async (data: FormData) => {
-    if (!invite || !token) return;
+    if (!invite || !resolvedToken) return;
     setSubmitting(true);
 
     try {
@@ -147,7 +195,7 @@ export default function InviteSignupPage() {
       }
 
       if (result.success) {
-        markUsed(token);
+        markUsed(resolvedToken);
         toast('success', 'Account Created Successfully', 'Welcome! Redirecting to your account...');
         setTimeout(() => {
           navigate('/dashboard', { replace: true });
@@ -185,26 +233,53 @@ export default function InviteSignupPage() {
 
   // ── Invalid / expired token ──────────────────────────────────────────────────
   if (!invite) {
+    const copy = INVITE_ERROR_COPY[inviteError ?? 'invalid_token'];
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full bg-white dark:bg-slate-900 rounded-3xl shadow-2xl p-10 text-center"
+          className="max-w-md w-full bg-white dark:bg-slate-900 rounded-3xl shadow-2xl p-8 text-center space-y-6"
         >
-          <XCircle size={56} className="text-rose-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">
-            Invalid or Expired Invite
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 mb-8">
-            This invitation link is no longer valid. Please ask your administrator to send a new one.
-          </p>
-          <button
-            onClick={() => navigate('/login')}
-            className="btn bg-primary-500 hover:bg-primary-600 text-white w-full py-3"
-          >
-            Go to Login
-          </button>
+          <XCircle size={56} className="text-rose-500 mx-auto" />
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">
+              {copy.title}
+            </h1>
+            <p className="text-slate-500 dark:text-slate-400 text-sm">
+              {copy.body}
+            </p>
+          </div>
+
+          {/* Code input fallback */}
+          <div className="pt-2 text-left space-y-2.5">
+            <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              Enter 6-digit Invitation Code
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="e.g. 849201"
+                maxLength={64}
+                onChange={(e) => {
+                  const val = e.target.value.trim();
+                  if (val.length >= 6) {
+                    navigate(`/invite/${val.toLowerCase()}`);
+                  }
+                }}
+                className="input flex-1 font-mono tracking-wider font-semibold text-center"
+              />
+            </div>
+          </div>
+
+          <div className="pt-2 flex gap-3">
+            <button
+              onClick={() => navigate('/login')}
+              className="btn border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 w-full py-3"
+            >
+              Go to Login
+            </button>
+          </div>
         </motion.div>
       </div>
     );

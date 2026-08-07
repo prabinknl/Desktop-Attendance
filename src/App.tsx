@@ -7,18 +7,18 @@ import { DateSettingsProvider } from './contexts/DateSettingsContext';
 import { InvitationProvider } from './contexts/InvitationContext';
 import ProtectedRoute from './routes/ProtectedRoute';
 import AppShell from './components/layout/AppShell';
+import { isDesktopBuild } from './lib/appEnv';
 
-/** Electron loads the UI from file:// — HashRouter avoids blank pages on refresh.
+/** The desktop bundle uses relative asset URLs — HashRouter keeps the path at
+ *  "/" so deep links such as /invite/<token> still load their scripts.
  *  Hosted web builds keep BrowserRouter (pretty URLs + SPA rewrites). */
-const AppRouter =
-  typeof window !== 'undefined' && window.attendanceDesktop?.isElectron
-    ? HashRouter
-    : BrowserRouter;
+const AppRouter = isDesktopBuild ? HashRouter : BrowserRouter;
 
 // Auth pages
 import LoginPage from './pages/auth/LoginPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
 import InviteSignupPage from './pages/auth/InviteSignupPage';
+import ClientAdminSignupPage from './pages/auth/ClientAdminSignupPage';
 
 // App pages
 import DashboardEntry from './pages/dashboard/DashboardEntry';
@@ -76,6 +76,7 @@ export default function App() {
                   <Route path="/login" element={<LoginPage />} />
                   <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                   <Route path="/invite/:token" element={<InviteSignupPage />} />
+                  <Route path="/client-admin/signup" element={<ClientAdminSignupPage />} />
 
                   {/* Protected app routes */}
                   <Route element={<ProtectedRoute />}>
@@ -87,26 +88,26 @@ export default function App() {
                       <Route path="/profile" element={<ProfilePage />} />
 
                       {/* Accessible by admin, hr, account, dept_manager */}
-                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'account', 'dept_manager']} />}>
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'owner', 'hr', 'account', 'dept_manager']} />}>
                         <Route path="/attendance" element={<AttendancePage />} />
                         <Route path="/employees" element={<EmployeesPage />} />
                         <Route path="/employees/:employeeId/report" element={<EmployeeAttendanceReportPage />} />
                       </Route>
 
                       {/* Staff management routes - excluded for accountant */}
-                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'dept_manager']} />}>
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'owner', 'hr', 'dept_manager']} />}>
                         <Route path="/departments" element={<DepartmentsPage />} />
                         <Route path="/shifts" element={<ShiftsPage />} />
                         <Route path="/reports" element={<ReportsPage />} />
                       </Route>
 
-                      {/* Device settings - admin, hr & account */}
-                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr', 'account']} />}>
+                      {/* Device settings - admin, owner, hr & account */}
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'owner', 'hr', 'account']} />}>
                         <Route path="/device-settings" element={<DeviceSettingsRoute />} />
                       </Route>
 
-                      {/* App settings - admin & hr only */}
-                      <Route element={<ProtectedRoute allowedRoles={['admin', 'hr']} />}>
+                      {/* App settings - admin, owner & hr only */}
+                      <Route element={<ProtectedRoute allowedRoles={['admin', 'owner', 'hr']} />}>
                         <Route path="/settings" element={<SettingsPage />} />
                       </Route>
 

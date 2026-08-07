@@ -26,15 +26,6 @@ function parseCorsOrigins(): string[] | boolean {
   return origins.length > 0 ? [...new Set([...DEFAULT_CORS_ORIGINS, ...origins])] : DEFAULT_CORS_ORIGINS;
 }
 
-function getAppPublicUrl(): string {
-  const raw = (process.env.APP_PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
-  if (raw) return raw;
-  if ((process.env.NODE_ENV ?? 'development') === 'development') {
-    return 'http://127.0.0.1:3002';
-  }
-  return '';
-}
-
 export const env = {
   port: parseInt(process.env.PORT ?? '3001', 10),
   /**
@@ -62,24 +53,22 @@ export const env = {
   gatewaySecret: (process.env.GATEWAY_SECRET ?? '').trim(),
   /** Expected connector heartbeat interval (seconds). */
   connectorHeartbeatSeconds: Math.max(15, parseInt(process.env.CONNECTOR_HEARTBEAT_SECONDS ?? '30', 10)),
-  adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? 'appnep@pacenp.com').trim().toLowerCase(),
   /**
-   * Public origin invited users can reach, e.g. https://attendance.appnep.com.
-   * In development mode, defaults to http://127.0.0.1:3002 if APP_PUBLIC_URL is not set.
+   * The one-and-only admin email address.
+   * ADMIN_EMAIL is the canonical env var; ADMIN_SIGNUP_EMAIL is kept as a
+   * legacy alias for backward compatibility with existing deployments.
+   * Safe fallback: process.env.ADMIN_EMAIL || process.env.ADMIN_SIGNUP_EMAIL || 'appnep@pacenp.com'
    */
-  appPublicUrl: getAppPublicUrl(),
+  adminSignupEmail: (
+    process.env.ADMIN_EMAIL ||
+    process.env.ADMIN_SIGNUP_EMAIL ||
+    'appnep@pacenp.com'
+  ).trim().toLowerCase(),
   smtpHost: process.env.SMTP_HOST ?? '',
   smtpPort: parseInt(process.env.SMTP_PORT ?? '587', 10),
   smtpUser: process.env.SMTP_USER ?? '',
   smtpPass: process.env.SMTP_PASS ?? '',
+  smtpFrom: process.env.SMTP_FROM ?? '',
   insforgeBaseUrl: (process.env.INSFORGE_BASE_URL ?? '').trim(),
   insforgeApiKey: (process.env.INSFORGE_API_KEY ?? '').trim(),
-  smsProvider: (process.env.SMS_PROVIDER ?? '').trim().toLowerCase(),
-  smsDevMode: (process.env.SMS_DEV_MODE ?? '').trim().toLowerCase() === 'true',
-  twilioAccountSid: (process.env.TWILIO_ACCOUNT_SID ?? '').trim(),
-  twilioAuthToken: (process.env.TWILIO_AUTH_TOKEN ?? process.env.SMS_API_KEY ?? '').trim(),
-  twilioFromNumber: (process.env.TWILIO_FROM_NUMBER ?? process.env.SMS_FROM_NUMBER ?? process.env.SMS_SENDER_ID ?? '').trim(),
-  smsApiUrl: (process.env.SMS_API_URL ?? '').trim(),
-  smsApiKey: (process.env.SMS_API_KEY ?? '').trim(),
-  smsSenderId: (process.env.SMS_SENDER_ID ?? 'PACE').trim(),
 };

@@ -10,5 +10,6 @@
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*-DESKTOP-*.ts", "src/**/*-Bishnu-DeLL*.ts", "src/**/*.test.ts"]
 }

@@ -239,3 +239,22 @@ export function debounce<T extends (...args: unknown[]) => void>(fn: T, ms = 300
     timer = setTimeout(() => fn(...args), ms);
   };
 }
+
+// ─── Duration Label ──────────────────────────────────────────────────────────
+export function formatDurationLabel(days?: number): string {
+  if (days === undefined || days === null || days <= 0) return '0 Days';
+  if (days < 1) {
+    const hours = Math.round(days * 24 * 10) / 10;
+    if (hours < 1) {
+      const mins = Math.round(days * 24 * 60);
+      return `${mins} Mins`;
+    }
+    return hours === 1 ? '1 Hour' : `${hours} Hours`;
+  }
+  if (days === 1) return '1 Day';
+  if (days === 30) return '30 Days (1 Mo)';
+  if (days === 90) return '90 Days (3 Mo)';
+  if (days === 180) return '180 Days (6 Mo)';
+  if (days === 365) return '365 Days (1 Yr)';
+  return `${days} Days`;
+}

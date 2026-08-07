@@ -14,6 +14,7 @@ export default defineConfig({
     // On some Windows setups Vite defaults to ::1 only.
     host: '127.0.0.1',
     port: 3002,
+    open: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:3001',

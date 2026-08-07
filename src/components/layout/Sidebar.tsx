@@ -4,12 +4,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Clock, Users, Building2, CalendarOff,
   AlarmClock, BarChart3, Bell, Settings, User, LogOut,
-  ChevronLeft, ChevronRight, Cpu,
+  ChevronLeft, ChevronRight, Cpu, UserPlus, ArrowLeft,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useDeviceSyncAvailable } from '../../hooks/useDeviceSyncAvailable';
 import { cn, getInitials } from '../../lib/utils';
+import AddClientModal from '../AddClientModal';
 
 interface NavItem {
   label: string;
@@ -17,6 +18,15 @@ interface NavItem {
   path: string;
   badge?: number;
 }
+
+const ownerNavItems: NavItem[] = [
+  { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+];
+
+const ownerBottomItems: NavItem[] = [
+  { label: 'Device Settings', icon: Cpu, path: '/device-settings' },
+  { label: 'Profile', icon: User, path: '/profile' },
+];
 
 const staffNavItems: NavItem[] = [
   { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
@@ -63,21 +73,35 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
-  const { user, logout, hasRole } = useAuth();
+  const { user, logout, hasRole, isImpersonating, exitImpersonation } = useAuth();
   const { unreadCount } = useNotifications();
   const navigate = useNavigate();
   const { available: deviceSyncAvailable, loading: deviceProbeLoading } = useDeviceSyncAvailable();
+  const [inviteOpen, setInviteOpen] = useState(false);
+
+  const isOwner = hasRole('owner') || user?.role === 'owner';
   const isEmployee = hasRole('employee');
   const isAdmin = hasRole('admin');
   const isAccountant = hasRole('account') || user?.role === 'account';
-  const navItems = isEmployee ? employeeNavItems : isAccountant ? accountantNavItems : staffNavItems;
-  const allBottomItems = isEmployee ? employeeBottomItems : isAccountant ? accountantBottomItems : staffBottomItems;
 
-  // Admins and Accountants always see Device Settings regardless of the /health probe.
-  // Other staff see it only when the probe confirms deviceSyncEnabled.
-  // While the probe is still loading, keep Device Settings visible to
-  // prevent the flash-then-hide that the user reported.
-  const showDeviceSettings = isAdmin || isAccountant || deviceProbeLoading || deviceSyncAvailable;
+  const navItems = isOwner
+    ? ownerNavItems
+    : isEmployee
+      ? employeeNavItems
+      : isAccountant
+        ? accountantNavItems
+        : staffNavItems;
+
+  const allBottomItems = isOwner
+    ? ownerBottomItems
+    : isEmployee
+      ? employeeBottomItems
+      : isAccountant
+        ? accountantBottomItems
+        : staffBottomItems;
+
+  // Admins, Accountants, and Owners always see Device Settings regardless of the /health probe.
+  const showDeviceSettings = isAdmin || isAccountant || isOwner || deviceProbeLoading || deviceSyncAvailable;
   const bottomItems = showDeviceSettings
     ? allBottomItems
     : allBottomItems.filter((item) => item.path !== '/device-settings');
@@ -93,6 +117,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     account: 'bg-sky-500',
     dept_manager: 'bg-amber-500',
     employee: 'bg-emerald-500',
+    owner: 'bg-indigo-500',
   };
 
   const roleLabels: Record<string, string> = {
@@ -101,6 +126,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
     account: 'Accountant',
     dept_manager: 'Dept. Manager',
     employee: 'Employee',
+    owner: 'Owner',
   };
 
   return (
@@ -145,6 +171,37 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
       {/* ── Navigation ──────────────────────────── */}
       <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
+        {isImpersonating && (
+          <div className="mb-3 space-y-1">
+            {!collapsed && (
+              <div className="px-3 text-[10px] font-semibold tracking-wider text-slate-400 uppercase truncate">
+                Owner Viewing Mode
+              </div>
+            )}
+            <button
+              onClick={exitImpersonation}
+              title={collapsed ? 'Back to Owner Dashboard' : undefined}
+              className={cn(
+                'sidebar-item w-full text-indigo-600 dark:text-indigo-400 bg-indigo-50/80 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 font-semibold border border-indigo-200/60 dark:border-indigo-800/40 transition-all cursor-pointer',
+                collapsed && 'justify-center px-2'
+              )}
+            >
+              <ArrowLeft size={18} className="flex-shrink-0 text-indigo-600 dark:text-indigo-400" />
+              <AnimatePresence>
+                {!collapsed && (
+                  <motion.span
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex-1 whitespace-nowrap text-xs truncate"
+                  >
+                    Back to Owner Dashboard
+                  </motion.span>
+                )}
+              </AnimatePresence>
+            </button>
+          </div>
+        )}
         {navItems.map(item => {
           const badge = item.label === 'Notifications' ? unreadCount : undefined;
           return (
@@ -180,6 +237,31 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
             </NavLink>
           );
         })}
+
+        {isOwner && (
+          <button
+            onClick={() => setInviteOpen(true)}
+            title={collapsed ? 'Add Clients' : undefined}
+            className={cn(
+              'sidebar-item w-full text-indigo-600 dark:text-indigo-400 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 font-semibold border border-indigo-100 dark:border-indigo-900/40 transition-all shadow-sm',
+              collapsed && 'justify-center px-2'
+            )}
+          >
+            <UserPlus size={18} className="flex-shrink-0 text-indigo-600 dark:text-indigo-400" />
+            <AnimatePresence>
+              {!collapsed && (
+                <motion.span
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="flex-1 whitespace-nowrap text-left font-semibold"
+                >
+                  Add Clients
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </button>
+        )}
       </nav>
 
       {/* ── Bottom items ─────────────────────────── */}
@@ -273,6 +355,9 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
           )}
         </AnimatePresence>
       </div>
+
+      {/* ── Add Client Modal for Owner ───────────────── */}
+      <AddClientModal open={inviteOpen} onClose={() => setInviteOpen(false)} />
     </motion.aside>
   );
 }

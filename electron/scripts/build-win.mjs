@@ -16,7 +16,7 @@ const args = process.argv.slice(2);
 const dirMode = args.includes('--dir');
 
 const preferredOut = path.join(root, 'release');
-const fallbackOut = path.join(os.homedir(), 'AppData', 'Local', 'AttendanceDesktop', 'release');
+const fallbackOut = path.join('C:', 'temp', 'AttendanceDesktop-release');
 
 function canWrite(dir) {
   try {
@@ -30,32 +30,46 @@ function canWrite(dir) {
   }
 }
 
+function tryKillStaleProcesses() {
+  if (process.platform !== 'win32') return;
+  try {
+    spawnSync('taskkill', ['/F', '/IM', 'Attendance.exe'], { stdio: 'ignore' });
+  } catch {
+    /* ignore */
+  }
+}
+
 function tryCleanWinUnpacked(dir) {
   for (const name of ['win-unpacked', 'win-unpacked.tmp']) {
     const target = path.join(dir, name);
     if (!fs.existsSync(target)) continue;
     try {
-      fs.rmSync(target, { recursive: true, force: true });
+      fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
     } catch {
-      return false;
+      if (process.platform === 'win32') {
+        spawnSync('cmd.exe', ['/c', 'rmdir', '/s', '/q', `"${target}"`], { stdio: 'ignore' });
+      }
     }
+    if (fs.existsSync(target)) return false;
   }
   return true;
 }
+
+tryKillStaleProcesses();
 
 const isOneDrive = /onedrive/i.test(root);
 let outDir = !isOneDrive && canWrite(preferredOut) ? preferredOut : fallbackOut;
 fs.mkdirSync(outDir, { recursive: true });
 
-if (outDir === preferredOut && !tryCleanWinUnpacked(outDir)) {
-  console.warn(
-    '[electron:build-win] release/win-unpacked is locked (OneDrive/AV); using LocalAppData fallback',
-  );
-  outDir = fallbackOut;
-  fs.mkdirSync(outDir, { recursive: true });
-  tryCleanWinUnpacked(outDir);
-} else if (outDir === fallbackOut) {
-  tryCleanWinUnpacked(outDir);
+if (!tryCleanWinUnpacked(outDir)) {
+  tryKillStaleProcesses();
+  // Brief delay to allow OS file handles to release
+  spawnSync('powershell.exe', ['-Command', 'Start-Sleep -Milliseconds 1000'], { stdio: 'ignore' });
+  if (!tryCleanWinUnpacked(outDir)) {
+    outDir = path.join(os.tmpdir(), `AttendanceDesktop-build-${Date.now()}`);
+    fs.mkdirSync(outDir, { recursive: true });
+    console.warn(`[electron:build-win] Previous build folder was locked; using clean target: ${outDir}`);
+  }
 }
 
 console.log(`[electron:build-win] output -> ${outDir}`);
@@ -101,6 +115,24 @@ if (!fs.existsSync(packagedExpress)) {
     `[electron:build-win] Packaged API missing express at ${packagedExpress}. afterPack failed.`,
   );
   process.exit(1);
+}
+
+// Copy built artifacts back to project release directory if outDir was fallback
+if (outDir !== preferredOut) {
+  fs.mkdirSync(preferredOut, { recursive: true });
+  try {
+    for (const item of fs.readdirSync(outDir)) {
+      if (item === 'win-unpacked' || item === 'win-unpacked.tmp') continue;
+      const src = path.join(outDir, item);
+      const dest = path.join(preferredOut, item);
+      if (fs.statSync(src).isFile()) {
+        fs.copyFileSync(src, dest);
+      }
+    }
+    console.log(`[electron:build-win] Copied installer artifacts to ${preferredOut}`);
+  } catch (err) {
+    console.warn(`[electron:build-win] Note: Could not copy installer to project release folder: ${err.message}`);
+  }
 }
 
 console.log(`[electron:build-win] Done. Installer folder: ${outDir}`);
