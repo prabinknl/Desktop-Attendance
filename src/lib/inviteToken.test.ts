@@ -22,6 +22,7 @@ describe('inviteToken', () => {
       extractInviteTokenFromLocation({
         hash: `#/invite/${SAMPLE_TOKEN}`,
         pathname: '/',
+        search: '',
       }),
     ).toBe(SAMPLE_TOKEN);
   });
@@ -31,6 +32,7 @@ describe('inviteToken', () => {
       extractInviteTokenFromLocation({
         hash: '',
         pathname: `/invite/${SAMPLE_TOKEN}`,
+        search: '',
       }),
     ).toBe(SAMPLE_TOKEN);
   });
