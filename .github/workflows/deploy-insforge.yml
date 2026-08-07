@@ -28,31 +28,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Authenticate InsForge CLI
+      - name: Deploy to InsForge
         env:
           INSFORGE_USER_API_KEY: ${{ secrets.INSFORGE_USER_API_KEY }}
         run: |
           if [ -z "$INSFORGE_USER_API_KEY" ]; then
-            echo "::error::Missing GitHub secret INSFORGE_USER_API_KEY (create a uak_ key in InsForge → Profile → API Keys)."
-            exit 1
+            echo "::warning::Missing GitHub secret INSFORGE_USER_API_KEY. Skipping InsForge auto-deployment."
+            exit 0
           fi
           npx @insforge/cli@latest login --user-api-key "$INSFORGE_USER_API_KEY" --json
-
-      - name: Link InsForge project
-        run: |
           npx @insforge/cli@latest link \
             --project-id 37e52add-2bac-45c2-a61a-ff17fcfd7b78 \
             --org-id 1306d016-38f1-49ef-a38e-6c77e1f41db0 \
             -y
-
-      - name: Deploy to InsForge
-        run: |
           if [ -n "${{ secrets.VITE_API_BASE_URL }}" ]; then
             npx @insforge/cli@latest deployments deploy . -y \
               --env "{\"VITE_API_BASE_URL\":\"${{ secrets.VITE_API_BASE_URL }}\"}"
           else
             npx @insforge/cli@latest deployments deploy . -y
           fi
-
-      - name: Deployment URL
-        run: echo "Live at https://ahu7znxh.insforge.site"
+          echo "Live at https://ahu7znxh.insforge.site"
