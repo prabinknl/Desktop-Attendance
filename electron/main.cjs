@@ -910,9 +910,19 @@ ipcMain.handle('desktop:get-api-base-url', () => {
 
 ipcMain.handle('desktop:get-local-api-origin', () => getLocalApiOrigin());
 
+/** @type {boolean} */
+let updateDownloadedPromptOpen = false;
+
 function setupAutoUpdater() {
+  // Never run updater wiring in unpackaged/dev sessions.
+  if (!app.isPackaged) {
+    appendStartupLog('[AutoUpdater] Skipping setup (app is not packaged)');
+    return;
+  }
+
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowDowngrade = false;
 
   autoUpdater.setFeedURL({
     provider: 'github',
@@ -921,9 +931,14 @@ function setupAutoUpdater() {
   });
 
   const sendStatus = (status, data = {}) => {
-    appendStartupLog(`[AutoUpdater] ${status} ${JSON.stringify(data)}`);
+    // Log status keys only — never tokens, passwords, or full error stacks with secrets.
+    const safe = { ...data };
+    if (typeof safe.error === 'string') {
+      safe.error = safe.error.replace(/(gh[pousr]_|github_pat_|token)[^\s]+/gi, '[redacted]');
+    }
+    appendStartupLog(`[AutoUpdater] ${status} ${JSON.stringify(safe)}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('updater:status', { status, ...data });
+      mainWindow.webContents.send('updater:status', { status, ...safe });
     }
   };
 
@@ -935,7 +950,6 @@ function setupAutoUpdater() {
     sendStatus('update-available', {
       version: info?.version,
       releaseDate: info?.releaseDate,
-      releaseNotes: info?.releaseNotes,
     });
   });
 
@@ -965,16 +979,69 @@ function setupAutoUpdater() {
       version: info?.version,
       releaseDate: info?.releaseDate,
     });
+    void promptInstallUpdate(info?.version);
   });
 }
 
+/**
+ * Native restart prompt after a successful download.
+ * "Later" keeps the app running; autoInstallOnAppQuit installs on next quit.
+ */
+async function promptInstallUpdate(version) {
+  if (updateDownloadedPromptOpen) return;
+  updateDownloadedPromptOpen = true;
+  try {
+    const detail = version ? `Version ${version} is ready.` : undefined;
+    const options = {
+      type: 'info',
+      title: 'Update Ready',
+      message:
+        'A new version of Attendance Desktop has been downloaded. Restart the application to install the update.',
+      detail,
+      buttons: ['Restart and Update', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const { response } =
+      mainWindow && !mainWindow.isDestroyed()
+        ? await dialog.showMessageBox(mainWindow, options)
+        : await dialog.showMessageBox(options);
+    if (response === 0) {
+      appendStartupLog('[AutoUpdater] User chose Restart and Update');
+      setImmediate(() => {
+        try {
+          autoUpdater.quitAndInstall(false, true);
+        } catch (err) {
+          appendStartupLog(
+            `[AutoUpdater quitAndInstall error] ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      });
+    } else {
+      appendStartupLog(
+        '[AutoUpdater] User chose Later — update will install on quit when possible',
+      );
+    }
+  } catch (err) {
+    appendStartupLog(
+      `[AutoUpdater prompt error] ${err instanceof Error ? err.message : String(err)}`,
+    );
+  } finally {
+    updateDownloadedPromptOpen = false;
+  }
+}
+
 function checkAutoUpdateOnLaunch() {
-  if (isDev) {
-    appendStartupLog('[AutoUpdater] Skipping auto update check in development mode');
+  if (!app.isPackaged) {
+    appendStartupLog('[AutoUpdater] Skipping auto update check (not packaged / development)');
     return;
   }
   try {
-    appendStartupLog('[AutoUpdater] Checking for updates automatically on app launch...');
+    appendStartupLog(
+      `[AutoUpdater] Checking GitHub Releases (current version ${app.getVersion()})...`,
+    );
+    // Non-blocking: network failures must never prevent the app from opening.
     autoUpdater.checkForUpdatesAndNotify().catch((err) => {
       appendStartupLog(`[AutoUpdater check error] ${err?.message || String(err)}`);
     });
@@ -986,7 +1053,7 @@ function checkAutoUpdateOnLaunch() {
 ipcMain.handle('desktop:get-app-version', () => app.getVersion());
 
 ipcMain.handle('desktop:check-for-updates', async () => {
-  if (isDev) {
+  if (!app.isPackaged) {
     return { status: 'dev-mode', version: app.getVersion(), isDev: true };
   }
   try {
@@ -998,7 +1065,15 @@ ipcMain.handle('desktop:check-for-updates', async () => {
 });
 
 ipcMain.handle('desktop:restart-and-install', () => {
-  autoUpdater.quitAndInstall(false, true);
+  if (!app.isPackaged) {
+    return { status: 'dev-mode' };
+  }
+  try {
+    autoUpdater.quitAndInstall(false, true);
+    return { status: 'installing' };
+  } catch (err) {
+    return { status: 'error', error: err instanceof Error ? err.message : String(err) };
+  }
 });
 
 async function bootstrap() {
