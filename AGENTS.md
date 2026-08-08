@@ -135,3 +135,21 @@ Payments currently has TypeScript SDK docs only. Use the Payments API reference 
 - Storage: Upload files to buckets, store URLs in database
 - AI integrations should call OpenRouter directly with `baseURL: "https://openrouter.ai/api/v1"` and a server-side `OPENROUTER_API_KEY`
 - **EXTRA IMPORTANT**: Use Tailwind CSS 3.4 (do not upgrade to v4). Lock these dependencies in `package.json`
+
+## Cursor Cloud specific instructions
+
+This repo is the **PACE Attendance Management System** (see `README.md`), not a generic InsForge template. It has two dev services plus optional extras:
+
+- **Frontend** — Vite + React on `http://127.0.0.1:3002`.
+- **Backend API** — Express + PostgreSQL on `http://127.0.0.1:3001` (`server/`).
+- Optional/not needed for normal dev: the Hikvision device **gateway** (`gateway/`) and the **Electron** Windows desktop wrapper (`electron/`, `dist`/`electron:*` scripts — Windows-only packaging).
+
+Run everything with `npm run dev:all` (starts API via `tsx watch` + Vite concurrently). Lint/test/build commands live in `package.json`: `npm run lint` (oxlint), `npm test` (vitest, both `src/` and `server/src/`), `npm run build` (frontend) and `npm run build:server`.
+
+Non-obvious setup/run caveats:
+
+- **PostgreSQL must be started manually** — it is installed but not auto-started on VM boot. Run `sudo pg_ctlcluster 16 main start` before `npm run dev:all` (check with `pg_lsclusters`). The dev DB is `attendance_db`, user `postgres`, password `password` (matches the default `DATABASE_URL`). The API applies all `server/src/db/migrations/*.sql` automatically on startup.
+- **The API boots even without a DB.** If PostgreSQL is unreachable it logs a warning and falls back to an in-memory store (`USE_MEMORY_STORE`-style behavior), so the app still runs — start Postgres if you need persistence.
+- **`server/.env` is gitignored** and must exist for real DB + config. Copy `server/.env.example` and set `DATABASE_URL=postgresql://postgres:password@localhost:5432/attendance_db`, a 64-hex `ENCRYPTION_KEY`, and `DEVICE_SYNC_ENABLED=false` (this cloud VM has no LAN Hikvision device, so device polling/auto-reconnect scans are pointless).
+- **Login in dev uses local demo accounts.** The frontend calls the server first; with an empty DB that returns 401 and the UI falls back to `localStorage` demo users seeded in `src/data/mockData.ts` / `src/contexts/AuthContext.tsx`. Easiest login: **Accountant** portal with `hr@company.com` / `hr123`. Admin/Owner sign-in requires an emailed verification code (needs real `SMTP_*`), so avoid it unless SMTP is configured.
+- `npm run dev` uses `--open`; the browser auto-open is harmless/no-op in headless VMs.
