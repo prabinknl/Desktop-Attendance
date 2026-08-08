@@ -368,6 +368,9 @@ export async function syncUser(req: Request, res: Response) {
       timezone: user.timezone,
       employeeId: user.employeeId,
       departmentId: user.departmentId,
+      clientId: user.clientId,
+      planType: user.planType,
+      accessExpiresAt: user.accessExpiresAt,
     });
     return res.json({ success: true, data: saved });
   } catch (err) {
@@ -724,10 +727,9 @@ export async function signupClientAdmin(req: Request, res: Response) {
       role: 'admin', // Admin of the invited client organization
       password,
       phone: inv.phone || undefined,
-      client_id: inv.client_id || `client-org-${Date.now()}`,
-      plan_type: inv.plan_type || 'free',
-      access_expires_at: inv.access_expires_at || inv.expires_at,
-      phone_verified: true,
+      clientId: inv.client_id || `client-org-${Date.now()}`,
+      planType: (inv.plan_type === 'paid' ? 'paid' : 'free') as 'free' | 'paid',
+      accessExpiresAt: inv.access_expires_at || inv.expires_at,
     };
 
     const savedUser = await UserModel.upsert(userObj);

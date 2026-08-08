@@ -32,10 +32,12 @@ function canWrite(dir) {
 
 function tryKillStaleProcesses() {
   if (process.platform !== 'win32') return;
-  try {
-    spawnSync('taskkill', ['/F', '/IM', 'Attendance.exe'], { stdio: 'ignore' });
-  } catch {
-    /* ignore */
+  for (const image of ['Attendance Desktop.exe', 'Attendance.exe']) {
+    try {
+      spawnSync('taskkill', ['/F', '/IM', image], { stdio: 'ignore' });
+    } catch {
+      /* ignore */
+    }
   }
 }
 

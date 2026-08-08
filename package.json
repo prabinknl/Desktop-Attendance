@@ -102,8 +102,8 @@
   "license": "ISC",
   "build": {
     "appId": "com.attendance.desktop",
-    "productName": "Attendance",
-    "copyright": "Copyright © Attendance",
+    "productName": "Attendance Desktop",
+    "copyright": "Copyright © Attendance Desktop",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -144,16 +144,19 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Attendance Desktop Setup ${version}.${ext}",
-      "executableName": "Attendance"
+      "artifactName": "Attendance.Desktop.Setup.${ext}",
+      "executableName": "Attendance Desktop"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Attendance",
-      "uninstallDisplayName": "Attendance",
+      "shortcutName": "Attendance Desktop",
+      "uninstallDisplayName": "Attendance Desktop",
+      "runAfterFinish": true,
       "deleteAppDataOnUninstall": false
     },
     "asar": true,

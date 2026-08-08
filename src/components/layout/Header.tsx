@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Bell, Sun, Moon, Menu, X, ChevronDown, User as UserIcon, Building2 } from 'lucide-react';
+import { Search, Bell, Sun, Moon, Menu, X, ChevronDown, User as UserIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -28,6 +28,60 @@ const notifIconMap: Record<string, string> = {
   attendance_deleted: '🗑️',
 };
 
+function formatPlanExpiry(iso?: string): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function resolveAdminExpiryMs(user: {
+  accessExpiresAt?: string;
+  createdAt?: string;
+  durationDays?: number;
+  freeDays?: number;
+  paidDays?: number;
+  planType?: 'free' | 'paid';
+}): number | null {
+  if (user.accessExpiresAt) {
+    const t = new Date(user.accessExpiresAt).getTime();
+    return Number.isNaN(t) ? null : t;
+  }
+  const duration =
+    user.durationDays ??
+    (user.planType === 'paid' ? user.paidDays : user.freeDays);
+  if (!duration || duration <= 0) return null;
+  const start = user.createdAt ? new Date(user.createdAt).getTime() : Date.now();
+  if (Number.isNaN(start)) return null;
+  return start + duration * 24 * 60 * 60 * 1000;
+}
+
+function getRemainingParts(expiryMs: number, nowMs: number) {
+  const diff = expiryMs - nowMs;
+  if (diff <= 0) {
+    return { expired: true as const, days: 0, hours: 0, minutes: 0, label: 'Expired' };
+  }
+  const totalMinutes = Math.floor(diff / 60_000);
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const minutes = totalMinutes % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0 || days > 0) parts.push(`${hours}h`);
+  parts.push(`${minutes}m`);
+  return {
+    expired: false as const,
+    days,
+    hours,
+    minutes,
+    label: parts.join(' '),
+  };
+}
+
 export default function Header({ sidebarCollapsed, onMobileMenuToggle }: HeaderProps) {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -40,11 +94,31 @@ export default function Header({ sidebarCollapsed, onMobileMenuToggle }: HeaderP
   const [searchQuery, setSearchQuery] = useState('');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const notifRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Keep remaining time fresh for the admin plan badge
+  useEffect(() => {
+    if (user?.role !== 'admin') return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, [user?.role]);
+
+  const adminPlanBadge = useMemo(() => {
+    if (user?.role !== 'admin') return null;
+    const planType = user.planType === 'paid' ? 'paid' : 'free';
+    const expiryMs = resolveAdminExpiryMs(user);
+    const expiryLabel = expiryMs
+      ? formatPlanExpiry(new Date(expiryMs).toISOString())
+      : formatPlanExpiry(user.accessExpiresAt);
+    const remaining = expiryMs ? getRemainingParts(expiryMs, nowMs) : null;
+    const expired = remaining?.expired ?? false;
+    return { planType, expiryLabel, expired, remaining };
+  }, [user, nowMs]);
 
   // Load employees and departments for global search
   useEffect(() => {
@@ -241,7 +315,58 @@ export default function Header({ sidebarCollapsed, onMobileMenuToggle }: HeaderP
         </AnimatePresence>
       </div>
 
-      <div className="flex items-center gap-1 ml-auto">
+      <div className="flex items-center gap-2 ml-auto">
+        {/* Admin Free / Paid plan badge */}
+        {adminPlanBadge && (
+          <div
+            className={cn(
+              'hidden sm:flex flex-col items-end justify-center px-3 py-1.5 rounded-xl border text-right min-w-[10.5rem]',
+              adminPlanBadge.expired
+                ? 'bg-rose-50 border-rose-200 dark:bg-rose-950/40 dark:border-rose-800'
+                : adminPlanBadge.planType === 'paid'
+                  ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-800'
+                  : 'bg-sky-50 border-sky-200 dark:bg-sky-950/30 dark:border-sky-800',
+            )}
+            title={
+              adminPlanBadge.remaining
+                ? `${adminPlanBadge.planType === 'paid' ? 'Paid' : 'Free'} account · ${adminPlanBadge.remaining.label}${adminPlanBadge.expiryLabel ? ` · ends ${adminPlanBadge.expiryLabel}` : ''}`
+                : `${adminPlanBadge.planType === 'paid' ? 'Paid' : 'Free'} account`
+            }
+          >
+            <span
+              className={cn(
+                'text-[11px] font-bold leading-none uppercase tracking-wide',
+                adminPlanBadge.expired
+                  ? 'text-rose-600 dark:text-rose-400'
+                  : adminPlanBadge.planType === 'paid'
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-sky-700 dark:text-sky-400',
+              )}
+            >
+              {adminPlanBadge.planType === 'paid' ? 'Paid account' : 'Free account'}
+            </span>
+            <span
+              className={cn(
+                'text-[11px] font-semibold leading-none mt-1.5 tabular-nums',
+                adminPlanBadge.expired
+                  ? 'text-rose-500 dark:text-rose-400'
+                  : 'text-slate-700 dark:text-slate-200',
+              )}
+            >
+              {adminPlanBadge.remaining
+                ? adminPlanBadge.expired
+                  ? 'Expired'
+                  : `${adminPlanBadge.remaining.days}d ${adminPlanBadge.remaining.hours}h ${adminPlanBadge.remaining.minutes}m`
+                : 'No expiry date'}
+            </span>
+            {adminPlanBadge.expiryLabel && !adminPlanBadge.expired && (
+              <span className="text-[10px] font-medium leading-none mt-1 text-slate-500 dark:text-slate-400">
+                Ends {adminPlanBadge.expiryLabel}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Theme toggle */}
         <button
           onClick={toggleTheme}

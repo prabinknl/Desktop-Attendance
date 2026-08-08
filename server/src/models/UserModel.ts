@@ -11,11 +11,27 @@ export interface UserRow {
   timezone: string | null;
   employee_id: string | null;
   department_id: string | null;
+  client_id?: string | null;
+  plan_type?: string | null;
+  access_expires_at?: string | null;
   created_at: string;
   updated_at: string;
 }
 
+function toIso(value: string | Date | null | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return undefined;
+    return d.toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
 function rowToAppUser(row: UserRow) {
+  const planRaw = (row.plan_type ?? '').toLowerCase();
+  const planType = planRaw === 'paid' ? 'paid' : planRaw === 'free' ? 'free' : undefined;
   return {
     id: row.id,
     name: row.name,
@@ -27,6 +43,10 @@ function rowToAppUser(row: UserRow) {
     timezone: row.timezone ?? undefined,
     employeeId: row.employee_id ?? undefined,
     departmentId: row.department_id ?? undefined,
+    clientId: row.client_id ?? undefined,
+    planType,
+    accessExpiresAt: toIso(row.access_expires_at),
+    createdAt: toIso(row.created_at),
   };
 }
 
@@ -91,9 +111,19 @@ export const UserModel = {
     timezone?: string;
     employeeId?: string;
     departmentId?: string;
+    clientId?: string;
+    client_id?: string;
+    planType?: 'free' | 'paid';
+    plan_type?: 'free' | 'paid' | string;
+    accessExpiresAt?: string;
+    access_expires_at?: string;
   }) {
     const now = new Date().toISOString();
     const emailLower = user.email.trim().toLowerCase();
+    const clientId = user.clientId ?? user.client_id ?? null;
+    const planRaw = String(user.planType ?? user.plan_type ?? '').toLowerCase();
+    const planType = planRaw === 'paid' ? 'paid' : planRaw === 'free' ? 'free' : null;
+    const accessExpiresAt = user.accessExpiresAt ?? user.access_expires_at ?? null;
 
     // If role is admin, replace any existing admin row to enforce 1 admin total
     if (user.role === 'admin') {
@@ -104,9 +134,11 @@ export const UserModel = {
 
     const res = await query<UserRow>(
       `INSERT INTO app_users (
-        id, name, email, role, password, avatar, phone, timezone, employee_id, department_id, created_at, updated_at
+        id, name, email, role, password, avatar, phone, timezone, employee_id, department_id,
+        client_id, plan_type, access_expires_at, created_at, updated_at
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13, $14, $14
       )
       ON CONFLICT (email)
       DO UPDATE SET
@@ -118,6 +150,9 @@ export const UserModel = {
         timezone = COALESCE(EXCLUDED.timezone, app_users.timezone),
         employee_id = COALESCE(EXCLUDED.employee_id, app_users.employee_id),
         department_id = COALESCE(EXCLUDED.department_id, app_users.department_id),
+        client_id = COALESCE(EXCLUDED.client_id, app_users.client_id),
+        plan_type = COALESCE(EXCLUDED.plan_type, app_users.plan_type),
+        access_expires_at = COALESCE(EXCLUDED.access_expires_at, app_users.access_expires_at),
         updated_at = EXCLUDED.updated_at
       RETURNING *`,
       [
@@ -131,6 +166,9 @@ export const UserModel = {
         user.timezone ?? null,
         user.employeeId ?? null,
         user.departmentId ?? null,
+        clientId,
+        planType,
+        accessExpiresAt,
         now,
       ]
     );

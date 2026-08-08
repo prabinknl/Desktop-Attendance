@@ -539,7 +539,7 @@ function execFileAsync(file, args) {
 }
 
 /**
- * If port is held by a previous Attendance.exe (ELECTRON_RUN_AS_NODE) child,
+ * If port is held by a previous Attendance Desktop.exe (ELECTRON_RUN_AS_NODE) child,
  * terminate only that PID so we can reclaim DEFAULT_API_PORT.
  */
 async function tryKillStaleAttendanceApiOnPort(port) {
@@ -567,7 +567,7 @@ async function tryKillStaleAttendanceApiOnPort(port) {
     ]);
     const exePath = (wmic.stdout.match(/ExecutablePath=(.+)/i) || [])[1]?.trim() || '';
     const isAttendance =
-      /Attendance\.exe$/i.test(exePath) ||
+      /Attendance( Desktop)?\.exe$/i.test(exePath) ||
       exePath.toLowerCase() === String(process.execPath).toLowerCase();
     if (!isAttendance) {
       appendStartupLog(

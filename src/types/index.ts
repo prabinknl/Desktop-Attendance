@@ -67,6 +67,9 @@ export interface User {
   freeDays?: number;
   paidDays?: number;
   durationDays?: number;
+  /** ISO timestamp when Free/Paid access ends (client admin subscriptions). */
+  accessExpiresAt?: string;
+  createdAt?: string;
   appStatus?: 'running' | 'paused';
   status?: 'active' | 'pending' | 'paused' | 'deleted';
   deletedAt?: string;

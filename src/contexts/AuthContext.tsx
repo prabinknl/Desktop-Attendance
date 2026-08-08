@@ -435,6 +435,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (parentClient && parentClient.status === 'deleted') {
           isParentClientDeleted = true;
         }
+        // Inherit Free/Paid + expiry from the organization client record when missing
+        if (found.role === 'admin' && parentClient) {
+          found = {
+            ...found,
+            planType: found.planType ?? parentClient.planType ?? 'free',
+            freeDays: found.freeDays ?? parentClient.freeDays,
+            paidDays: found.paidDays ?? parentClient.paidDays,
+            durationDays: found.durationDays ?? parentClient.durationDays,
+            accessExpiresAt: found.accessExpiresAt ?? parentClient.accessExpiresAt,
+            companyName: found.companyName ?? parentClient.companyName,
+            clientId: found.clientId ?? parentClient.id,
+          };
+        }
+      }
+
+      if (found.role === 'admin' && !found.planType) {
+        found = { ...found, planType: 'free' };
       }
 
       if (isDeletedAccount || isParentClientDeleted) {
@@ -766,6 +783,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         (u) => u.email.toLowerCase() === client.email.toLowerCase() || (client.id && u.id === client.id)
       );
 
+      const durationDays = existing?.durationDays ?? 30;
+      const accessExpiresAt =
+        existing?.accessExpiresAt ||
+        (durationDays > 0
+          ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString()
+          : undefined);
+
       const clientAdminUser: User = {
         id: existing?.id || client.id || `u-client-${Date.now()}`,
         name: client.companyName || client.name || existing?.name || 'Client Admin',
@@ -777,7 +801,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         planType: existing?.planType ?? 'free',
         freeDays: existing?.freeDays ?? 30,
         paidDays: existing?.paidDays ?? 365,
-        durationDays: existing?.durationDays ?? 30,
+        durationDays,
+        accessExpiresAt,
         appStatus: existing?.appStatus ?? 'running',
         status: (client.status || existing?.status || 'active') as User['status'],
         deletedAt: existing?.deletedAt,

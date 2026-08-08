@@ -240,6 +240,12 @@ export default function LoginPage() {
 
   const chooseAuthAction = (action: AuthAction) => {
     if (!selectedRole) return;
+    // Admin accounts are login-only — no public sign-up on this page.
+    if (selectedRole === 'admin' && action === 'signup') {
+      setAuthAction('login');
+      setMode('login');
+      return;
+    }
     setAuthAction(action);
     setShowPassword(false);
 
@@ -249,18 +255,6 @@ export default function LoginPage() {
     }
 
     // Sign up for selected role
-    if (selectedRole === 'admin') {
-      setMode('signup-admin');
-      closeOtpModal();
-      setCreatedAdmin(null);
-      adminForm.reset({
-        email: ALLOWED_ADMIN_EMAIL,
-        name: '',
-        password: '',
-        confirmPassword: '',
-      });
-      return;
-    }
     if (selectedRole === 'employee') {
       setMode('signup-employee');
       setSelectedEmployeeId(null);
@@ -521,20 +515,19 @@ export default function LoginPage() {
   const credentialsAccount = createdAdmin ?? createdAccountant;
 
   const title =
-    mode === 'signup-admin' ? 'Create admin account'
-      : mode === 'signup-employee' ? 'Create employee account'
-        : mode === 'signup-accountant' ? 'Create accountant account'
-          : mode === 'admin-credentials' ? 'Account ready'
-            : selectedRole
-              ? `Welcome, ${portalRoles.find((r) => r.id === selectedRole)?.label ?? ''}`
-              : 'Welcome back 👋';
+    mode === 'signup-employee' ? 'Create employee account'
+      : mode === 'signup-accountant' ? 'Create accountant account'
+        : mode === 'admin-credentials' ? 'Account ready'
+          : selectedRole
+            ? `Welcome, ${portalRoles.find((r) => r.id === selectedRole)?.label ?? ''}`
+            : 'Welcome back 👋';
 
   const subtitle =
-    mode === 'signup-admin'
-      ? `Only ${ALLOWED_ADMIN_EMAIL} can register as admin.`
-      : (mode === 'signup-employee' || mode === 'signup-accountant')
-        ? 'Invitation link required from your Administrator.'
-        : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
+    (mode === 'signup-employee' || mode === 'signup-accountant')
+      ? 'Invitation link required from your Administrator.'
+      : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
+        : selectedRole === 'admin'
+          ? 'Sign in to your admin account to continue'
           : selectedRole
             ? authAction === 'login'
               ? 'Sign in to your account to continue'
@@ -756,35 +749,43 @@ export default function LoginPage() {
             </form>
           )}
 
-          {/* Log in / Sign up — shown after a role is chosen */}
+          {/* Log in / Sign up — shown after a role is chosen (Admin is login-only) */}
           {selectedRole && selectedRole !== 'owner' && mode !== 'admin-credentials' && (
             <div className="mb-6">
-              <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
-                <button
-                  type="button"
-                  onClick={() => chooseAuthAction('login')}
-                  className={cn(
-                    'py-2.5 rounded-lg text-sm font-semibold transition-all',
-                    authAction === 'login'
-                      ? 'bg-primary-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700',
-                  )}
-                >
-                  Log in
-                </button>
-                <button
-                  type="button"
-                  onClick={() => chooseAuthAction('signup')}
-                  className={cn(
-                    'py-2.5 rounded-lg text-sm font-semibold transition-all',
-                    authAction === 'signup'
-                      ? 'bg-primary-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700',
-                  )}
-                >
-                  Sign up
-                </button>
-              </div>
+              {selectedRole === 'admin' ? (
+                <div className="p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
+                  <div className="py-2.5 rounded-lg text-sm font-semibold text-center bg-primary-600 text-white shadow-sm">
+                    Log in
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => chooseAuthAction('login')}
+                    className={cn(
+                      'py-2.5 rounded-lg text-sm font-semibold transition-all',
+                      authAction === 'login'
+                        ? 'bg-primary-600 text-white shadow-sm'
+                        : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700',
+                    )}
+                  >
+                    Log in
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => chooseAuthAction('signup')}
+                    className={cn(
+                      'py-2.5 rounded-lg text-sm font-semibold transition-all',
+                      authAction === 'signup'
+                        ? 'bg-primary-600 text-white shadow-sm'
+                        : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700',
+                    )}
+                  >
+                    Sign up
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
