@@ -1,0 +1,50 @@
+name: Deploy to InsForge
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: insforge-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy to InsForge
+        env:
+          INSFORGE_USER_API_KEY: ${{ secrets.INSFORGE_USER_API_KEY }}
+        run: |
+          if [ -z "$INSFORGE_USER_API_KEY" ]; then
+            echo "::warning::Missing GitHub secret INSFORGE_USER_API_KEY. Skipping InsForge auto-deployment."
+            exit 0
+          fi
+          npx @insforge/cli@latest login --user-api-key "$INSFORGE_USER_API_KEY" --json
+          npx @insforge/cli@latest link \
+            --project-id 37e52add-2bac-45c2-a61a-ff17fcfd7b78 \
+            --org-id 1306d016-38f1-49ef-a38e-6c77e1f41db0 \
+            -y
+          if [ -n "${{ secrets.VITE_API_BASE_URL }}" ]; then
+            npx @insforge/cli@latest deployments deploy . -y \
+              --env "{\"VITE_API_BASE_URL\":\"${{ secrets.VITE_API_BASE_URL }}\"}"
+          else
+            npx @insforge/cli@latest deployments deploy . -y
+          fi
+          echo "Live at https://ahu7znxh.insforge.site"
