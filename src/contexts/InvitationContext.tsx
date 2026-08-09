@@ -124,7 +124,27 @@ export function InvitationProvider({ children }: { children: ReactNode }) {
     const result = await authApi.getInvitation(token);
     if (result.ok) {
       cacheInvitation(result.invitation);
+      return result;
     }
+
+    // Fallback to local storage for offline / standalone mode or if server miss occurs
+    const norm = token.trim().toLowerCase();
+    const localInvites = loadInvitations();
+    const localMatch = localInvites.find(
+      (i) => i.token.trim().toLowerCase() === norm && !i.used && i.status !== 'deleted'
+    );
+    if (localMatch) {
+      const expiresAt = new Date(localMatch.expiresAt).getTime();
+      if (!Number.isNaN(expiresAt) && Date.now() > expiresAt) {
+        return {
+          ok: false,
+          reason: 'expired',
+          message: 'This invitation link has expired.',
+        };
+      }
+      return { ok: true, invitation: localMatch };
+    }
+
     return result;
   }, []);
 

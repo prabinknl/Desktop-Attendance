@@ -36,7 +36,11 @@ export const authApi = {
   },
 
   sendInviteEmail: async (input: { email: string; role: string; inviteLink?: string; token?: string; code?: string }) => {
-    const { data } = await apiClient.post<{ success: boolean; message?: string; emailSent?: boolean; inviteLink?: string; code?: string }>('/auth/admin/send-invite', input);
+    const { data } = await apiClient.post<{ success: boolean; message?: string; emailSent?: boolean; inviteLink?: string; code?: string }>(
+      '/auth/admin/send-invite',
+      input,
+      { validateStatus: (status) => status < 500 || status === 503 }
+    );
     return data;
   },
 

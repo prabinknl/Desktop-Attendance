@@ -202,13 +202,21 @@ export const memoryStore = {
   },
 
   getInvitation(token: string): InvitationRecord | null {
-    const inv = memoryInvitations.find((i) => i.token === token);
+    if (!token) return null;
+    const norm = token.trim().toLowerCase();
+    const inv = memoryInvitations.find(
+      (i) => (i.token && i.token.trim().toLowerCase() === norm) || (i.token_hash && i.token_hash.trim().toLowerCase() === norm)
+    );
     if (!inv) return null;
     return inv;
   },
 
   getInvitationByTokenHash(tokenHash: string): InvitationRecord | null {
-    const inv = memoryInvitations.find((i) => i.token_hash === tokenHash || i.token === tokenHash);
+    if (!tokenHash) return null;
+    const norm = tokenHash.trim().toLowerCase();
+    const inv = memoryInvitations.find(
+      (i) => (i.token_hash && i.token_hash.trim().toLowerCase() === norm) || (i.token && i.token.trim().toLowerCase() === norm)
+    );
     if (!inv) return null;
     return inv;
   },

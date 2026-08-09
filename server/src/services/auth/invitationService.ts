@@ -32,9 +32,10 @@ export function maskInviteToken(token: string): string {
 }
 
 export function normalizeInviteToken(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!/^[a-f0-9]{6,64}$/i.test(trimmed)) return null;
-  return trimmed.toLowerCase();
+  if (!raw) return null;
+  const cleaned = String(raw).trim().replace(/[^a-f0-9]/gi, '');
+  if (!cleaned || cleaned.length < 6 || cleaned.length > 64) return null;
+  return cleaned.toLowerCase();
 }
 
 export function extractTokenFromInviteLink(link: string): string | null {

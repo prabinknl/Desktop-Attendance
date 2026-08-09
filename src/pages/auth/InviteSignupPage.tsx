@@ -91,6 +91,18 @@ export default function InviteSignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [empSearch, setEmpSearch] = useState('');
+  const [manualCode, setManualCode] = useState('');
+
+  const handleVerifyManualCode = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const clean = normalizeInviteToken(manualCode);
+    if (!clean) {
+      toast('error', 'Invalid Code', 'Please enter a valid 6-digit invitation code.');
+      return;
+    }
+    setLoading(true);
+    navigate(`/invite/${clean}`);
+  };
 
   const {
     register,
@@ -252,7 +264,7 @@ export default function InviteSignupPage() {
           </div>
 
           {/* Code input fallback */}
-          <div className="pt-2 text-left space-y-2.5">
+          <form onSubmit={handleVerifyManualCode} className="pt-2 text-left space-y-2.5">
             <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
               Enter 6-digit Invitation Code
             </label>
@@ -261,16 +273,18 @@ export default function InviteSignupPage() {
                 type="text"
                 placeholder="e.g. 849201"
                 maxLength={64}
-                onChange={(e) => {
-                  const val = e.target.value.trim();
-                  if (val.length >= 6) {
-                    navigate(`/invite/${val.toLowerCase()}`);
-                  }
-                }}
+                value={manualCode}
+                onChange={(e) => setManualCode(e.target.value)}
                 className="input flex-1 font-mono tracking-wider font-semibold text-center"
               />
+              <button
+                type="submit"
+                className="btn bg-primary-500 hover:bg-primary-600 text-white font-semibold px-4 py-2.5 rounded-xl text-sm"
+              >
+                Verify Code
+              </button>
             </div>
-          </div>
+          </form>
 
           <div className="pt-2 flex gap-3">
             <button
