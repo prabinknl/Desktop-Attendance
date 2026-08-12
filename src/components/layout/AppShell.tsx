@@ -4,7 +4,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Pause, ShieldCheck, LogOut, Eye, ArrowLeft } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Header from './Header';
-import ToastContainer from '../ui/ToastContainer';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { hydratePersistedStores } from '../../data/store';
@@ -186,10 +185,6 @@ export default function AppShell() {
         </div>
       </main>
 
-      {/* Toast Notifications */}
-      <div className="no-print">
-        <ToastContainer />
-      </div>
     </div>
   );
 }

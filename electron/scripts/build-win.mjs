@@ -76,7 +76,7 @@ if (!tryCleanWinUnpacked(outDir)) {
 
 console.log(`[electron:build-win] output -> ${outDir}`);
 
-const builderArgs = ['--win', `--config.directories.output=${outDir}`];
+const builderArgs = ['--win', `-c.win.artifactName=Attendance.Desktop.Setup.\${ext}`, `-c.nsis.artifactName=Attendance.Desktop.Setup.\${ext}`, `--config.directories.output=${outDir}`];
 if (dirMode) builderArgs.unshift('--dir');
 
 // Run electron-builder via node + cli.js so paths with spaces work on Windows

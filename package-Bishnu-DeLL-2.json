@@ -1,7 +1,7 @@
 {
   "name": "attendence",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.0.6",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -65,7 +65,7 @@
     "framer-motion": "^12.42.2",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
-    "lucide-react": "^1.31.0",
+    "lucide-react": "^1.24.0",
     "nepali-date-converter": "^3.4.0",
     "node-cron": "^4.6.0",
     "nodemailer": "^9.0.3",
@@ -144,10 +144,12 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Attendance.Desktop.Setup.${version}.${ext}",
+      "artifactName": "Attendance.Desktop.Setup.${ext}",
       "executableName": "Attendance Desktop"
     },
     "nsis": {
+      "guid": "com.attendance.desktop",
+      "artifactName": "Attendance.Desktop.Setup.${ext}",
       "oneClick": true,
       "perMachine": false,
       "allowElevation": false,

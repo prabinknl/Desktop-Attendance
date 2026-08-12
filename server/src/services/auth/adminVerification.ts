@@ -76,7 +76,12 @@ export async function sendAdminVerificationEmail(input: {
   code: string;
 }): Promise<{ sent: boolean; devFallback?: boolean; error?: string }> {
   if (!smtpConfigured()) {
-    console.warn('[Auth] SMTP credentials (SMTP_USER/SMTP_PASS) are not configured in server/.env');
+    console.log('\n==========================================================');
+    console.log(`[Auth DEV MODE] SMTP not configured — Admin verification code for ${Array.isArray(input.to) ? input.to.join(', ') : input.to}: ${input.code}`);
+    console.log('==========================================================\n');
+    if (env.nodeEnv !== 'production') {
+      return { sent: true, devFallback: true };
+    }
     return {
       sent: false,
       error: 'SMTP credentials (SMTP_USER and SMTP_PASS) are not configured in server/.env. Please set your SMTP credentials to send verification emails.',
@@ -124,7 +129,9 @@ export async function sendAdminVerificationEmail(input: {
     const message = err instanceof Error ? err.message : 'Failed to send email';
     console.error('[Auth] Failed to send verification email via SMTP:', message);
     if (env.nodeEnv !== 'production') {
-      console.warn('[Auth DEV MODE] SMTP send failed; falling back without exposing the verification code.');
+      console.log('\n==========================================================');
+      console.log(`[Auth DEV MODE] SMTP send failed — Admin verification code for ${Array.isArray(input.to) ? input.to.join(', ') : input.to}: ${input.code}`);
+      console.log('==========================================================\n');
       return { sent: true, devFallback: true };
     }
     return { sent: false, error: message };

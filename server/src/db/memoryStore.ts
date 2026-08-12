@@ -43,10 +43,32 @@ export type InvitationRecord = {
   updated_at?: string;
 };
 
+/** App user row kept when PostgreSQL is unavailable (persisted with the memory store). */
+export type MemoryUserRecord = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  password: string;
+  avatar?: string;
+  phone?: string;
+  timezone?: string;
+  employeeId?: string;
+  departmentId?: string;
+  clientId?: string;
+  planType?: 'free' | 'paid';
+  accessExpiresAt?: string;
+  status?: string;
+  emailVerified?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 /** In-memory fallback when PostgreSQL is unavailable — persisted to disk so restarts keep data. */
 let memoryDevice: DeviceRecord | null = null;
 let memoryLogs: MemoryLog[] = [];
 let memoryInvitations: InvitationRecord[] = [];
+let memoryUsers: MemoryUserRecord[] = [];
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Electron sets ATTENDANCE_DATA_DIR to a writable userData folder. */
@@ -63,6 +85,7 @@ function loadFromDisk() {
       device?: DeviceRecord | null;
       logs?: MemoryLog[];
       invitations?: InvitationRecord[];
+      users?: MemoryUserRecord[];
     };
     if (parsed.device && typeof parsed.device === 'object') {
       memoryDevice = parsed.device;
@@ -73,8 +96,11 @@ function loadFromDisk() {
     if (Array.isArray(parsed.invitations)) {
       memoryInvitations = parsed.invitations;
     }
+    if (Array.isArray(parsed.users)) {
+      memoryUsers = parsed.users;
+    }
     console.log(
-      `[MemoryStore] Restored from disk: device=${memoryDevice ? memoryDevice.id : 'none'} logs=${memoryLogs.length} invitations=${memoryInvitations.length}`,
+      `[MemoryStore] Restored from disk: device=${memoryDevice ? memoryDevice.id : 'none'} logs=${memoryLogs.length} invitations=${memoryInvitations.length} users=${memoryUsers.length}`,
     );
   } catch (err) {
     console.warn('[MemoryStore] Could not load persisted store:', err instanceof Error ? err.message : err);
@@ -87,7 +113,13 @@ function saveToDisk() {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
     const payload = JSON.stringify(
-      { device: memoryDevice, logs: memoryLogs, invitations: memoryInvitations, savedAt: new Date().toISOString() },
+      {
+        device: memoryDevice,
+        logs: memoryLogs,
+        invitations: memoryInvitations,
+        users: memoryUsers,
+        savedAt: new Date().toISOString(),
+      },
       null,
       2,
     );
@@ -221,6 +253,16 @@ export const memoryStore = {
     return inv;
   },
 
+  getInvitationBySmsCodeHash(smsCodeHash: string): InvitationRecord | null {
+    if (!smsCodeHash) return null;
+    const norm = smsCodeHash.trim().toLowerCase();
+    // Prefer the newest pending invite when multiple share a hash (test fixtures).
+    const matches = memoryInvitations
+      .filter((i) => i.sms_code_hash && i.sms_code_hash.trim().toLowerCase() === norm)
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    return matches[0] || null;
+  },
+
   getPendingInvitationByEmail(email: string, role: string): InvitationRecord | null {
     const norm = email.trim().toLowerCase();
     const inv = memoryInvitations.find(
@@ -234,6 +276,75 @@ export const memoryStore = {
       i.token === token || i.token_hash === token ? { ...i, used: true, status: 'accepted' } : i,
     );
     saveToDisk();
+  },
+
+  getUsers(): MemoryUserRecord[] {
+    return memoryUsers.map((u) => ({ ...u }));
+  },
+
+  getUserByEmail(email: string): MemoryUserRecord | null {
+    const key = email.trim().toLowerCase();
+    if (!key) return null;
+    const found = memoryUsers.find((u) => u.email.trim().toLowerCase() === key);
+    return found ? { ...found } : null;
+  },
+
+  getUserById(id: string): MemoryUserRecord | null {
+    const found = memoryUsers.find((u) => u.id === id);
+    return found ? { ...found } : null;
+  },
+
+  upsertUser(user: MemoryUserRecord): MemoryUserRecord {
+    const emailLower = user.email.trim().toLowerCase();
+    const now = new Date().toISOString();
+    const next: MemoryUserRecord = {
+      ...user,
+      email: emailLower,
+      updatedAt: now,
+      createdAt: user.createdAt ?? now,
+    };
+
+    // Enforce a single admin account in memory mode (mirrors DB upsert behavior).
+    if (next.role === 'admin') {
+      memoryUsers = memoryUsers.filter(
+        (u) => !(u.role === 'admin' && u.email.trim().toLowerCase() !== emailLower),
+      );
+    }
+
+    const idx = memoryUsers.findIndex((u) => u.email.trim().toLowerCase() === emailLower);
+    if (idx >= 0) {
+      memoryUsers[idx] = {
+        ...memoryUsers[idx],
+        ...next,
+        id: memoryUsers[idx].id || next.id,
+        createdAt: memoryUsers[idx].createdAt ?? next.createdAt,
+      };
+      saveToDisk();
+      return { ...memoryUsers[idx] };
+    }
+
+    memoryUsers.push(next);
+    saveToDisk();
+    return { ...next };
+  },
+
+  updateUserStatus(email: string, status: string, emailVerified: boolean): void {
+    const key = email.trim().toLowerCase();
+    const idx = memoryUsers.findIndex((u) => u.email.trim().toLowerCase() === key);
+    if (idx < 0) return;
+    memoryUsers[idx] = {
+      ...memoryUsers[idx],
+      status,
+      emailVerified,
+      updatedAt: new Date().toISOString(),
+    };
+    saveToDisk();
+  },
+
+  deleteUserById(id: string): void {
+    const before = memoryUsers.length;
+    memoryUsers = memoryUsers.filter((u) => u.id !== id);
+    if (memoryUsers.length !== before) saveToDisk();
   },
 };
 

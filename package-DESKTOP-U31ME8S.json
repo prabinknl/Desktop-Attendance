@@ -141,6 +141,7 @@
         }
       ],
       "icon": "build/icon.ico",
+      "artifactName": "Attendance.Desktop.Setup.${ext}",
       "executableName": "Attendance Desktop",
       "legalTrademarks": "Attendance Desktop is a trademark of APPNEP",
       "signtoolOptions": {

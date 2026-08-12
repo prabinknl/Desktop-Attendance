@@ -36,6 +36,7 @@ import EmployeeAttendanceReportPage from './pages/dashboard/EmployeeAttendanceRe
 import { useDeviceSyncAvailable } from './hooks/useDeviceSyncAvailable';
 import { useAuth } from './contexts/AuthContext';
 import AutoUpdateNotifier from './components/common/AutoUpdateNotifier';
+import ToastContainer from './components/ui/ToastContainer';
 
 /** Admin users always see Device Settings. Non-admin staff are redirected to
  *  the dashboard only after the /health probe has definitively responded with
@@ -71,6 +72,8 @@ export default function App() {
             <InvitationProvider>
               <AppRouter>
                 <AutoUpdateNotifier />
+                {/* Global toasts — must be outside AppShell so /login and other public pages get feedback */}
+                <ToastContainer />
                 <Routes>
                   {/* Public routes */}
                   <Route path="/login" element={<LoginPage />} />

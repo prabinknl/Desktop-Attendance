@@ -343,6 +343,12 @@ export async function login(req: Request, res: Response) {
         message: 'Your company account has been disabled. Please contact the application owner.',
       });
     }
+    if ((user as any).status === 'pending_verification' || (user as any).emailVerified === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Email verification required. Please complete email verification before signing in.',
+      });
+    }
     return res.json({ success: true, data: user });
   } catch (err) {
     console.error('[Auth] login error:', err);
@@ -754,5 +760,256 @@ export async function signupClientAdmin(req: Request, res: Response) {
     return res.status(500).json({ success: false, message: 'Server error during registration.' });
   }
 }
+
+export async function verifyAdminSignupInvite(req: Request, res: Response) {
+  try {
+    const invitationCode = String(req.body?.invitationCode ?? req.body?.code ?? '').trim();
+    const phoneInput = String(req.body?.phone ?? '').trim();
+
+    if (!invitationCode) {
+      return res.status(400).json({ success: false, message: 'Invitation code is required.' });
+    }
+    if (!phoneInput) {
+      return res.status(400).json({ success: false, message: 'Phone number is required.' });
+    }
+
+    const normalizedPhone = normalizePhoneE164(phoneInput);
+    if (!normalizedPhone || !isPhoneE164Valid(phoneInput)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Enter a valid phone number (e.g. +9779851064130 or 9851064130).',
+      });
+    }
+
+    const codeHash = hashValue(invitationCode);
+    // Owner shares the 6-digit invitation/SMS code; also accept raw token / token hash.
+    const inv =
+      (await InvitationModel.getBySmsCodeHash(codeHash)) ||
+      (await InvitationModel.getByTokenHash(codeHash)) ||
+      (await InvitationModel.getByToken(invitationCode));
+
+    if (!inv) {
+      return res.status(404).json({ success: false, message: 'Invalid or expired invitation code.' });
+    }
+
+    const invitePhone = inv.phone ? normalizePhoneE164(inv.phone) : '';
+    if (invitePhone && invitePhone !== normalizedPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number does not match this invitation. Use the mobile number the Owner registered.',
+      });
+    }
+
+    const serverNow = new Date();
+    const validation = validateInvitationRecord(inv, serverNow);
+
+    if (!validation.ok) {
+      return res.status(410).json({ success: false, message: validation.message });
+    }
+
+    const days = Number(inv.duration_days) || 30;
+    const planLabel = inv.plan_type === 'paid' ? 'Paid Subscription' : 'Free Trial';
+    const durationLabel = days < 1
+      ? `${Math.round(days * 24)} Hours (${planLabel})`
+      : days === 1
+        ? `1 Day (${planLabel})`
+        : `${days} Days (${planLabel})`;
+
+    return res.json({
+      success: true,
+      invitation: {
+        invitationToken: inv.token,
+        companyName: inv.company_name || 'Organization',
+        invitedEmail: inv.email,
+        invitingOwner: inv.created_by || 'Owner',
+        packageDuration: durationLabel,
+        phone: inv.phone || normalizedPhone,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to verify invitation';
+    console.error('[Auth] verifyAdminSignupInvite error:', message);
+    return res.status(500).json({ success: false, message: 'Server error verifying invitation.' });
+  }
+}
+
+export async function submitAdminSignup(req: Request, res: Response) {
+  try {
+    const invitationToken = String(req.body?.invitationToken ?? req.body?.token ?? '').trim();
+    const name = String(req.body?.name ?? '').trim();
+    const password = String(req.body?.password ?? '');
+    const phone = String(req.body?.phone ?? '').trim();
+
+    if (!invitationToken || !name || !password) {
+      return res.status(400).json({ success: false, message: 'Full name, password, and invitation token are required.' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters long.' });
+    }
+
+    const tokenHash = hashValue(invitationToken);
+    const inv =
+      (await InvitationModel.getByTokenHash(tokenHash)) ||
+      (await InvitationModel.getByToken(invitationToken));
+
+    if (!inv) {
+      return res.status(404).json({ success: false, message: 'Invitation not found.' });
+    }
+
+    const validation = validateInvitationRecord(inv, new Date());
+    if (!validation.ok) {
+      return res.status(410).json({ success: false, message: validation.message });
+    }
+
+    const { UserModel } = await import('../models/UserModel.js');
+    const existing = await UserModel.getByEmail(inv.email);
+    if (existing && existing.status === 'active' && existing.emailVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'An account with this email address already exists and is active. Please sign in.',
+      });
+    }
+
+    await UserModel.upsert({
+      id: existing?.id || `usr-${Date.now()}`,
+      name,
+      email: inv.email,
+      role: 'admin',
+      password,
+      phone: phone || inv.phone || undefined,
+      clientId: inv.client_id || `client-org-${Date.now()}`,
+      planType: (inv.plan_type === 'paid' ? 'paid' : 'free') as 'free' | 'paid',
+      accessExpiresAt: inv.access_expires_at || inv.expires_at,
+      status: 'pending_verification',
+      emailVerified: false,
+    });
+
+    if (!canResendVerificationCode(inv.email)) {
+      return res.status(429).json({
+        success: false,
+        message: 'Please wait 60 seconds before requesting a new verification code.',
+      });
+    }
+
+    const code = generateVerificationCode();
+    storeVerificationCode(inv.email, code);
+
+    if (env.nodeEnv !== 'production') {
+      console.log(`[Auth DEV MODE] Verification code generated for invited Admin (${inv.email}): ${code}`);
+    }
+
+    const mail = await sendAdminVerificationEmail({
+      to: inv.email,
+      name,
+      code,
+    });
+
+    if (!mail.sent) {
+      return res.status(503).json({
+        success: false,
+        emailSent: false,
+        message: mail.error || 'Could not send verification code email. Check SMTP settings.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      emailSent: true,
+      email: inv.email,
+      message: `Verification code sent to ${inv.email}.`,
+      devCode: mail.devFallback ? code : undefined,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to submit sign up';
+    console.error('[Auth] submitAdminSignup error:', message);
+    return res.status(500).json({ success: false, message: 'Server error during sign up registration.' });
+  }
+}
+
+export async function verifyAdminSignupEmail(req: Request, res: Response) {
+  try {
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const code = String(req.body?.code ?? '').trim();
+    const invitationToken = String(req.body?.invitationToken ?? req.body?.token ?? '').trim();
+
+    if (!email || !code) {
+      return res.status(400).json({ success: false, message: 'Email and verification code are required.' });
+    }
+
+    const verification = verifyStoredCode(email, code);
+    if (!verification.ok) {
+      return res.status(400).json({ success: false, message: verification.message });
+    }
+
+    const { UserModel } = await import('../models/UserModel.js');
+    await UserModel.updateStatus(email, 'active', true);
+
+    if (invitationToken) {
+      await InvitationModel.markUsed(invitationToken);
+    }
+
+    return res.json({
+      success: true,
+      message: 'Admin account created successfully. You can now sign in.',
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to verify email';
+    console.error('[Auth] verifyAdminSignupEmail error:', message);
+    return res.status(500).json({ success: false, message: 'Server error verifying code.' });
+  }
+}
+
+export async function resendAdminSignupEmail(req: Request, res: Response) {
+  try {
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email address is required.' });
+    }
+
+    if (!canResendVerificationCode(email)) {
+      return res.status(429).json({
+        success: false,
+        message: 'Please wait 60 seconds before requesting a new verification code.',
+      });
+    }
+
+    const { UserModel } = await import('../models/UserModel.js');
+    const user = await UserModel.getByEmail(email);
+    const name = user?.name || 'Admin';
+
+    const code = generateVerificationCode();
+    storeVerificationCode(email, code);
+
+    if (env.nodeEnv !== 'production') {
+      console.log(`[Auth DEV MODE] Resent verification code for invited Admin (${email}): ${code}`);
+    }
+
+    const mail = await sendAdminVerificationEmail({
+      to: email,
+      name,
+      code,
+    });
+
+    if (!mail.sent) {
+      return res.status(503).json({
+        success: false,
+        message: mail.error || 'Could not send verification code email.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      emailSent: true,
+      message: `Verification code resent to ${email}.`,
+      devCode: mail.devFallback ? code : undefined,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to resend code';
+    console.error('[Auth] resendAdminSignupEmail error:', message);
+    return res.status(500).json({ success: false, message: 'Server error resending code.' });
+  }
+}
+
 
 

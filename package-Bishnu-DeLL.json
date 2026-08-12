@@ -146,8 +146,8 @@
         }
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Attendance Desktop Setup ${version}.${ext}",
-      "executableName": "Attendance"
+      "artifactName": "Attendance.Desktop.Setup.${ext}",
+      "executableName": "Attendance Desktop"
     },
     "nsis": {
       "oneClick": false,

@@ -5,7 +5,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
-  Eye, EyeOff, ArrowRight, Clock, Users, BarChart3, Lock, ArrowLeft, Search, Check, Mail,
+  Eye, EyeOff, ArrowRight, Clock, Users, BarChart3, Lock, ArrowLeft, Search, Check, Mail, CheckCircle2,
 } from 'lucide-react';
 import { useAuth, ALLOWED_ADMIN_EMAIL, OWNER_SIGNIN_EMAILS, formatEmailList, hydrateCloudAuthUsers } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -117,6 +117,25 @@ export default function LoginPage() {
   const [otpSendError, setOtpSendError] = useState<string | null>(null);
   const [createdAdmin, setCreatedAdmin] = useState<{ name: string; email: string; password: string } | null>(null);
   const [createdAccountant, setCreatedAccountant] = useState<{ name: string; email: string; password: string } | null>(null);
+
+  type AdminSignupWorkflowStep = 'verify-invite' | 'details' | 'email-verify';
+  const [adminSignupWorkflowStep, setAdminSignupWorkflowStep] = useState<AdminSignupWorkflowStep>('verify-invite');
+  const [invitationCodeInput, setInvitationCodeInput] = useState('');
+  const [phoneInput, setPhoneInput] = useState('');
+  const [verifyInviteError, setVerifyInviteError] = useState<string | null>(null);
+  const [verifiedInvitation, setVerifiedInvitation] = useState<{
+    invitationToken: string;
+    companyName: string;
+    invitedEmail: string;
+    invitingOwner: string;
+    packageDuration: string;
+    phone: string;
+  } | null>(null);
+  const [adminNameInput, setAdminNameInput] = useState('');
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [adminConfirmPasswordInput, setAdminConfirmPasswordInput] = useState('');
+  const [adminEmailVerificationCode, setAdminEmailVerificationCode] = useState('');
+  const [adminResendTimer, setAdminResendTimer] = useState(0);
 
   const [machineEmployees, setMachineEmployees] = useState<Employee[]>([]);
   const [loadingEmployees, setLoadingEmployees] = useState(false);
@@ -238,14 +257,156 @@ export default function LoginPage() {
     setCreatedAccountant(null);
   };
 
-  const chooseAuthAction = (action: AuthAction) => {
-    if (!selectedRole) return;
-    // Admin accounts are login-only — no public sign-up on this page.
-    if (selectedRole === 'admin' && action === 'signup') {
-      setAuthAction('login');
-      setMode('login');
+  useEffect(() => {
+    if (adminResendTimer <= 0) return;
+    const interval = setInterval(() => {
+      setAdminResendTimer((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [adminResendTimer]);
+
+  const handleVerifyInvitation = async () => {
+    if (!invitationCodeInput.trim()) {
+      const msg = 'Please enter the invitation code provided by the Owner.';
+      setVerifyInviteError(msg);
+      toast('error', 'Required Field', msg);
       return;
     }
+    if (!phoneInput.trim()) {
+      const msg = 'Please enter your phone number.';
+      setVerifyInviteError(msg);
+      toast('error', 'Required Field', msg);
+      return;
+    }
+    setVerifyInviteError(null);
+    setLoading(true);
+    try {
+      const res = await authApi.verifyAdminSignupInvite({
+        invitationCode: invitationCodeInput.trim(),
+        phone: phoneInput.trim(),
+      });
+      if (res.success && res.invitation) {
+        setVerifiedInvitation(res.invitation);
+        setAdminSignupWorkflowStep('details');
+        toast('success', 'Invitation Verified', 'Invitation details retrieved successfully.');
+      } else {
+        const msg = res.message || 'Invalid or expired invitation code.';
+        setVerifyInviteError(msg);
+        toast('error', 'Verification Failed', msg);
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to verify invitation.';
+      setVerifyInviteError(msg);
+      toast('error', 'Verification Error', msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmitAdminSignup = async () => {
+    if (!verifiedInvitation) return;
+    if (!adminNameInput.trim()) {
+      toast('error', 'Required Field', 'Please enter your full name.');
+      return;
+    }
+    if (adminPasswordInput.length < 6) {
+      toast('error', 'Password Required', 'Password must be at least 6 characters.');
+      return;
+    }
+    if (adminPasswordInput !== adminConfirmPasswordInput) {
+      toast('error', 'Password Mismatch', 'Passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await authApi.submitAdminSignup({
+        invitationToken: verifiedInvitation.invitationToken,
+        name: adminNameInput.trim(),
+        password: adminPasswordInput,
+        phone: phoneInput.trim() || verifiedInvitation.phone,
+      });
+
+      if (res.success) {
+        setAdminSignupWorkflowStep('email-verify');
+        setAdminResendTimer(60);
+        toast('success', 'Verification Code Sent', res.message || `Verification code sent to ${verifiedInvitation.invitedEmail}`);
+        if (res.devCode) {
+          toast('info', `Dev Verification Code: ${res.devCode}`, `Verification code is ${res.devCode}`);
+        }
+      } else {
+        toast('error', 'Sign Up Failed', res.message || 'Could not complete registration.');
+      }
+    } catch (err: any) {
+      toast('error', 'Error', err?.message || 'Failed to submit sign up.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyAdminEmail = async () => {
+    if (!verifiedInvitation) return;
+    if (!adminEmailVerificationCode.trim()) {
+      toast('error', 'Required Field', 'Please enter the 6-digit verification code sent to your email.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await authApi.verifyAdminSignupEmail({
+        email: verifiedInvitation.invitedEmail,
+        code: adminEmailVerificationCode.trim(),
+        invitationToken: verifiedInvitation.invitationToken,
+      });
+
+      if (res.success) {
+        toast('success', 'Account Created Successfully', 'Admin account created successfully. You can now sign in.');
+        setAdminSignupWorkflowStep('verify-invite');
+        setVerifiedInvitation(null);
+        setInvitationCodeInput('');
+        setPhoneInput('');
+        setAdminNameInput('');
+        setAdminPasswordInput('');
+        setAdminConfirmPasswordInput('');
+        setAdminEmailVerificationCode('');
+        setAuthAction('login');
+        setMode('login');
+      } else {
+        toast('error', 'Verification Failed', res.message || 'Invalid or expired code.');
+      }
+    } catch (err: any) {
+      toast('error', 'Error', err?.message || 'Failed to verify email code.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendAdminEmail = async () => {
+    if (adminResendTimer > 0 || !verifiedInvitation) return;
+    setLoading(true);
+    try {
+      const res = await authApi.resendAdminSignupEmail({
+        email: verifiedInvitation.invitedEmail,
+        invitationToken: verifiedInvitation.invitationToken,
+      });
+      if (res.success) {
+        setAdminResendTimer(60);
+        toast('success', 'Code Resent', `A new verification code was sent to ${verifiedInvitation.invitedEmail}.`);
+        if (res.devCode) {
+          toast('info', `Dev Verification Code: ${res.devCode}`, `Verification code is ${res.devCode}`);
+        }
+      } else {
+        toast('error', 'Resend Failed', res.message || 'Could not resend verification code.');
+      }
+    } catch (err: any) {
+      toast('error', 'Error', err?.message || 'Failed to resend verification code.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const chooseAuthAction = (action: AuthAction) => {
+    if (!selectedRole) return;
     setAuthAction(action);
     setShowPassword(false);
 
@@ -255,6 +416,11 @@ export default function LoginPage() {
     }
 
     // Sign up for selected role
+    if (selectedRole === 'admin') {
+      setMode('signup-admin');
+      setAdminSignupWorkflowStep('verify-invite');
+      return;
+    }
     if (selectedRole === 'employee') {
       setMode('signup-employee');
       setSelectedEmployeeId(null);
@@ -515,24 +681,36 @@ export default function LoginPage() {
   const credentialsAccount = createdAdmin ?? createdAccountant;
 
   const title =
-    mode === 'signup-employee' ? 'Create employee account'
-      : mode === 'signup-accountant' ? 'Create accountant account'
-        : mode === 'admin-credentials' ? 'Account ready'
-          : selectedRole
-            ? `Welcome, ${portalRoles.find((r) => r.id === selectedRole)?.label ?? ''}`
-            : 'Welcome back 👋';
+    mode === 'signup-admin'
+      ? adminSignupWorkflowStep === 'verify-invite'
+        ? 'Admin Sign Up — Verify Invitation'
+        : adminSignupWorkflowStep === 'details'
+          ? 'Admin Sign Up — Account Details'
+          : 'Admin Sign Up — Email Verification'
+      : mode === 'signup-employee' ? 'Create employee account'
+        : mode === 'signup-accountant' ? 'Create accountant account'
+          : mode === 'admin-credentials' ? 'Account ready'
+            : selectedRole
+              ? `Welcome, ${portalRoles.find((r) => r.id === selectedRole)?.label ?? ''}`
+              : 'Welcome back 👋';
 
   const subtitle =
-    (mode === 'signup-employee' || mode === 'signup-accountant')
-      ? 'Invitation link required from your Administrator.'
-      : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
-        : selectedRole === 'admin'
-          ? 'Sign in to your admin account to continue'
-          : selectedRole
-            ? authAction === 'login'
-              ? 'Sign in to your account to continue'
-              : 'Invitation required to create account'
-            : 'Choose your role to continue';
+    mode === 'signup-admin'
+      ? adminSignupWorkflowStep === 'verify-invite'
+        ? 'Enter the invitation code provided by the Owner to continue.'
+        : adminSignupWorkflowStep === 'details'
+          ? 'Review invitation details and enter your full name and password.'
+          : `Enter the 6-digit verification code sent to ${verifiedInvitation?.invitedEmail || 'your email'}.`
+      : (mode === 'signup-employee' || mode === 'signup-accountant')
+        ? 'Invitation link required from your Administrator.'
+        : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
+          : selectedRole === 'admin'
+            ? 'Sign in to your admin account to continue'
+            : selectedRole
+              ? authAction === 'login'
+                ? 'Sign in to your account to continue'
+                : 'Invitation required to create account'
+              : 'Choose your role to continue';
 
   return (
     <div className="min-h-screen flex bg-slate-50 dark:bg-slate-950">
@@ -749,43 +927,35 @@ export default function LoginPage() {
             </form>
           )}
 
-          {/* Log in / Sign up — shown after a role is chosen (Admin is login-only) */}
+          {/* Log in / Sign up — shown after a role is chosen */}
           {selectedRole && selectedRole !== 'owner' && mode !== 'admin-credentials' && (
             <div className="mb-6">
-              {selectedRole === 'admin' ? (
-                <div className="p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
-                  <div className="py-2.5 rounded-lg text-sm font-semibold text-center bg-primary-600 text-white shadow-sm">
-                    Log in
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => chooseAuthAction('login')}
-                    className={cn(
-                      'py-2.5 rounded-lg text-sm font-semibold transition-all',
-                      authAction === 'login'
-                        ? 'bg-primary-600 text-white shadow-sm'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700',
-                    )}
-                  >
-                    Log in
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => chooseAuthAction('signup')}
-                    className={cn(
-                      'py-2.5 rounded-lg text-sm font-semibold transition-all',
-                      authAction === 'signup'
-                        ? 'bg-primary-600 text-white shadow-sm'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700',
-                    )}
-                  >
-                    Sign up
-                  </button>
-                </div>
-              )}
+              <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
+                <button
+                  type="button"
+                  onClick={() => chooseAuthAction('login')}
+                  className={cn(
+                    'py-2.5 rounded-lg text-sm font-semibold transition-all',
+                    authAction === 'login'
+                      ? 'bg-primary-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700',
+                  )}
+                >
+                  Log in
+                </button>
+                <button
+                  type="button"
+                  onClick={() => chooseAuthAction('signup')}
+                  className={cn(
+                    'py-2.5 rounded-lg text-sm font-semibold transition-all',
+                    authAction === 'signup'
+                      ? 'bg-primary-600 text-white shadow-sm'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-white/70 dark:hover:bg-slate-700',
+                  )}
+                >
+                  {selectedRole === 'admin' ? 'Sign Up as Admin' : 'Sign up'}
+                </button>
+              </div>
             </div>
           )}
 
@@ -874,94 +1044,251 @@ export default function LoginPage() {
             )}
 
             {mode === 'signup-admin' && (
-              <motion.form
-                key="signup-admin"
+              <motion.div
+                key="signup-admin-workflow"
                 initial={{ opacity: 0, x: 12 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -12 }}
-                onSubmit={adminForm.handleSubmit(onAdminSignup)}
                 className="space-y-5"
               >
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">User Name</label>
-                  <input
-                    {...adminForm.register('name')}
-                    type="text"
-                    placeholder="User name"
-                    className={cn('input', adminForm.formState.errors.name && 'border-rose-400')}
-                  />
-                  {adminForm.formState.errors.name && (
-                    <p className="text-xs text-rose-500 mt-1">{adminForm.formState.errors.name.message}</p>
-                  )}
-                </div>
+                {adminSignupWorkflowStep === 'verify-invite' && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleVerifyInvitation();
+                    }}
+                    className="space-y-4"
+                  >
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                        Invitation code <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={invitationCodeInput}
+                        onChange={(e) => {
+                          setInvitationCodeInput(e.target.value);
+                          if (verifyInviteError) setVerifyInviteError(null);
+                        }}
+                        placeholder="Enter invitation code from Owner"
+                        className="input"
+                        autoFocus
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Admin email</label>
-                  <input
-                    {...adminForm.register('email')}
-                    type="email"
-                    readOnly
-                    tabIndex={-1}
-                    className="input input-email-dim"
-                  />
-                  <p className="text-xs text-slate-400 mt-1">
-                    Fixed — verification code is sent to this email.
-                  </p>
-                </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                        Phone number <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="tel"
+                        value={phoneInput}
+                        onChange={(e) => {
+                          setPhoneInput(e.target.value);
+                          if (verifyInviteError) setVerifyInviteError(null);
+                        }}
+                        placeholder="e.g. +9779800000000"
+                        className="input"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Password</label>
-                  <div className="relative">
-                    <input
-                      {...adminForm.register('password')}
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      className={cn('input pr-10', adminForm.formState.errors.password && 'border-rose-400')}
-                    />
+                    {verifyInviteError && (
+                      <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-700 dark:border-rose-800/60 dark:bg-rose-950/40 dark:text-rose-300">
+                        {verifyInviteError}
+                      </div>
+                    )}
+
                     <button
-                      type="button"
-                      onClick={() => setShowPassword((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      type="submit"
+                      disabled={loading || !invitationCodeInput.trim() || !phoneInput.trim()}
+                      className="btn-primary w-full py-2.5 text-base font-semibold disabled:opacity-60 mt-2"
                     >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      {loading ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Verifying invitation...
+                        </span>
+                      ) : (
+                        'Verify Invitation'
+                      )}
                     </button>
-                  </div>
-                  {adminForm.formState.errors.password && (
-                    <p className="text-xs text-rose-500 mt-1">{adminForm.formState.errors.password.message}</p>
-                  )}
-                </div>
+                  </form>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Confirm password</label>
-                  <div className="relative">
-                    <input
-                      {...adminForm.register('confirmPassword')}
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      className={cn('input pr-10', adminForm.formState.errors.confirmPassword && 'border-rose-400')}
-                    />
+                {adminSignupWorkflowStep === 'details' && verifiedInvitation && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleSubmitAdminSignup();
+                    }}
+                    className="space-y-4"
+                  >
+                    {/* Read-Only Details from Owner's Invitation Record */}
+                    <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 dark:bg-indigo-950/30 dark:border-indigo-800/50 p-4 space-y-2.5">
+                      <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-400 font-semibold text-xs uppercase tracking-wider mb-1">
+                        <CheckCircle2 size={15} />
+                        Verified Invitation Details (Read-Only)
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <span className="text-slate-500 block">Company Name</span>
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">{verifiedInvitation.companyName}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block">Package Duration</span>
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">{verifiedInvitation.packageDuration}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-slate-500 block">Invited Email Address</span>
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">{verifiedInvitation.invitedEmail}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-slate-500 block">Inviting Owner</span>
+                          <span className="font-semibold text-slate-800 dark:text-slate-200">{verifiedInvitation.invitingOwner}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Phone number
+                      </label>
+                      <input
+                        type="text"
+                        value={phoneInput || verifiedInvitation.phone}
+                        readOnly
+                        disabled
+                        className="input bg-slate-100 dark:bg-slate-800 text-slate-500 cursor-not-allowed"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Admin Full Name <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={adminNameInput}
+                        onChange={(e) => setAdminNameInput(e.target.value)}
+                        placeholder="Enter your full name"
+                        className="input"
+                        autoFocus
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Password <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          value={adminPasswordInput}
+                          onChange={(e) => setAdminPasswordInput(e.target.value)}
+                          placeholder="••••••••"
+                          className="input pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((v) => !v)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                        >
+                          {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                        Confirm Password <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          value={adminConfirmPasswordInput}
+                          onChange={(e) => setAdminConfirmPasswordInput(e.target.value)}
+                          placeholder="••••••••"
+                          className="input pr-10"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((v) => !v)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                        >
+                          {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+
                     <button
-                      type="button"
-                      onClick={() => setShowPassword((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      type="submit"
+                      disabled={loading || !adminNameInput.trim() || !adminPasswordInput}
+                      className="btn-primary w-full py-2.5 text-base font-semibold disabled:opacity-60"
                     >
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      {loading ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Submitting...
+                        </span>
+                      ) : (
+                        'Submit Sign Up'
+                      )}
                     </button>
-                  </div>
-                  {adminForm.formState.errors.confirmPassword && (
-                    <p className="text-xs text-rose-500 mt-1">{adminForm.formState.errors.confirmPassword.message}</p>
-                  )}
-                </div>
+                  </form>
+                )}
 
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="btn-primary w-full py-2.5 text-base font-semibold disabled:opacity-60"
-                >
-                  {loading ? 'Sending code...' : 'Send verification code'}
-                </button>
-              </motion.form>
+                {adminSignupWorkflowStep === 'email-verify' && verifiedInvitation && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleVerifyAdminEmail();
+                    }}
+                    className="space-y-4"
+                  >
+                    <div className="rounded-xl border border-sky-200 bg-sky-50 dark:bg-sky-950/30 p-4 text-xs text-sky-800 dark:text-sky-200">
+                      <p className="font-semibold text-sm mb-1">Email Verification Required</p>
+                      <p>
+                        We sent a 6-digit verification code to <strong>{verifiedInvitation.invitedEmail}</strong>.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                        Verification code
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={adminEmailVerificationCode}
+                        onChange={(e) => setAdminEmailVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="123456"
+                        className="input text-center text-lg tracking-widest font-mono"
+                        autoFocus
+                      />
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="submit"
+                        disabled={loading || adminEmailVerificationCode.trim().length !== 6}
+                        className="btn-primary flex-1 py-2.5 text-base font-semibold disabled:opacity-60"
+                      >
+                        {loading ? 'Verifying...' : 'Verify'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResendAdminEmail}
+                        disabled={loading || adminResendTimer > 0}
+                        className="btn-secondary px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                      >
+                        {adminResendTimer > 0 ? `Resend (${adminResendTimer}s)` : 'Resend Code'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </motion.div>
             )}
 
             {mode === 'admin-credentials' && credentialsAccount && (

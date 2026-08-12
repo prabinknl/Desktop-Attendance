@@ -12,6 +12,10 @@ import {
   validateClientAdminInvite,
   resendClientAdminSms,
   signupClientAdmin,
+  verifyAdminSignupInvite,
+  submitAdminSignup,
+  verifyAdminSignupEmail,
+  resendAdminSignupEmail,
 } from '../controllers/authController.js';
 
 const router = Router();
@@ -19,6 +23,12 @@ const router = Router();
 router.post('/admin/send-code', sendAdminCode);
 router.post('/admin/verify-code', verifyAdminCode);
 router.post('/admin/send-invite', sendInviteEmail);
+
+// New invitation-only Admin sign up routes
+router.post('/admin-signup/verify-invitation', verifyAdminSignupInvite);
+router.post('/admin-signup/submit', submitAdminSignup);
+router.post('/admin-signup/verify-email', verifyAdminSignupEmail);
+router.post('/admin-signup/resend-email', resendAdminSignupEmail);
 
 // Client Admin invitation workflow routes
 router.post('/client-admin/invite', createClientAdminInvite);
@@ -33,3 +43,4 @@ router.post('/users/sync', syncUser);
 router.post('/login', login);
 
 export default router;
+

@@ -247,4 +247,57 @@ export const authApi = {
       return null;
     }
   },
+
+  verifyAdminSignupInvite: async (input: { invitationCode: string; phone: string }) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      message?: string;
+      invitation?: {
+        invitationToken: string;
+        companyName: string;
+        invitedEmail: string;
+        invitingOwner: string;
+        packageDuration: string;
+        phone: string;
+      };
+    }>('/auth/admin-signup/verify-invitation', input, {
+      validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s >= 500,
+    });
+    return data;
+  },
+
+  submitAdminSignup: async (input: { invitationToken: string; name: string; password: string; phone: string }) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      message?: string;
+      emailSent?: boolean;
+      email?: string;
+      devCode?: string;
+    }>('/auth/admin-signup/submit', input, {
+      validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s === 429 || s >= 500,
+    });
+    return data;
+  },
+
+  verifyAdminSignupEmail: async (input: { email: string; code: string; invitationToken?: string }) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      message?: string;
+    }>('/auth/admin-signup/verify-email', input, {
+      validateStatus: (s) => s === 200 || s === 400 || s === 404 || s >= 500,
+    });
+    return data;
+  },
+
+  resendAdminSignupEmail: async (input: { email: string; invitationToken?: string }) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      message?: string;
+      emailSent?: boolean;
+      devCode?: string;
+    }>('/auth/admin-signup/resend-email', input, {
+      validateStatus: (s) => s === 200 || s === 400 || s === 429 || s >= 500,
+    });
+    return data;
+  },
 };

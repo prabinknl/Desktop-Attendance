@@ -127,6 +127,30 @@ export const InvitationModel = {
     return cached ? normalizeInvitationRecord(cached) : null;
   },
 
+  async getBySmsCodeHash(smsCodeHash: string): Promise<InvitationRecord | null> {
+    if (!smsCodeHash) return null;
+
+    if (!isMemoryMode()) {
+      try {
+        const res = await query<any>(
+          `SELECT * FROM app_invitations
+           WHERE sms_code_hash = $1
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [smsCodeHash],
+        );
+        if (res.rows[0]) {
+          return normalizeInvitationRecord(res.rows[0]);
+        }
+      } catch (err) {
+        console.warn('[InvitationModel] DB getBySmsCodeHash error, falling back to memory store:', err instanceof Error ? err.message : err);
+      }
+    }
+
+    const cached = memoryStore.getInvitationBySmsCodeHash(smsCodeHash);
+    return cached ? normalizeInvitationRecord(cached) : null;
+  },
+
   async getPendingByEmailAndRole(email: string, role: string): Promise<InvitationRecord | null> {
     const norm = email.trim().toLowerCase();
     if (!isMemoryMode()) {
