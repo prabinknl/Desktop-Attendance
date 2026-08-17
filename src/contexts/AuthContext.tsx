@@ -100,9 +100,9 @@ function ensureOwnerUser(users: User[]): User[] {
         name: 'Acme Software Solutions',
         companyName: 'Acme Software Solutions',
         email: 'admin@acmesoft.com',
-        role: 'client',
+        role: 'client' as UserRole,
         password: 'client123',
-        planType: 'free',
+        planType: 'free' as const,
         freeDays: 30,
         avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=acmesoft',
       },
@@ -111,9 +111,9 @@ function ensureOwnerUser(users: User[]): User[] {
         name: 'Globex Global Systems',
         companyName: 'Globex Global Systems',
         email: 'contact@globex.com',
-        role: 'client',
+        role: 'client' as UserRole,
         password: 'client123',
-        planType: 'paid',
+        planType: 'paid' as const,
         freeDays: 0,
         avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=globex',
       },
@@ -122,9 +122,9 @@ function ensureOwnerUser(users: User[]): User[] {
         name: 'Apex Digital Agency',
         companyName: 'Apex Digital Agency',
         email: 'hello@apexdigital.com',
-        role: 'client',
+        role: 'client' as UserRole,
         password: 'client123',
-        planType: 'free',
+        planType: 'free' as const,
         freeDays: 14,
         avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=apex',
       },
@@ -836,7 +836,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
       if (key.includes('@')) archivedEmails.add(key);
 
-      const snapshot = [targetClient, ...related]
+      const snapshot: User[] = [targetClient, ...related]
         .filter((u): u is User => Boolean(u))
         .map((u) => ({
           ...u,
