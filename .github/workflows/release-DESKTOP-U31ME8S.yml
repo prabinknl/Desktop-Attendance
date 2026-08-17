@@ -1,0 +1,111 @@
+name: Build & Release Attendance Desktop
+
+# Desktop Windows installer + electron-updater assets (latest.yml, blockmap).
+# Separate from InsForge web deploy (deploy-insforge.yml).
+#
+# Release process:
+#   1. Bump "version" in package.json (e.g. 1.0.5)
+#   2. Commit and push to main
+#   3. Create and push a matching tag: git tag v1.0.5 && git push origin v1.0.5
+#   4. This workflow builds NSIS installer and publishes ONE GitHub Release
+#
+# Tag MUST be v{package.json version}, e.g. package 1.0.5 → tag v1.0.5
+# Tags like v.1.o.5 or V1.0.5 are INVALID — use lowercase v + strict semver.
+# electron-updater requires valid semver in latest.yml to detect updates correctly.
+#
+# WHY we pre-create the release before electron-builder runs:
+#   electron-builder v26 with --publish always creates a SEPARATE draft release
+#   per artifact batch (one for blockmap, another for .exe + latest.yml) when no
+#   release exists yet for the tag. Pre-creating ONE release with `gh release create`
+#   first guarantees all artifacts land in the same release object.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'   # matches v1.0.5, v2.0.0, etc. — NOT V1.0.5 or v.1.o.5
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Windows Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED="v${PKG_VERSION}"
+          if [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::Git tag '$TAG' does not match package.json version '$EXPECTED'."
+            echo "::error::Steps to fix:"
+            echo "::error::  1. Bump version in package.json to match your intended version"
+            echo "::error::  2. Commit and push to main"
+            echo "::error::  3. Re-tag: git tag ${EXPECTED} && git push origin ${EXPECTED}"
+            echo "::error::  4. Delete the wrong tag if needed: git push origin --delete ${TAG}"
+            exit 1
+          fi
+          echo "✅ Tag ${TAG} matches package.json version ${PKG_VERSION}"
+
+      # Pre-create ONE release for this tag BEFORE electron-builder runs.
+      # This is the fix for the duplicate-draft problem:
+      #   electron-builder --publish always uploads artifacts one batch at a time.
+      #   If no release exists yet, it creates a NEW draft for each batch,
+      #   producing multiple draft releases for the same tag.
+      #   By creating the release here first, electron-builder finds the existing
+      #   release and uploads ALL artifacts (.exe, .blockmap, latest.yml) into it.
+      - name: Create GitHub Release (single, for this tag)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Attendance Desktop ${GITHUB_REF_NAME}" \
+            --notes "Attendance Desktop ${GITHUB_REF_NAME}" \
+            --draft
+
+      - name: Build server (TypeScript → JavaScript)
+        run: npm run build:server
+
+      - name: Build Electron UI (Vite → dist-electron/)
+        run: npm run build:electron-ui
+
+      - name: Stage server resources for packaging
+        run: node electron/scripts/prepare-server-resources.mjs
+
+      # electron-builder finds the pre-created release and uploads all artifacts into it.
+      # --publish always = upload every artifact; the release already exists so no duplicate is created.
+      - name: Build & Upload artifacts to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          node node_modules/electron-builder/cli.js \
+            --win \
+            --publish always
+
+      # Mark the release as Published (not draft) once ALL artifacts are uploaded.
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" --draft=false
+          echo "✅ Release ${GITHUB_REF_NAME} is now published."
+          gh release view "${GITHUB_REF_NAME}" --json assets --jq '.assets[].name'

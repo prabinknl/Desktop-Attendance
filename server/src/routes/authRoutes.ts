@@ -16,6 +16,7 @@ import {
   submitAdminSignup,
   verifyAdminSignupEmail,
   resendAdminSignupEmail,
+  purgeAdminAccount,
 } from '../controllers/authController.js';
 
 const router = Router();
@@ -40,6 +41,7 @@ router.get('/invitations/:token', getInvitationByToken);
 router.post('/invitations/:token/use', markInvitationUsed);
 router.get('/users', getUsers);
 router.post('/users/sync', syncUser);
+router.post('/admin-accounts/purge', purgeAdminAccount);
 router.post('/login', login);
 
 export default router;

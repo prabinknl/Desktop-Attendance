@@ -303,4 +303,49 @@ export const UserModel = {
     }
     memoryStore.deleteUserById(id);
   },
+
+  async deleteByEmail(email: string) {
+    const key = email.trim().toLowerCase();
+    if (!key) return;
+    if (!isMemoryMode()) {
+      try {
+        await query('DELETE FROM app_users WHERE LOWER(email) = $1', [key]);
+      } catch {
+        /* ignore */
+      }
+    }
+    memoryStore.deleteUserByEmail(key);
+  },
+
+  /**
+   * Remove the account for this email plus any users in the same organization
+   * so the email can be used for a brand-new signup.
+   */
+  async purgeOrganizationByEmail(email: string) {
+    const key = email.trim().toLowerCase();
+    if (!key) return;
+    const existing = await this.getByEmail(key);
+    const clientId = existing?.clientId?.trim();
+    const userId = existing?.id?.trim();
+
+    try {
+      await query(
+        `DELETE FROM app_users
+         WHERE LOWER(email) = $1
+            OR ($2 <> '' AND (client_id = $2 OR id = $2))
+            OR ($3 <> '' AND (client_id = $3 OR id = $3))`,
+        [key, userId ?? '', clientId ?? ''],
+      );
+    } catch (err) {
+      console.warn('[UserModel] purgeOrganizationByEmail error:', err instanceof Error ? err.message : err);
+    }
+
+    memoryStore.deleteUserByEmail(key);
+    if (userId) {
+      memoryStore.deleteUsersByClientId(userId);
+    }
+    if (clientId) {
+      memoryStore.deleteUsersByClientId(clientId);
+    }
+  },
 };

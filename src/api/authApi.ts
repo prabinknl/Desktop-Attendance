@@ -248,6 +248,19 @@ export const authApi = {
     }
   },
 
+  },
+
+  purgeAdminAccount: async (email: string) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      purgedEmail?: string;
+      message?: string;
+    }>('/auth/admin-accounts/purge', { email }, {
+      validateStatus: (s) => s === 200 || s === 400 || s === 404 || s >= 500,
+    });
+    return data;
+  },
+
   verifyAdminSignupInvite: async (input: { invitationCode: string; phone: string }) => {
     const { data } = await apiClient.post<{
       success: boolean;

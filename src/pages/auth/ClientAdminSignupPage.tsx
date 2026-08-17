@@ -130,7 +130,7 @@ export default function ClientAdminSignupPage() {
     try {
       const res = await authApi.resendClientAdminSms(resolvedToken);
       if (res.success) {
-        toast('success', 'Verification Code Sent!', res.message || 'A new 6-digit verification code has been sent to owner email v-code@appnep.com.');
+        toast('success', 'Verification Code Sent!', res.message || `A new 6-digit verification code has been sent to ${invite?.email || 'the invited email'}.`);
         setResendCooldown(res.remainingSeconds || 60);
       } else {
         toast('error', 'Resend Failed', res.message || 'We could not send the verification code. Please try again.');
@@ -238,7 +238,7 @@ export default function ClientAdminSignupPage() {
               {companyDisplayName}
             </h2>
             <p className="text-white/80 text-base">
-              Set up your administrator credentials and verify your mobile number to get started.
+              Set up your administrator credentials and enter the 6-digit verification code sent to your invited email.
             </p>
           </div>
         </div>
@@ -247,9 +247,9 @@ export default function ClientAdminSignupPage() {
           <div className="flex items-center gap-3">
             <ShieldCheck size={24} className="text-emerald-300 flex-shrink-0" />
             <div>
-              <p className="font-bold text-sm">Two-Factor Mobile Verification</p>
+              <p className="font-bold text-sm">Email Verification</p>
               <p className="text-xs text-white/70">
-                A 6-digit SMS verification code has been dispatched to your mobile number.
+                A 6-digit verification code has been sent to your invited email address.
               </p>
             </div>
           </div>
@@ -399,7 +399,7 @@ export default function ClientAdminSignupPage() {
                 <p className="text-rose-500 text-[11px] font-semibold">{errors.smsCode.message}</p>
               ) : (
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Enter the 6-digit code sent to owner email <strong className="text-indigo-600 dark:text-indigo-400 font-semibold">v-code@appnep.com</strong>.
+                  Enter the 6-digit code sent to <strong className="text-indigo-600 dark:text-indigo-400 font-semibold">{invite.email}</strong>.
                 </p>
               )}
             </div>

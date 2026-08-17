@@ -76,6 +76,7 @@ interface InvitationContextType {
   markUsed: (token: string) => void;
   getAllInvitations: () => Invitation[];
   deleteInvitation: (token: string) => void;
+  purgeInvitationsByEmail: (email: string) => void;
   updateInvitationPlan: (token: string, planType: 'free' | 'paid', days?: number) => void;
   updateInvitationAppStatus: (token: string, appStatus: 'running' | 'paused') => void;
   softDeleteInvitation: (tokenOrEmail: string, ownerId?: string) => void;
@@ -162,6 +163,12 @@ export function InvitationProvider({ children }: { children: ReactNode }) {
     saveInvitations(loadInvitations().filter((i) => i.token !== token));
   }, []);
 
+  const purgeInvitationsByEmail = useCallback((email: string) => {
+    const key = email.trim().toLowerCase();
+    if (!key) return;
+    saveInvitations(loadInvitations().filter((i) => i.email.toLowerCase() !== key));
+  }, []);
+
   const updateInvitationPlan = useCallback(
     (token: string, planType: 'free' | 'paid', days?: number) => {
       const invites = loadInvitations().map((inv) =>
@@ -217,6 +224,7 @@ export function InvitationProvider({ children }: { children: ReactNode }) {
         markUsed,
         getAllInvitations,
         deleteInvitation,
+        purgeInvitationsByEmail,
         updateInvitationPlan,
         updateInvitationAppStatus,
         softDeleteInvitation,

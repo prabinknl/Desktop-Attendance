@@ -697,7 +697,7 @@ export default function LoginPage() {
   const subtitle =
     mode === 'signup-admin'
       ? adminSignupWorkflowStep === 'verify-invite'
-        ? 'Enter the invitation code provided by the Owner to continue.'
+        ? 'Enter the 6-digit verification code emailed to the invited address.'
         : adminSignupWorkflowStep === 'details'
           ? 'Review invitation details and enter your full name and password.'
           : `Enter the 6-digit verification code sent to ${verifiedInvitation?.invitedEmail || 'your email'}.`
@@ -1070,7 +1070,7 @@ export default function LoginPage() {
                           setInvitationCodeInput(e.target.value);
                           if (verifyInviteError) setVerifyInviteError(null);
                         }}
-                        placeholder="Enter invitation code from Owner"
+                        placeholder="6-digit code from your email"
                         className="input"
                         autoFocus
                       />

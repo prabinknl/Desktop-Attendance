@@ -44,6 +44,10 @@ export function canResendVerificationCode(email: string): boolean {
   return Date.now() - entry.lastSentAt >= RESEND_COOLDOWN_MS;
 }
 
+export function clearVerificationCode(email: string): void {
+  pendingCodes.delete(normalizeEmail(email));
+}
+
 export function verifyStoredCode(email: string, code: string): { ok: boolean; message?: string } {
   const key = normalizeEmail(email);
   const entry = pendingCodes.get(key);
@@ -263,6 +267,7 @@ export async function sendClientAdminInvitationEmail(input: {
   durationLabel: string;
   expiresAtFormatted: string;
   inviteLink: string;
+  verificationCode: string;
 }): Promise<{ sent: boolean; devFallback?: boolean; error?: string }> {
   const companyStr = input.companyName ? ` for ${input.companyName}` : '';
   const planStr = input.planType === 'free' ? `Free Trial (${input.durationLabel})` : `Paid Subscription (${input.durationLabel})`;
@@ -271,8 +276,8 @@ export async function sendClientAdminInvitationEmail(input: {
     console.log('\n==========================================================');
     console.log(`[Auth DEV MODE] Client Admin Invitation Email for ${input.to}`);
     console.log(`[Auth DEV MODE] Company: ${input.companyName || 'N/A'}, Plan: ${planStr}`);
-    console.log(`[Auth DEV MODE] Sign-up link: ${input.inviteLink}`);
-    console.log(`[Auth DEV MODE] Link expires at: ${input.expiresAtFormatted}`);
+    console.log(`[Auth DEV MODE] 6-digit verification code: ${input.verificationCode}`);
+    console.log(`[Auth DEV MODE] Code/invite expires at: ${input.expiresAtFormatted}`);
     console.log('==========================================================\n');
     return { sent: true, devFallback: true };
   }
@@ -295,7 +300,7 @@ export async function sendClientAdminInvitationEmail(input: {
     await transporter.sendMail({
       from: `"PACE Attendance" <${from}>`,
       to: input.to,
-      subject: `Invitation to manage PACE Attendance as Client Administrator${companyStr}`,
+      subject: `Your 6-digit PACE Attendance verification code${companyStr}`,
       text: [
         `Hello,`,
         '',
@@ -303,40 +308,34 @@ export async function sendClientAdminInvitationEmail(input: {
         '',
         `Access details:`,
         `- Plan: ${planStr}`,
-        `- Sign-up link valid until: ${input.expiresAtFormatted}`,
+        `- Valid until: ${input.expiresAtFormatted}`,
         '',
-        `Please click the link below to complete your account setup:`,
-        input.inviteLink,
+        `Your 6-digit verification code is: ${input.verificationCode}`,
         '',
-        `Note: A separate 6-digit SMS verification code has been sent to your mobile number. You will need to enter it during sign-up.`,
+        `Open the PACE Attendance app, choose Sign Up as Admin, and enter this code. Do not share it.`,
+        '',
+        `This code expires in 10 minutes.`,
         '',
         `If you did not expect this invitation, please ignore this email.`,
       ].join('\n'),
       html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b;">
-        <h2 style="color: #4f46e5;">Client Administrator Invitation</h2>
+        <h2 style="color: #4f46e5;">Client Administrator Verification Code</h2>
         <p>Hello,</p>
         <p>You have been invited to set up and manage your organization account as <strong>Client Administrator</strong>${companyStr} on PACE Attendance.</p>
         
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 16px; border-radius: 12px; margin: 20px 0;">
           <p style="margin: 4px 0;"><strong>Selected Plan:</strong> ${planStr}</p>
-          <p style="margin: 4px 0;"><strong>Link Expiration:</strong> ${input.expiresAtFormatted}</p>
+          <p style="margin: 4px 0;"><strong>Valid until:</strong> ${input.expiresAtFormatted}</p>
         </div>
 
-        <p>Please click the button below to complete your registration:</p>
-        <p style="margin: 24px 0;">
-          <a href="${input.inviteLink}" style="background-color: #4f46e5; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
-            Create Admin Account
-          </a>
-        </p>
-        <p style="font-size: 12px; color: #64748b; word-break: break-all;">
-          Or copy and paste this link into your browser: <br/>
-          <a href="${input.inviteLink}" style="color: #4f46e5;">${input.inviteLink}</a>
-        </p>
-        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-        <p style="font-size: 13px; color: #64748b;">
-          📱 <strong>SMS Verification Required:</strong> A 6-digit verification code has been sent separately to your registered mobile number by SMS. You will be prompted to enter it on the sign-up page.
-        </p>
+        <p style="font-size: 14px; color: #475569; margin-bottom: 8px;">Your 6-digit verification code is:</p>
+        <div style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #4f46e5; background: #eef2ff; padding: 16px 24px; border-radius: 12px; display: inline-block; margin: 8px 0;">
+          ${input.verificationCode}
+        </div>
+        <p style="font-size: 14px; color: #475569;">Open PACE Attendance, choose <strong>Sign Up as Admin</strong>, and enter this code. Do not share it with anyone.</p>
+        <p style="font-size: 13px; color: #64748b; margin-top: 16px;">This code expires in 10 minutes.</p>
+        <p style="font-size: 12px; color: #94a3b8; margin-top: 24px;">If you did not expect this invitation, please ignore this email.</p>
       </div>
     `,
     });
@@ -346,7 +345,7 @@ export async function sendClientAdminInvitationEmail(input: {
     const message = err instanceof Error ? err.message : 'Failed to send email';
     console.error('[Auth] Failed to send client admin invitation email:', message);
     if (env.nodeEnv !== 'production') {
-      console.log(`[Auth DEV MODE] Console fallback for ${input.to}. Link: ${input.inviteLink}`);
+      console.log(`[Auth DEV MODE] Console fallback for ${input.to}. Code: ${input.verificationCode}`);
       return { sent: true, devFallback: true };
     }
     return { sent: false, error: message };
@@ -354,12 +353,12 @@ export async function sendClientAdminInvitationEmail(input: {
 }
 
 export async function sendClientAdminVerificationCodeEmail(input: {
-  to?: string;
+  to: string;
   code: string;
   clientEmail: string;
   companyName?: string;
 }): Promise<{ sent: boolean; devFallback?: boolean; error?: string }> {
-  const targetEmail = input.to || 'v-code@appnep.com';
+  const targetEmail = input.to.trim().toLowerCase();
   const companyStr = input.companyName ? ` (${input.companyName})` : '';
 
   if (!smtpConfigured()) {
@@ -389,43 +388,39 @@ export async function sendClientAdminVerificationCodeEmail(input: {
     await transporter.sendMail({
       from: `"PACE Attendance" <${from}>`,
       to: targetEmail,
-      subject: `[Verification Code: ${input.code}] Client Admin Sign-up Code for ${input.clientEmail}`,
+      subject: `Your 6-digit PACE Attendance verification code`,
       text: [
-        `Hello Owner,`,
+        `Hello,`,
         '',
-        `A 6-digit verification code has been generated for Client Admin sign-up:`,
-        `- Client Admin Email: ${input.clientEmail}`,
-        `- Company: ${input.companyName || 'N/A'}`,
+        `Your 6-digit verification code for Client Admin sign-up is: ${input.code}`,
         '',
-        `Verification Code: ${input.code}`,
+        `Email: ${input.clientEmail}`,
+        `Company: ${input.companyName || 'N/A'}`,
+        '',
+        `Enter this code in the Admin Sign Up verification screen. Do not share it.`,
         '',
         `This code expires in 10 minutes.`,
       ].join('\n'),
       html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b;">
-        <h2 style="color: #4f46e5;">Client Admin Verification Code</h2>
-        <p>Hello Owner,</p>
-        <p>A 6-digit verification code was requested for Client Admin registration:</p>
-        
-        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 16px; border-radius: 12px; margin: 16px 0;">
-          <p style="margin: 4px 0;"><strong>Client Email:</strong> ${input.clientEmail}</p>
-          <p style="margin: 4px 0;"><strong>Company:</strong> ${input.companyName || 'N/A'}</p>
-        </div>
+        <h2 style="color: #4f46e5;">Your Verification Code</h2>
+        <p>Hello,</p>
+        <p>Use this 6-digit verification code to complete Client Admin registration for <strong>${input.clientEmail}</strong>${companyStr}.</p>
 
         <p style="font-size: 14px; color: #475569;">Verification Code:</p>
         <div style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #4f46e5; background: #eef2ff; padding: 12px 24px; border-radius: 8px; display: inline-block; margin: 8px 0;">
           ${input.code}
         </div>
-        <p style="font-size: 13px; color: #64748b; margin-top: 16px;">This code is valid for 10 minutes.</p>
+        <p style="font-size: 13px; color: #64748b; margin-top: 16px;">Enter this code in the app. It is valid for 10 minutes. Do not share it.</p>
       </div>
     `,
     });
 
-    console.log(`[Auth] Verification code email sent to owner ${targetEmail} for ${input.clientEmail}`);
+    console.log(`[Auth] Verification code email sent to invited admin ${targetEmail}`);
     return { sent: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to send verification code email';
-    console.error('[Auth] Failed to send verification code email to owner:', message);
+    console.error('[Auth] Failed to send verification code email:', message);
     if (env.nodeEnv !== 'production') {
       console.log(`[Auth DEV MODE] Console fallback for verification code to ${targetEmail}. Code: ${input.code}`);
       return { sent: true, devFallback: true };

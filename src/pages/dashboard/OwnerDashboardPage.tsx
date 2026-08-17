@@ -21,14 +21,16 @@ import {
   Pause,
   ExternalLink,
   Activity,
+  Save,
 } from 'lucide-react';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, OWNER_SIGNIN_EMAILS } from '../../contexts/AuthContext';
 import { useInvitations } from '../../contexts/InvitationContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import AddClientModal from '../../components/AddClientModal';
 import ClientDetailModal from '../../components/ClientDetailModal';
 import { cn, getInitials, formatDurationLabel } from '../../lib/utils';
 import { buildAppUrl } from '../../lib/appEnv';
+import { authApi } from '../../api/authApi';
 
 interface ClientItem {
   id: string;
@@ -50,9 +52,20 @@ interface ClientItem {
   inviteLink?: string;
 }
 
+function formatDeletedRecently(iso?: string) {
+  if (!iso) return 'Deleted recently';
+  const deletedAt = new Date(iso).getTime();
+  if (Number.isNaN(deletedAt)) return 'Deleted recently';
+  const diffMs = Date.now() - deletedAt;
+  if (diffMs < 60_000) return 'Deleted just now';
+  if (diffMs < 60 * 60_000) return `Deleted ${Math.max(1, Math.floor(diffMs / 60_000))} min ago`;
+  if (diffMs < 24 * 60 * 60_000) return `Deleted ${Math.max(1, Math.floor(diffMs / (60 * 60_000)))} hr ago`;
+  return `Deleted: ${new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+}
+
 export default function OwnerDashboardPage() {
-  const { getAuthUsers, user, updateClientAppStatus, impersonateClient, softDeleteClient } = useAuth();
-  const { getAllInvitations, deleteInvitation, createInvitation, updateInvitationPlan, updateInvitationAppStatus, softDeleteInvitation } = useInvitations();
+  const { getAuthUsers, getDeletedClients, updateClientAppStatus, impersonateClient, softDeleteClient } = useAuth();
+  const { getAllInvitations, updateInvitationPlan, updateInvitationAppStatus, softDeleteInvitation } = useInvitations();
   const { toast } = useNotifications();
 
   const [addClientModalOpen, setAddClientModalOpen] = useState(false);
@@ -66,11 +79,52 @@ export default function OwnerDashboardPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'free' | 'paid' | 'paused' | 'pending' | 'deleted'>('all');
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [listVersion, setListVersion] = useState(0);
+  const [saving, setSaving] = useState(false);
+
+  const refreshDirectory = () => setListVersion((v) => v + 1);
 
   // Collect registered admins/clients + pending invitations
   const clients = useMemo<ClientItem[]>(() => {
+    const ownerEmails = new Set(OWNER_SIGNIN_EMAILS.map((e) => e.toLowerCase()));
+    const deletedArchive = getDeletedClients();
     const registered = getAuthUsers()
-      .filter((u) => u.role === 'client')
+      .filter((u) => {
+        if (ownerEmails.has(u.email.toLowerCase())) return false;
+        if (u.role === 'client') return true;
+        return u.role === 'admin' && Boolean(u.clientId || u.companyName || u.planType);
+      })
+      .map((u) => {
+        const pType = u.planType ?? 'free';
+        const dDays = u.durationDays ?? (pType === 'free' ? u.freeDays ?? 30 : u.paidDays ?? 365);
+        const archived = deletedArchive.find((d) => d.email.toLowerCase() === u.email.toLowerCase());
+        const isDeleted = u.status === 'deleted' || Boolean(archived);
+        return {
+          id: u.id,
+          name: u.companyName || u.name,
+          companyName: u.companyName,
+          email: u.email,
+          role: 'Client Admin',
+          planType: pType,
+          freeDays: u.freeDays ?? 30,
+          paidDays: u.paidDays ?? 365,
+          durationDays: dDays,
+          appStatus: u.appStatus ?? 'running',
+          status: (isDeleted ? 'deleted' : (u.status || 'active')) as 'active' | 'pending' | 'deleted',
+          deletedAt: u.deletedAt || archived?.deletedAt,
+          deletedBy: u.deletedBy || archived?.deletedBy,
+          createdAt: 'Registered',
+          avatar: u.avatar,
+        };
+      });
+
+    const registeredEmails = new Set(registered.map((c) => c.email.toLowerCase()));
+
+    const archived = getDeletedClients()
+      .filter((u) => {
+        if (ownerEmails.has(u.email.toLowerCase())) return false;
+        return !registeredEmails.has(u.email.toLowerCase());
+      })
       .map((u) => {
         const pType = u.planType ?? 'free';
         const dDays = u.durationDays ?? (pType === 'free' ? u.freeDays ?? 30 : u.paidDays ?? 365);
@@ -85,16 +139,24 @@ export default function OwnerDashboardPage() {
           paidDays: u.paidDays ?? 365,
           durationDays: dDays,
           appStatus: u.appStatus ?? 'running',
-          status: (u.status || 'active') as 'active' | 'pending' | 'deleted',
+          status: 'deleted' as const,
           deletedAt: u.deletedAt,
           deletedBy: u.deletedBy,
-          createdAt: 'Registered',
+          createdAt: 'Deleted',
           avatar: u.avatar,
         };
       });
 
+    archived.forEach((c) => registeredEmails.add(c.email.toLowerCase()));
+
     const invitations = getAllInvitations()
-      .filter((inv) => inv.role === 'client' && !inv.used)
+      .filter((inv) => inv.role === 'client')
+      .filter((inv) => {
+        const email = inv.email.toLowerCase();
+        if (inv.status === 'deleted') return !registeredEmails.has(email);
+        if (inv.used) return false;
+        return !registeredEmails.has(email);
+      })
       .map((inv) => {
         const pType = inv.planType ?? 'free';
         const dDays = inv.durationDays ?? (pType === 'free' ? inv.freeTrialDays ?? 30 : inv.paidDays ?? 365);
@@ -118,8 +180,8 @@ export default function OwnerDashboardPage() {
         };
       });
 
-    return [...invitations, ...registered];
-  }, [getAuthUsers, getAllInvitations]);
+    return [...invitations, ...registered, ...archived];
+  }, [getAuthUsers, getDeletedClients, getAllInvitations, listVersion]);
 
   const filteredClients = useMemo(() => {
     return clients.filter((c) => {
@@ -167,16 +229,21 @@ export default function OwnerDashboardPage() {
     setDeletingClient(client);
   };
 
-  const confirmDeleteClient = () => {
+  const confirmDeleteClient = async () => {
     if (!deletingClient) return;
 
-    if (deletingClient.inviteToken) {
-      softDeleteInvitation(deletingClient.inviteToken, user?.id);
+    try {
+      softDeleteInvitation(deletingClient.email);
+      await softDeleteClient(deletingClient.email);
+      toast('success', `${deletingClient.name} was deleted and moved to Deleted.`);
+      setFilterTab('deleted');
+    } catch {
+      toast('error', 'Could not finish deleting this account. It was still removed from the active list.');
+      setFilterTab('deleted');
+    } finally {
+      setDeletingClient(null);
+      refreshDirectory();
     }
-    softDeleteClient(deletingClient.id);
-
-    toast('info', `Client ${deletingClient.name} account disabled. All data safely retained.`);
-    setDeletingClient(null);
   };
 
   const handleOpenEditPlan = (client: ClientItem) => {
@@ -203,6 +270,7 @@ export default function OwnerDashboardPage() {
     }
 
     setEditingClient(null);
+    refreshDirectory();
   };
 
   const handleToggleAppStatus = (client: ClientItem) => {
@@ -217,6 +285,27 @@ export default function OwnerDashboardPage() {
       toast('warning', `App access PAUSED for ${client.name}. Access suspended; all data is safely saved.`);
     } else {
       toast('success', `App access RESUMED for ${client.name}. Client can log in and use full data.`);
+    }
+    refreshDirectory();
+  };
+
+  const handleSaveDirectory = async () => {
+    setSaving(true);
+    try {
+      const deletedEmails = new Set(getDeletedClients().map((u) => u.email.toLowerCase()));
+      const directoryUsers = getAuthUsers().filter((u) => {
+        const email = u.email.toLowerCase();
+        if (OWNER_SIGNIN_EMAILS.includes(email)) return false;
+        if (u.status === 'deleted' || deletedEmails.has(email)) return false;
+        return u.role === 'client' || u.role === 'admin';
+      });
+      await Promise.all(directoryUsers.map((u) => authApi.syncCloudUser(u)));
+      refreshDirectory();
+      toast('success', 'Client directory saved.');
+    } catch (err) {
+      toast('error', 'Could not save', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -473,7 +562,7 @@ export default function OwnerDashboardPage() {
                           </span>
                           {client.deletedAt && (
                             <span className="text-[10px] text-slate-400 font-medium pl-1">
-                              Deleted: {new Date(client.deletedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                              {formatDeletedRecently(client.deletedAt)}
                             </span>
                           )}
                         </div>
@@ -600,8 +689,26 @@ export default function OwnerDashboardPage() {
         )}
       </div>
 
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => void handleSaveDirectory()}
+          disabled={saving}
+          className="inline-flex items-center gap-2 rounded-2xl bg-indigo-600 px-6 py-2.5 text-sm font-bold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 disabled:opacity-60"
+        >
+          <Save size={16} />
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+
       {/* Add Client Modal */}
-      <AddClientModal open={addClientModalOpen} onClose={() => setAddClientModalOpen(false)} />
+      <AddClientModal
+        open={addClientModalOpen}
+        onClose={() => {
+          setAddClientModalOpen(false);
+          refreshDirectory();
+        }}
+      />
 
       {/* Client Detail & Activity Log Modal */}
       <ClientDetailModal
@@ -637,7 +744,9 @@ export default function OwnerDashboardPage() {
                     Delete client account?
                   </h3>
                   <p className="mt-2 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                    This will disable the client administrator and all employees under this client. Their data will remain safely stored.
+                    This removes <strong>{deletingClient.email}</strong> from the active client directory.
+                    The account will appear only on the Deleted tab. Client admin and employee logins for this
+                    company will be blocked.
                   </p>
                 </div>
                 <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -650,7 +759,7 @@ export default function OwnerDashboardPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={confirmDeleteClient}
+                    onClick={() => void confirmDeleteClient()}
                     className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white hover:bg-rose-700 shadow-md shadow-rose-600/20 cursor-pointer"
                   >
                     Delete Account

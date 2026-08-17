@@ -1,0 +1,19 @@
+{
+  "name": "hikvision-attendance-gateway",
+  "version": "1.0.0",
+  "description": "Lightweight local gateway agent for connecting Hikvision ISAPI devices on LAN with the attendance backend API",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "keywords": [
+    "hikvision",
+    "isapi",
+    "attendance",
+    "gateway"
+  ],
+  "author": "",
+  "license": "ISC"
+}

@@ -346,6 +346,30 @@ export const memoryStore = {
     memoryUsers = memoryUsers.filter((u) => u.id !== id);
     if (memoryUsers.length !== before) saveToDisk();
   },
+
+  deleteUserByEmail(email: string): void {
+    const key = email.trim().toLowerCase();
+    if (!key) return;
+    const before = memoryUsers.length;
+    memoryUsers = memoryUsers.filter((u) => u.email.trim().toLowerCase() !== key);
+    if (memoryUsers.length !== before) saveToDisk();
+  },
+
+  deleteUsersByClientId(clientId: string): void {
+    const key = clientId.trim();
+    if (!key) return;
+    const before = memoryUsers.length;
+    memoryUsers = memoryUsers.filter((u) => (u.clientId ?? '') !== key && u.id !== key);
+    if (memoryUsers.length !== before) saveToDisk();
+  },
+
+  deleteInvitationsByEmail(email: string): void {
+    const key = email.trim().toLowerCase();
+    if (!key) return;
+    const before = memoryInvitations.length;
+    memoryInvitations = memoryInvitations.filter((i) => i.email.trim().toLowerCase() !== key);
+    if (memoryInvitations.length !== before) saveToDisk();
+  },
 };
 
 export function createMemoryRecord(

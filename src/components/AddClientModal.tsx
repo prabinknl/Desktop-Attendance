@@ -206,7 +206,7 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
       setInviteLink(finalLink);
 
       if (res.emailSent && res.smsSent) {
-        toast('success', 'Client Invite Sent!', res.message || `Sign-up link emailed to ${email.trim()} & 6-digit SMS code sent to ${phone.trim()}.`);
+        toast('success', 'Client Invite Sent!', res.message || `6-digit verification code emailed to ${email.trim()}.`);
       } else if (res.emailSent) {
         toast('info', 'Partial Invitation Delivery', res.message || `Invitation email sent to ${email.trim()}, but SMS code failed to deliver.`);
       } else {
@@ -307,25 +307,8 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
                         />
                       </div>
                       {emailError && <p className="text-[11px] font-semibold text-rose-500">{emailError}</p>}
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                        <span>Owner Verification Email</span>
-                        <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400">Fixed</span>
-                      </label>
-                      <div className="relative">
-                        <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <input
-                          type="email"
-                          value="v-code@appnep.com"
-                          readOnly
-                          disabled
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-100 py-3 pl-10 pr-4 text-xs font-semibold text-slate-600 cursor-not-allowed dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400"
-                        />
-                      </div>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        The 6-digit verification code will be sent to this owner email address.
+                        The 6-digit verification code will be sent to this invited email address.
                       </p>
                     </div>
 
@@ -624,7 +607,9 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
                         Client Admin Invitation Sent!
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Sign-up link emailed to <strong className="text-slate-700 dark:text-slate-200">{email}</strong> and 6-digit verification code sent by SMS to <strong className="text-slate-700 dark:text-slate-200">{phone}</strong> ({planType === 'free' ? `Free (${formatDurationLabel(freeDays)})` : `Paid (${formatDurationLabel(paidDays)})`}).
+                        A 6-digit verification code was emailed to <strong className="text-slate-700 dark:text-slate-200">{email}</strong>
+                        {phone ? <> and sent by SMS to <strong className="text-slate-700 dark:text-slate-200">{phone}</strong></> : null}
+                        {' '}({planType === 'free' ? `Free (${formatDurationLabel(freeDays)})` : `Paid (${formatDurationLabel(paidDays)})`}).
                       </p>
                     </div>
 

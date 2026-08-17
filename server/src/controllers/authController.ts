@@ -8,6 +8,7 @@ import {
   verifyStoredCode,
   sendInvitationEmail,
 } from '../services/auth/adminVerification.js';
+import { purgeAdminAccountByEmail } from '../services/auth/purgeAdminAccount.js';
 
 const ALLOWED_ADMIN_EMAIL = env.adminSignupEmail;
 const OWNER_SIGNIN_EMAILS = ['noreply@appnep.com', 'appnep@pacenp.com', 'bpkhanal.app@gmail.com'];
@@ -363,6 +364,14 @@ export async function syncUser(req: Request, res: Response) {
       return res.status(400).json({ success: false, message: 'email, role, and password are required' });
     }
     const { UserModel } = await import('../models/UserModel.js');
+    if (String(user.status ?? '').toLowerCase() === 'deleted') {
+      const purged = await purgeAdminAccountByEmail(user.email);
+      if (!purged.ok) {
+        return res.status(400).json({ success: false, message: purged.message || 'Could not release this email.' });
+      }
+      return res.json({ success: true, data: null, purged: true });
+    }
+
     const saved = await UserModel.upsert({
       id: user.id || `u-${Date.now()}`,
       name: user.name || 'User',
@@ -397,8 +406,6 @@ import {
 import { sendClientAdminInvitationEmail, sendClientAdminVerificationCodeEmail } from '../services/auth/adminVerification.js';
 import { smsService, normalizePhoneE164, isPhoneE164Valid } from '../services/sms/smsService.js';
 
-const OWNER_VERIFICATION_EMAIL = 'v-code@appnep.com';
-
 export async function createClientAdminInvite(req: Request, res: Response) {
   try {
     const email = String(req.body?.email ?? '').trim().toLowerCase();
@@ -430,7 +437,18 @@ export async function createClientAdminInvite(req: Request, res: Response) {
     const smsCode = generateSmsCode();
     const smsCodeHash = hashValue(smsCode);
 
-    // Check if an existing pending invitation for this email & client_admin role already exists
+    // A new owner invitation means this email may register again.
+    // Remove any leftover account first so signup is a clean identity.
+    const { UserModel } = await import('../models/UserModel.js');
+    const existingUser = await UserModel.getByEmail(email);
+    if (existingUser && existingUser.role !== 'owner') {
+      const isLiveAccount =
+        (existingUser.status ?? 'active') === 'active' && existingUser.emailVerified !== false;
+      if (!isLiveAccount) {
+        await purgeAdminAccountByEmail(email);
+      }
+    }
+
     const existingInvite = await InvitationModel.getPendingByEmailAndRole(email, 'client_admin');
     const clientId = existingInvite?.client_id || `client-org-${Date.now()}`;
     const inviteId = existingInvite?.id || `inv-${Date.now()}`;
@@ -495,7 +513,7 @@ export async function createClientAdminInvite(req: Request, res: Response) {
           ? '1 Day'
           : `${activeDays} Days`;
 
-    // 1. Send Email to invited client admin
+    // 1. Send 6-digit verification code to the invited client admin email
     const mailRes = await sendClientAdminInvitationEmail({
       to: email,
       companyName,
@@ -503,22 +521,15 @@ export async function createClientAdminInvite(req: Request, res: Response) {
       durationLabel,
       expiresAtFormatted: accessExpiresAt.toLocaleString(),
       inviteLink: publicLink,
+      verificationCode: smsCode,
     });
 
-    // 2. Send 6-digit verification code to fixed owner email (v-code@appnep.com)
-    const codeRes = await sendClientAdminVerificationCodeEmail({
-      to: OWNER_VERIFICATION_EMAIL,
-      code: smsCode,
-      clientEmail: email,
-      companyName,
-    });
-
-    if (!mailRes.sent && !codeRes.sent) {
+    if (!mailRes.sent) {
       return res.status(503).json({
         success: false,
         emailSent: false,
         codeEmailSent: false,
-        message: 'Failed to deliver invitation email and verification code.',
+        message: 'Failed to deliver the 6-digit verification code to the invited email.',
       });
     }
 
@@ -529,16 +540,16 @@ export async function createClientAdminInvite(req: Request, res: Response) {
       serverNow: now,
       status: 'pending',
       emailSent: mailRes.sent,
-      codeEmailSent: codeRes.sent,
+      codeEmailSent: mailRes.sent,
     });
 
     return res.json({
       success: true,
       emailSent: mailRes.sent,
-      codeEmailSent: codeRes.sent,
-      message: `Sign-up link emailed to ${email} & 6-digit verification code sent to owner email ${OWNER_VERIFICATION_EMAIL}.`,
+      codeEmailSent: mailRes.sent,
+      message: `6-digit verification code emailed to ${email}.`,
       inviteLink: publicLink,
-      devSmsCode: codeRes.devFallback ? smsCode : undefined,
+      devSmsCode: mailRes.devFallback ? smsCode : undefined,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to create client admin invitation';
@@ -631,9 +642,9 @@ export async function resendClientAdminSms(req: Request, res: Response) {
 
     await InvitationModel.updateSmsCode(inv.token_hash || tokenHash, newSmsCodeHash, newSmsExpiresAt);
 
-    // Send code to fixed owner email (v-code@appnep.com)
+    // Send 6-digit code to the invited client admin email
     const codeRes = await sendClientAdminVerificationCodeEmail({
-      to: OWNER_VERIFICATION_EMAIL,
+      to: inv.email,
       code: newSmsCode,
       clientEmail: inv.email,
       companyName: inv.company_name,
@@ -649,8 +660,8 @@ export async function resendClientAdminSms(req: Request, res: Response) {
     return res.json({
       success: true,
       message: codeRes.devFallback
-        ? `[Dev Mode] Verification code generated for owner email ${OWNER_VERIFICATION_EMAIL}.`
-        : `A new 6-digit verification code has been sent to owner email ${OWNER_VERIFICATION_EMAIL}.`,
+        ? `[Dev Mode] Verification code generated for ${inv.email}.`
+        : `A new 6-digit verification code has been sent to ${inv.email}.`,
       devSmsCode: codeRes.devFallback ? newSmsCode : undefined,
     });
   } catch (err) {
@@ -724,8 +735,14 @@ export async function signupClientAdmin(req: Request, res: Response) {
       });
     }
 
-    // Create / activate auth user with client_admin role
+    // Create a brand-new account. Leftover deleted/pending rows for this email
+    // are removed first so signup does not reuse the previous identity.
     const { UserModel } = await import('../models/UserModel.js');
+    const existing = await UserModel.getByEmail(inv.email);
+    if (existing) {
+      await purgeAdminAccountByEmail(inv.email, { keepInvitations: true });
+    }
+
     const userObj = {
       id: `usr-${Date.now()}`,
       name,
@@ -1011,5 +1028,23 @@ export async function resendAdminSignupEmail(req: Request, res: Response) {
   }
 }
 
+export async function purgeAdminAccount(req: Request, res: Response) {
+  try {
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const result = await purgeAdminAccountByEmail(email);
+    if (!result.ok) {
+      return res.status(400).json({ success: false, message: result.message || 'Could not delete this account.' });
+    }
+    return res.json({
+      success: true,
+      purgedEmail: result.purgedEmail,
+      message: 'Account and invitation history for this email were removed. The email can sign up again.',
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to delete admin account';
+    console.error('[Auth] purgeAdminAccount error:', message);
+    return res.status(500).json({ success: false, message: 'Server error deleting admin account.' });
+  }
+}
 
 

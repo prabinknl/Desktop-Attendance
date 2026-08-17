@@ -19,6 +19,7 @@ export function formatEmailList(emails: string[]): string {
 
 const USERS_KEY = 'ams_auth_users';
 const SESSION_KEY = 'ams_user';
+const DELETED_CLIENTS_KEY = 'ams_deleted_clients';
 
 interface AuthContextType {
   user: User | null;
@@ -49,10 +50,11 @@ interface AuthContextType {
   hasRole: (...roles: UserRole[]) => boolean;
   can: (action: string) => boolean;
   getAuthUsers: () => User[];
+  getDeletedClients: () => User[];
   hasAdminAccount: () => boolean;
   isEmployeeRegistered: (employeeId: string) => boolean;
   updateClientAppStatus: (userIdOrEmail: string, appStatus: 'running' | 'paused') => void;
-  softDeleteClient: (clientIdOrEmail: string) => void;
+  softDeleteClient: (clientIdOrEmail: string) => Promise<void>;
   realOwnerUser: User | null;
   isImpersonating: boolean;
   impersonateClient: (client: { email: string; name: string; id?: string; companyName?: string; status?: string }) => void;
@@ -85,8 +87,12 @@ function ensureOwnerUser(users: User[]): User[] {
     ];
   }
 
-  // Seed sample client admin accounts if none exist
-  const hasClients = nextUsers.some((u) => u.role === 'client');
+  // Seed sample client admin accounts if none exist. Never revive emails
+  // the owner already moved to the Deleted tab.
+  const deletedEmails = new Set(loadDeletedClients().map((u) => u.email.toLowerCase()));
+  const hasClients = nextUsers.some(
+    (u) => u.role === 'client' && u.status !== 'deleted' && !deletedEmails.has(u.email.toLowerCase()),
+  );
   if (!hasClients) {
     const sampleClients: User[] = [
       {
@@ -122,8 +128,10 @@ function ensureOwnerUser(users: User[]): User[] {
         freeDays: 14,
         avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=apex',
       },
-    ];
-    nextUsers = [...nextUsers, ...sampleClients];
+    ].filter((sample) => !deletedEmails.has(sample.email.toLowerCase()));
+    if (sampleClients.length > 0) {
+      nextUsers = [...nextUsers, ...sampleClients];
+    }
   }
 
   return nextUsers;
@@ -228,26 +236,96 @@ function saveAuthUsers(users: User[]) {
   localStorage.setItem(USERS_KEY, JSON.stringify(users));
 }
 
+function loadDeletedClients(): User[] {
+  try {
+    const raw = localStorage.getItem(DELETED_CLIENTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as User[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDeletedClients(users: User[]) {
+  localStorage.setItem(DELETED_CLIENTS_KEY, JSON.stringify(users));
+}
+
+function isDeletedClientEmail(email: string): boolean {
+  const key = email.trim().toLowerCase();
+  if (!key) return false;
+  return loadDeletedClients().some((u) => u.email.toLowerCase() === key);
+}
+
+function releaseDeletedClientEmail(email: string) {
+  const key = email.trim().toLowerCase();
+  if (!key) return;
+  saveDeletedClients(loadDeletedClients().filter((u) => u.email.toLowerCase() !== key));
+}
+
 export async function hydrateCloudAuthUsers(): Promise<User[]> {
   try {
     const cloudUsers = await authApi.getCloudUsers();
     if (cloudUsers.length > 0) {
       const local = loadAuthUsers();
+      const archived = loadDeletedClients();
+      const cloudEmails = new Set(cloudUsers.map((u) => u.email.toLowerCase()));
       const map = new Map<string, User>();
-      for (const u of local) map.set(u.email.toLowerCase(), u);
+      for (const u of local) {
+        const key = u.email.toLowerCase();
+        const isOwner = OWNER_SIGNIN_EMAILS.includes(key) || u.role === 'owner';
+        const isOrgAccount = u.role === 'admin' || u.role === 'client';
+        const locallyDeleted = u.status === 'deleted' || archived.some((d) => d.email.toLowerCase() === key);
+        // Keep owner-deleted accounts out of the active directory even if cloud
+        // no longer has them (or still has a stale live copy).
+        if (locallyDeleted) {
+          map.set(key, { ...u, status: 'deleted' });
+          continue;
+        }
+        // Cloud is source of truth for org accounts so a purged email can sign up again.
+        if (!isOwner && isOrgAccount && !cloudEmails.has(key)) continue;
+        map.set(key, u);
+      }
       for (const cu of cloudUsers) {
         const key = cu.email.toLowerCase();
         const existing = map.get(key);
-
-        // Normalize role: lowercase + trim; treat empty/undefined as missing
+        const archivedUser = archived.find((d) => d.email.toLowerCase() === key);
         const cloudRole = (cu.role as string ?? '').trim().toLowerCase() || undefined;
         const localRole = existing?.role;
+        const cloudDeleted = String(cu.status ?? '').toLowerCase() === 'deleted';
+        const locallyDeleted = existing?.status === 'deleted' || Boolean(archivedUser);
 
-        // Merge: cloud data wins for most fields, but preserve critical local
-        // values (password, role, avatar) when the cloud response omits them.
+        // A later signup is a new identity (new id) and may reuse the email.
+        if (locallyDeleted && !cloudDeleted && archivedUser && cu.id && archivedUser.id && cu.id !== archivedUser.id) {
+          releaseDeletedClientEmail(key);
+          map.set(key, {
+            ...existing,
+            ...cu,
+            role: (cloudRole ?? localRole ?? 'employee') as User['role'],
+            password: existing?.password ?? '',
+            avatar: cu.avatar || existing?.avatar || '',
+            status: (cu.status as User['status']) || 'active',
+          });
+          continue;
+        }
+
+        if (locallyDeleted || cloudDeleted) {
+          map.set(key, {
+            ...existing,
+            ...cu,
+            role: (cloudRole ?? localRole ?? 'employee') as User['role'],
+            password: existing?.password ?? '',
+            avatar: cu.avatar || existing?.avatar || '',
+            status: 'deleted',
+            deletedAt: existing?.deletedAt || archivedUser?.deletedAt,
+            deletedBy: existing?.deletedBy || archivedUser?.deletedBy,
+          });
+          continue;
+        }
+
         map.set(key, {
-          ...existing,             // start from existing local data
-          ...cu,                   // overlay with cloud fields
+          ...existing,
+          ...cu,
           role: (cloudRole ?? localRole ?? 'employee') as User['role'],
           password: existing?.password ?? '',
           avatar: cu.avatar || existing?.avatar || '',
@@ -347,6 +425,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const getAuthUsers = useCallback(() => loadAuthUsers(), []);
 
+  const getDeletedClients = useCallback(() => loadDeletedClients(), []);
+
   const hasAdminAccount = useCallback(() => {
     return loadAuthUsers().some(
       (u) => u.role === 'admin' && u.email.toLowerCase() === ALLOWED_ADMIN_EMAIL.toLowerCase(),
@@ -364,12 +444,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Check if the identifier matches a soft-deleted client admin or employee under a soft-deleted client
     const allUsers = loadAuthUsers();
+    const archivedClients = loadDeletedClients();
     const targetAccount = allUsers.find(
       (u) =>
         u.email.toLowerCase() === key ||
         u.name.trim().toLowerCase() === key ||
         (u.employeeId && u.employeeId.toLowerCase() === key)
+    ) || archivedClients.find(
+      (u) =>
+        u.email.toLowerCase() === key ||
+        u.name.trim().toLowerCase() === key ||
+        (u.employeeId && u.employeeId.toLowerCase() === key)
     );
+
+    if (isDeletedClientEmail(identifier) || archivedClients.some((u) => u.name.trim().toLowerCase() === key || (u.employeeId && u.employeeId.toLowerCase() === key))) {
+      if (!OWNER_SIGNIN_EMAILS.includes(key)) {
+        return {
+          success: false,
+          error: 'Your company account has been disabled. Please contact the application owner.',
+        };
+      }
+    }
 
     if (targetAccount && targetAccount.role !== 'owner') {
       const isDeletedAccount = targetAccount.status === 'deleted';
@@ -454,7 +549,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         found = { ...found, planType: 'free' };
       }
 
-      if (isDeletedAccount || isParentClientDeleted) {
+      if (isDeletedAccount || isParentClientDeleted || isDeletedClientEmail(found.email)) {
         return {
           success: false,
           error: 'Your company account has been disabled. Please contact the application owner.',
@@ -710,58 +805,89 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const softDeleteClient = useCallback(
-    (clientIdOrEmail: string) => {
+    async (clientIdOrEmail: string) => {
       const key = clientIdOrEmail.toLowerCase();
       const now = new Date().toISOString();
       const currentOwnerId = user?.id || 'owner';
-      let targetClient: User | undefined;
-
       const users = loadAuthUsers();
-      const updatedUsers = users.map((u) => {
-        const isTarget = u.id === clientIdOrEmail || u.email.toLowerCase() === key;
-        if (isTarget) {
-          targetClient = u;
-          return {
-            ...u,
-            status: 'deleted' as const,
-            deletedAt: now,
-            deletedBy: currentOwnerId,
-          };
-        }
-        return u;
-      });
-
-      // Also soft delete employees or sub-accounts under this client
-      const finalUsers = updatedUsers.map((u) => {
-        if (
-          targetClient &&
-          (u.clientId === targetClient.id ||
-            (u.companyName && targetClient.companyName && u.companyName === targetClient.companyName))
-        ) {
-          return {
-            ...u,
-            status: 'deleted' as const,
-            deletedAt: now,
-            deletedBy: currentOwnerId,
-          };
-        }
-        return u;
-      });
-
-      saveAuthUsers(finalUsers);
-      const syncedClient = finalUsers.find(
-        (u) => u.id === clientIdOrEmail || u.email.toLowerCase() === key
+      const targetClient = users.find(
+        (u) => u.id === clientIdOrEmail || u.email.toLowerCase() === key,
       );
-      if (syncedClient) {
-        authApi.syncCloudUser(syncedClient);
+
+      const related = targetClient
+        ? users.filter(
+            (u) =>
+              u.id !== targetClient.id &&
+              (u.clientId === targetClient.id ||
+                (u.companyName &&
+                  targetClient.companyName &&
+                  u.companyName === targetClient.companyName)),
+          )
+        : [];
+
+      const archivedIds = new Set([
+        ...(targetClient ? [targetClient.id] : []),
+        ...related.map((u) => u.id),
+      ]);
+      const archivedEmails = new Set(
+        [targetClient, ...related]
+          .filter(Boolean)
+          .map((u) => u!.email.toLowerCase()),
+      );
+      if (key.includes('@')) archivedEmails.add(key);
+
+      const snapshot = [targetClient, ...related]
+        .filter((u): u is User => Boolean(u))
+        .map((u) => ({
+          ...u,
+          status: 'deleted' as const,
+          deletedAt: now,
+          deletedBy: currentOwnerId,
+        }));
+
+      // If the directory row is only an invitation (no registered user yet),
+      // still record the email so All Clients cannot revive it.
+      if (snapshot.length === 0 && key.includes('@')) {
+        snapshot.push({
+          id: `deleted-${key}`,
+          name: clientIdOrEmail,
+          email: clientIdOrEmail,
+          role: 'client',
+          status: 'deleted',
+          deletedAt: now,
+          deletedBy: currentOwnerId,
+        } as User);
+      }
+
+      if (snapshot.length > 0) {
+        const previous = loadDeletedClients().filter(
+          (u) => !archivedEmails.has(u.email.toLowerCase()) && !archivedIds.has(u.id),
+        );
+        saveDeletedClients([...previous, ...snapshot]);
+      }
+
+      const remaining = users.map((u) =>
+        archivedIds.has(u.id) || archivedEmails.has(u.email.toLowerCase())
+          ? { ...u, status: 'deleted' as const, deletedAt: now, deletedBy: currentOwnerId }
+          : u,
+      );
+      saveAuthUsers(remaining.filter((u) => u.status !== 'deleted'));
+
+      const purgeEmail = targetClient?.email || (key.includes('@') ? clientIdOrEmail : '');
+      if (purgeEmail) {
+        try {
+          await authApi.purgeAdminAccount(purgeEmail);
+        } catch {
+          /* Keep the local Deleted-tab archive even if the server is unreachable. */
+        }
       }
 
       logClientActivity({
-        clientId: syncedClient?.id || clientIdOrEmail,
-        clientName: syncedClient?.companyName || syncedClient?.name || clientIdOrEmail,
+        clientId: targetClient?.id || clientIdOrEmail,
+        clientName: targetClient?.companyName || targetClient?.name || clientIdOrEmail,
         action: 'DELETE_CLIENT',
-        title: 'Client Account Soft-Deleted',
-        description: `Client account soft-deleted by Owner (ID: ${currentOwnerId}). Client administrator and employee accounts disabled. All data safely retained.`,
+        title: 'Client Account Deleted',
+        description: `Client account deleted by Owner (ID: ${currentOwnerId}). The account was removed from the active directory and is listed only under Deleted.`,
         actor: 'Owner Admin',
         type: 'danger',
       });
@@ -858,6 +984,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       hasRole,
       can,
       getAuthUsers,
+      getDeletedClients,
       hasAdminAccount,
       isEmployeeRegistered,
       updateClientAppStatus,

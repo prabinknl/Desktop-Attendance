@@ -209,4 +209,15 @@ export const InvitationModel = {
       console.warn('[InvitationModel] DB markUsed error:', err instanceof Error ? err.message : err);
     }
   },
+
+  async deleteByEmail(email: string): Promise<void> {
+    const key = email.trim().toLowerCase();
+    if (!key) return;
+    memoryStore.deleteInvitationsByEmail(key);
+    try {
+      await query('DELETE FROM app_invitations WHERE LOWER(email) = $1', [key]);
+    } catch (err) {
+      console.warn('[InvitationModel] DB deleteByEmail error:', err instanceof Error ? err.message : err);
+    }
+  },
 };
