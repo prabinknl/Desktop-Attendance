@@ -248,8 +248,6 @@ export const authApi = {
     }
   },
 
-  },
-
   purgeAdminAccount: async (email: string) => {
     const { data } = await apiClient.post<{
       success: boolean;
