@@ -82,6 +82,25 @@ if (fs.existsSync(path.join(serverSrc, '.env.example'))) {
   fs.copyFileSync(path.join(serverSrc, '.env.example'), path.join(outDir, '.env.example'));
 }
 
+const clientDistCandidates = [
+  path.join(root, 'dist-electron'),
+  path.join(root, 'dist'),
+];
+let clientDistSrc = null;
+for (const cand of clientDistCandidates) {
+  if (fs.existsSync(path.join(cand, 'index.html'))) {
+    clientDistSrc = cand;
+    break;
+  }
+}
+
+if (clientDistSrc) {
+  console.log(`[prepare-server-resources] Copying frontend UI ${clientDistSrc} -> ${path.join(outDir, 'public')}`);
+  copyDirRobust(clientDistSrc, path.join(outDir, 'public'));
+} else {
+  console.warn('[prepare-server-resources] Warning: No frontend build found (dist-electron or dist).');
+}
+
 console.log('[prepare-server-resources] Installing production server dependencies...');
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const result = spawnSync(npmCmd, ['install', '--omit=dev', '--no-fund', '--no-audit'], {

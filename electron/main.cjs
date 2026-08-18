@@ -1,15 +1,14 @@
 /**
  * Electron main process for Attendance.
  * Dev: loads Vite at http://127.0.0.1:3002 (API via Vite proxy or local spawn).
- * Prod: serves dist-electron/ on loopback, spawns the local Express API, and
- * proxies /api to that local process so Hikvision LAN discovery/sync works.
+ * Prod: loads Express API at http://127.0.0.1:3001 (which serves both the
+ * frontend UI and the /api backend on a single port).
  */
 'use strict';
 
 const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const http = require('http');
-const https = require('https');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
@@ -19,8 +18,6 @@ const { spawn, execFile } = require('child_process');
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ELECTRON_DEV_URL || 'http://127.0.0.1:3002';
 const DEFAULT_API_PORT = 3001;
-/** Invite links embed this origin, so the UI port must survive a restart. */
-const DEFAULT_UI_PORT = 3010;
 const HEALTH_TIMEOUT_MS = 60_000;
 const HEALTH_INTERVAL_MS = 400;
 
@@ -28,8 +25,6 @@ const HEALTH_INTERVAL_MS = 400;
 const API_TARGET_OVERRIDE = (process.env.ELECTRON_API_TARGET || '').replace(/\/$/, '');
 
 let mainWindow = null;
-let staticServer = null;
-let staticServerPort = null;
 /** @type {import('child_process').ChildProcess | null} */
 let apiProcess = null;
 let apiPort = DEFAULT_API_PORT;
@@ -41,10 +36,6 @@ let apiExitCode = null;
 let apiExitSignal = null;
 /** @type {fs.WriteStream | null} */
 let apiLogStream = null;
-
-function getDistPath() {
-  return path.join(__dirname, '..', 'dist-electron');
-}
 
 function getLogsDir() {
   return path.join(app.getPath('userData'), 'logs');
@@ -110,179 +101,7 @@ function getLocalApiOrigin() {
   return `http://127.0.0.1:${apiPort}`;
 }
 
-function getApiProxyOrigin() {
-  if (API_TARGET_OVERRIDE) return API_TARGET_OVERRIDE;
-  return getLocalApiOrigin();
-}
 
-function contentTypeFor(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  const map = {
-    '.html': 'text/html; charset=utf-8',
-    '.js': 'text/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.json': 'application/json',
-    '.svg': 'image/svg+xml',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.webp': 'image/webp',
-    '.ico': 'image/x-icon',
-    '.woff': 'font/woff',
-    '.woff2': 'font/woff2',
-    '.ttf': 'font/ttf',
-    '.map': 'application/json',
-  };
-  return map[ext] || 'application/octet-stream';
-}
-
-function proxyApiRequest(req, res) {
-  const apiOrigin = getApiProxyOrigin();
-  let target;
-  try {
-    target = new URL(req.url, `${apiOrigin}/`);
-  } catch {
-    res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ success: false, message: 'Invalid backend API URL configuration.' }));
-    return;
-  }
-
-  if (target.origin !== new URL(apiOrigin).origin) {
-    res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ success: false, message: 'Backend connection refused: unexpected API host.' }));
-    return;
-  }
-
-  const headers = { ...req.headers, host: target.host };
-  delete headers['accept-encoding'];
-
-  const transport = target.protocol === 'https:' ? https : http;
-  const proxyReq = transport.request(
-    target,
-    { method: req.method, headers },
-    (proxyRes) => {
-      res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-      proxyRes.pipe(res);
-    },
-  );
-
-  proxyReq.on('error', (err) => {
-    console.error('[Electron] Local API proxy error:', err.message);
-    if (!res.headersSent) {
-      res.writeHead(502, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          success: false,
-          message:
-            'Local attendance API is not reachable. Restart the app or check that the local service started.',
-        }),
-      );
-    }
-  });
-
-  req.pipe(proxyReq);
-}
-
-function serveStatic(req, res, distPath) {
-  const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
-  const safeSuffix = urlPath === '/' ? '/index.html' : urlPath;
-  const candidate = path.normalize(path.join(distPath, safeSuffix));
-
-  if (!candidate.startsWith(distPath)) {
-    res.writeHead(403);
-    res.end('Forbidden');
-    return;
-  }
-
-  const tryFile = (filePath, fallbackToIndex) => {
-    fs.readFile(filePath, (err, data) => {
-      if (!err) {
-        res.writeHead(200, { 'Content-Type': contentTypeFor(filePath) });
-        res.end(data);
-        return;
-      }
-      if (fallbackToIndex) {
-        const indexPath = path.join(distPath, 'index.html');
-        fs.readFile(indexPath, (indexErr, indexData) => {
-          if (indexErr) {
-            res.writeHead(404);
-            res.end('Not found');
-            return;
-          }
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(indexData);
-        });
-        return;
-      }
-      res.writeHead(404);
-      res.end('Not found');
-    });
-  };
-
-  fs.stat(candidate, (err, stat) => {
-    if (!err && stat.isFile()) {
-      tryFile(candidate, false);
-      return;
-    }
-    // Returning index.html for a missing .js/.css request would hand the
-    // browser HTML where it expects a script, leaving a blank page.
-    if (path.extname(urlPath)) {
-      res.writeHead(404);
-      res.end('Not found');
-      return;
-    }
-    tryFile(path.join(distPath, 'index.html'), false);
-  });
-}
-
-async function startProductionServer(distPath) {
-  const uiPort = await findFreePort(DEFAULT_UI_PORT);
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      const rawUrl = req.url || '/';
-      if (rawUrl.startsWith('/api')) {
-        proxyApiRequest(req, res);
-        return;
-      }
-
-      // The UI is built with relative asset URLs and runs on HashRouter, so a
-      // path-style deep link (an emailed /invite/<token>) is redirected to its
-      // hash form instead of breaking asset resolution.
-      const [pathname, query] = rawUrl.split('?');
-      if (pathname !== '/' && !path.extname(pathname)) {
-        res.writeHead(302, { Location: `/#${pathname}${query ? `?${query}` : ''}` });
-        res.end();
-        return;
-      }
-
-      serveStatic(req, res, distPath);
-    });
-
-    server.once('error', reject);
-    server.listen(uiPort, '127.0.0.1', () => {
-      const address = server.address();
-      if (!address || typeof address === 'string') {
-        reject(new Error('Failed to bind local desktop static server.'));
-        return;
-      }
-      staticServer = server;
-      staticServerPort = address.port;
-      resolve(address.port);
-    });
-  });
-}
-
-function assertProductionBuildExists(distPath) {
-  const indexHtml = path.join(distPath, 'index.html');
-  if (!fs.existsSync(indexHtml)) {
-    const message =
-      `Missing production build files at:\n${indexHtml}\n\n` +
-      'Run "npm run electron:build" or "npm run electron:pack" first.';
-    console.error('[Electron]', message);
-    dialog.showErrorBox('Attendance — missing build', message);
-    throw new Error(message);
-  }
-}
 
 function getUserServerEnvPath() {
   return path.join(app.getPath('userData'), 'server.env');
@@ -834,10 +653,10 @@ async function resolveStartUrl() {
   if (isDev) {
     return DEV_URL;
   }
-  const distPath = getDistPath();
-  assertProductionBuildExists(distPath);
-  const port = await startProductionServer(distPath);
-  return `http://127.0.0.1:${port}`;
+  if (API_TARGET_OVERRIDE) {
+    return API_TARGET_OVERRIDE;
+  }
+  return getLocalApiOrigin();
 }
 
 function createWindow(startUrl) {
@@ -1083,7 +902,6 @@ async function bootstrap() {
     await ensureApiServer();
     const startUrl = await resolveStartUrl();
     appendStartupLog(`[Electron] UI start URL: ${startUrl}`);
-    appendStartupLog(`[Electron] API proxy target: ${getApiProxyOrigin()}`);
     createWindow(startUrl);
     checkAutoUpdateOnLaunch();
   } catch (err) {
@@ -1120,10 +938,6 @@ if (!gotLock) {
 }
 
 app.on('window-all-closed', () => {
-  if (staticServer) {
-    staticServer.close();
-    staticServer = null;
-  }
   if (process.platform !== 'darwin') {
     app.quit();
   }

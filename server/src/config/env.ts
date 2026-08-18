@@ -7,7 +7,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
 
-const DEFAULT_CORS_ORIGINS = ['http://localhost:3002', 'http://127.0.0.1:3002'];
+const DEFAULT_CORS_ORIGINS = [
+  'http://localhost:3002',
+  'http://127.0.0.1:3002',
+  'https://desktop-attendance.appnep.com',
+  'https://ahu7znxh.insforge.site',
+  'https://attendance.appnep.com',
+];
 
 /**
  * Browser origins allowed to call this API. The hosted frontend runs on a

@@ -44,10 +44,5 @@ jobs:
             --project-id 37e52add-2bac-45c2-a61a-ff17fcfd7b78 \
             --org-id 1306d016-38f1-49ef-a38e-6c77e1f41db0 \
             -y
-          if [ -n "${{ secrets.VITE_API_BASE_URL }}" ]; then
-            npx @insforge/cli@latest deployments deploy . -y \
-              --env "{\"VITE_API_BASE_URL\":\"${{ secrets.VITE_API_BASE_URL }}\"}"
-          else
-            npx @insforge/cli@latest deployments deploy . -y
-          fi
+          npx @insforge/cli@latest deployments deploy . -y
           echo "Live at https://ahu7znxh.insforge.site"
