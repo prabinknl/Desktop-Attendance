@@ -1,6 +1,5 @@
 /**
- * Hosted web API for Vercel / serverless deployments.
- * Express serves all /api/* routes directly on the same origin (e.g. desktop-attendance.appnep.com).
+ * Hosted web API for Vercel / serverless deployments (root /api entrypoint).
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import app from '../server/src/app.js';

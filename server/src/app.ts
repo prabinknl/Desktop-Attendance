@@ -50,6 +50,7 @@ app.get('/api/health', async (_req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/verification', authRoutes);
 
 // Local connector agent (ISAPI on LAN → HTTPS to cloud)
 app.use('/api/gateway', gatewayRoutes);
@@ -57,9 +58,10 @@ app.use('/api/gateway', gatewayRoutes);
 // Apply authorization middleware for Accountant role security enforcement
 app.use(authorizeAccountantPermissions);
 
-// Singular (legacy) and plural (preferred) mounts share the same controllers
+// Singular (legacy), plural (preferred), and hyphenated alias mounts share the same controllers
 app.use('/api/device', deviceRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/device-settings', deviceRoutes);
 app.use('/api/attendance', attendanceRoutes);
 // Employees, departments, shifts, holidays, leave and punch requests
 app.use('/api/data', coreRoutes);

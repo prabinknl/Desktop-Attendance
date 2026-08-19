@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/[...path].ts": {
+    "api/*.ts": {
       "maxDuration": 30,
       "includeFiles": "server/.env.example"
     }

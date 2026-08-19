@@ -21,6 +21,7 @@ type MemoryLog = {
 export type InvitationRecord = {
   token: string;
   email: string;
+  name?: string;
   role: string;
   created_at: string;
   expires_at: string;
