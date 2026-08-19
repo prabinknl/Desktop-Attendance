@@ -26,6 +26,7 @@ import {
   CloseCircleOutlined,
   CloudSyncOutlined,
   DisconnectOutlined,
+  LoadingOutlined,
   RadarChartOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -128,7 +129,7 @@ export default function DeviceSettingsPage() {
     to: logDateTo,
   });
   const queryClient = useQueryClient();
-  const { connect, save, test, disconnect, sync, scan, updateSyncSettings, setConnectionMode, createConnectorToken } =
+  const { connect, save, test, disconnect, sync, scan, updateSyncSettings, setConnectionMode, createConnectorToken, reconnect } =
     useDeviceMutations();
 
   const connectionMode: ConnectionMode =
@@ -190,6 +191,33 @@ export default function DeviceSettingsPage() {
       return id === target || name === target;
     });
   }, [validLogs, logEmpFilter]);
+
+  // Automatically connect when on the same network or when device is saved
+  useEffect(() => {
+    if (device && !isOnline && connectionMode === 'local_direct') {
+      void reconnect.mutateAsync();
+    }
+  }, [device?.id, isOnline, connectionMode]);
+
+  // When network reconnects (e.g. computer connected to office WiFi/LAN) or window refocuses
+  useEffect(() => {
+    const handleNetworkOnline = () => {
+      if (device && !isOnline) {
+        void reconnect.mutateAsync();
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && device && !isOnline) {
+        void reconnect.mutateAsync();
+      }
+    };
+    window.addEventListener('online', handleNetworkOnline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('online', handleNetworkOnline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [device, isOnline]);
 
   // Keep Employees page names in sync with machine log names (valid punches only)
   useEffect(() => {
@@ -584,8 +612,14 @@ export default function DeviceSettingsPage() {
             borderRadius: 16,
             background: isOnline
               ? 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)'
-              : 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
-            border: isOnline ? '1px solid #6ee7b7' : '1px solid #fca5a5',
+              : status?.status === 'connecting' || status?.status === 'syncing'
+                ? 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)'
+                : 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)',
+            border: isOnline
+              ? '1px solid #6ee7b7'
+              : status?.status === 'connecting' || status?.status === 'syncing'
+                ? '1px solid #93c5fd'
+                : '1px solid #fca5a5',
           }}
         >
           <Row gutter={[24, 16]} align="middle">
@@ -593,11 +627,23 @@ export default function DeviceSettingsPage() {
               <Space size="middle">
                 {isOnline ? (
                   <CheckCircleOutlined style={{ fontSize: 36, color: '#059669' }} />
+                ) : status?.status === 'connecting' || status?.status === 'syncing' ? (
+                  <LoadingOutlined style={{ fontSize: 36, color: '#2563eb' }} />
                 ) : (
                   <CloseCircleOutlined style={{ fontSize: 36, color: '#dc2626' }} />
                 )}
                 <div>
-                  <Title level={4} style={{ margin: 0, color: isOnline ? '#059669' : '#dc2626' }}>
+                  <Title
+                    level={4}
+                    style={{
+                      margin: 0,
+                      color: isOnline
+                        ? '#059669'
+                        : status?.status === 'connecting' || status?.status === 'syncing'
+                          ? '#2563eb'
+                          : '#dc2626',
+                    }}
+                  >
                     {statusLabel(status?.status, testResult?.authState, {
                       connectorOnline,
                       deviceOnline: isOnline,

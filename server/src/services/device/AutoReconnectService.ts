@@ -19,7 +19,7 @@ import { decryptPassword } from '../crypto/passwordCrypto.js';
 import { resolveConnectionMode } from '../connector/devicePresence.js';
 import { env } from '../../config/env.js';
 
-const RECONNECT_INTERVAL_MS = 20_000;
+const RECONNECT_INTERVAL_MS = 15_000;
 
 let reconnectTimer: ReturnType<typeof setInterval> | null = null;
 let reconnectInFlight = false;
@@ -122,7 +122,11 @@ export async function tryReconnectOnce(): Promise<ReconnectOutcome> {
       };
     }
 
-    const netInfo = getLocalNetworkInfo();
+    const preferredSubnet = record.ip_address
+      ? record.ip_address.split('.').slice(0, 3).join('.')
+      : undefined;
+
+    const netInfo = getLocalNetworkInfo(preferredSubnet);
     console.log(
       `[Device] Local network: ${
         netInfo.addresses.length
@@ -193,9 +197,9 @@ export async function tryReconnectOnce(): Promise<ReconnectOutcome> {
       );
     }
 
-    // Saved IP unavailable — scan current local subnet only.
+    // Saved IP unavailable — scan current local subnet (prioritizing saved subnet).
     console.log('[Device] Subnet scan started');
-    const scan = await scanNetwork();
+    const scan = await scanNetwork(preferredSubnet, record.port);
     if (!scan.discoveryAvailable) {
       await updateDeviceStatus(record.id, 'offline').catch(() => {});
       return {

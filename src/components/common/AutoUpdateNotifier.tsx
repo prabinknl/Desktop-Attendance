@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Download, CheckCircle2 } from 'lucide-react';
 import type { UpdateStatusPayload } from '../../types/electron';
@@ -96,4 +96,3 @@ export default function AutoUpdateNotifier() {
     </>
   );
 }
-

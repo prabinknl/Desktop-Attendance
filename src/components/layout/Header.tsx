@@ -458,25 +458,30 @@ export default function Header({ sidebarCollapsed, onMobileMenuToggle }: HeaderP
 
         {/* User menu */}
         <div ref={userRef} className="relative">
-          <button
-            onClick={() => setShowUserMenu(v => !v)}
-            className="flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-          >
-            <div className="w-7 h-7 rounded-full overflow-hidden bg-primary-100 dark:bg-primary-900/40 flex items-center justify-center flex-shrink-0">
-              {user?.avatar ? (
-                <img src={user.avatar} alt={user?.name} className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-[11px] font-bold text-primary-600">
-                  {getInitials(user?.name ?? '?')}
-                </span>
-              )}
-            </div>
-            <div className="hidden sm:block text-left">
-              <p className="text-xs font-semibold text-slate-900 dark:text-white leading-none">{user?.name}</p>
-              <p className="text-[10px] text-slate-500 leading-none mt-0.5">{roleLabels[user?.role ?? '']}</p>
-            </div>
-            <ChevronDown size={14} className="text-slate-400 hidden sm:block" />
-          </button>
+          {(() => {
+            const displayName = user?.name?.trim() || user?.email?.trim() || 'User';
+            return (
+              <button
+                onClick={() => setShowUserMenu(v => !v)}
+                className="flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <div className="w-7 h-7 rounded-full overflow-hidden bg-primary-100 dark:bg-primary-900/40 flex items-center justify-center flex-shrink-0">
+                  {user?.avatar ? (
+                    <img src={user.avatar} alt={displayName} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-[11px] font-bold text-primary-600">
+                      {getInitials(displayName)}
+                    </span>
+                  )}
+                </div>
+                <div className="hidden sm:block text-left">
+                  <p className="text-xs font-semibold text-slate-900 dark:text-white leading-none">{displayName}</p>
+                  <p className="text-[10px] text-slate-500 leading-none mt-0.5">{roleLabels[user?.role ?? '']}</p>
+                </div>
+                <ChevronDown size={14} className="text-slate-400 hidden sm:block" />
+              </button>
+            );
+          })()}
 
           <AnimatePresence>
             {showUserMenu && (

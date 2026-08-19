@@ -732,8 +732,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const updateProfile = useCallback((patch: Partial<Pick<User, 'name' | 'email' | 'phone' | 'timezone' | 'avatar'>>) => {
     setUser((prev) => {
       if (!prev) return prev;
-      const next = { ...prev, ...patch };
-      const users = loadAuthUsers().map((u) => (u.id === prev.id ? { ...u, ...patch } : u));
+      const effectiveName =
+        patch.name !== undefined
+          ? (patch.name.trim() || patch.email?.trim() || prev.email || '')
+          : prev.name;
+      const next = { ...prev, ...patch, name: effectiveName };
+      const users = loadAuthUsers().map((u) => (u.id === prev.id ? { ...u, ...patch, name: effectiveName } : u));
       saveAuthUsers(users);
       authApi.syncCloudUser(next);
       return persistSession(next);

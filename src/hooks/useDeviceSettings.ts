@@ -127,6 +127,11 @@ export function useDeviceMutations() {
     onSuccess: invalidateAll,
   });
 
+  const reconnect = useMutation({
+    mutationFn: () => deviceApi.reconnect(),
+    onSuccess: invalidateAll,
+  });
+
   return {
     connect,
     save,
@@ -137,5 +142,6 @@ export function useDeviceMutations() {
     updateSyncSettings,
     setConnectionMode,
     createConnectorToken,
+    reconnect,
   };
 }

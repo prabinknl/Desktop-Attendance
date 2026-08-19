@@ -223,12 +223,19 @@ export function pct(value: number, total: number): number {
 
 // ─── Get initials ─────────────────────────────────────────────────────────────
 export function getInitials(name: string): string {
-  return name
-    .split(' ')
+  if (!name || !name.trim()) return '?';
+  const clean = name.trim();
+  if (clean.includes('@')) {
+    const local = clean.split('@')[0];
+    return (local.slice(0, 2) || '?').toUpperCase();
+  }
+  return clean
+    .split(/\s+/)
+    .filter(Boolean)
     .map(w => w[0])
     .join('')
     .toUpperCase()
-    .slice(0, 2);
+    .slice(0, 2) || '?';
 }
 
 // ─── Debounce ─────────────────────────────────────────────────────────────────

@@ -60,26 +60,44 @@ export default function ProfilePage() {
     timezone: user?.timezone ?? 'Asia/Kathmandu',
   });
 
+  useEffect(() => {
+    if (user) {
+      setPersonalInfo({
+        name: user.name ?? '',
+        email: user.email ?? '',
+        phone: user.phone ?? '+977-9800000000',
+        timezone: user.timezone ?? 'Asia/Kathmandu',
+      });
+    }
+  }, [user]);
+
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<PasswordForm>({
     resolver: zodResolver(passwordSchema),
   });
 
   const handleSavePersonal = () => {
-    if (!personalInfo.name.trim()) {
-      toast('error', 'Name required', 'Please enter your full name.');
-      return;
-    }
-    if (!personalInfo.email.trim()) {
+    const trimmedName = personalInfo.name.trim();
+    const trimmedEmail = personalInfo.email.trim();
+    if (!trimmedEmail) {
       toast('error', 'Email required', 'Please enter your email address.');
       return;
     }
+    // When display name is deleted, refresh that email as the effective name
+    const effectiveName = trimmedName || trimmedEmail;
     updateProfile({
-      name: personalInfo.name.trim(),
-      email: personalInfo.email.trim(),
+      name: effectiveName,
+      email: trimmedEmail,
       phone: personalInfo.phone.trim(),
       timezone: personalInfo.timezone.trim(),
     });
-    toast('success', 'Profile Updated', 'Your personal information has been saved.');
+    setPersonalInfo(p => ({ ...p, name: effectiveName, email: trimmedEmail }));
+    toast(
+      'success',
+      'Profile Updated',
+      trimmedName
+        ? 'Your personal information has been saved.'
+        : 'Display name removed — refreshed to email address.',
+    );
   };
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -126,41 +144,46 @@ export default function ProfilePage() {
       <h1 className="text-2xl font-bold text-slate-900 dark:text-white">My Profile</h1>
 
       {/* Profile Hero */}
-      <div className="card p-6">
-        <div className="flex items-center gap-6">
-          <div className="relative flex-shrink-0">
-            <div className="w-20 h-20 rounded-3xl overflow-hidden bg-gradient-to-br from-primary-400 to-violet-500 flex items-center justify-center">
-              {user?.avatar ? (
-                <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-3xl font-bold text-white">{getInitials(user?.name ?? '')}</span>
-              )}
+      {(() => {
+        const displayName = user?.name?.trim() || user?.email?.trim() || 'User';
+        return (
+          <div className="card p-6">
+            <div className="flex items-center gap-6">
+              <div className="relative flex-shrink-0">
+                <div className="w-20 h-20 rounded-3xl overflow-hidden bg-gradient-to-br from-primary-400 to-violet-500 flex items-center justify-center">
+                  {user?.avatar ? (
+                    <img src={user.avatar} alt={displayName} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-3xl font-bold text-white">{getInitials(displayName)}</span>
+                  )}
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleAvatarChange}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="absolute -bottom-1 -right-1 w-7 h-7 rounded-xl bg-primary-500 text-white flex items-center justify-center shadow-lg hover:bg-primary-600 transition-colors"
+                  aria-label="Change profile photo"
+                >
+                  <Camera size={13} />
+                </button>
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-slate-900 dark:text-white">{displayName}</h2>
+                <p className="text-slate-500 dark:text-slate-400 text-sm">{user?.email}</p>
+                <span className={cn('badge mt-2 text-xs font-semibold', roleBadgeColors[user?.role ?? 'employee'])}>
+                  {roleLabels[user?.role ?? 'employee']}
+                </span>
+              </div>
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleAvatarChange}
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="absolute -bottom-1 -right-1 w-7 h-7 rounded-xl bg-primary-500 text-white flex items-center justify-center shadow-lg hover:bg-primary-600 transition-colors"
-              aria-label="Change profile photo"
-            >
-              <Camera size={13} />
-            </button>
           </div>
-          <div>
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white">{user?.name}</h2>
-            <p className="text-slate-500 dark:text-slate-400 text-sm">{user?.email}</p>
-            <span className={cn('badge mt-2 text-xs font-semibold', roleBadgeColors[user?.role ?? 'employee'])}>
-              {roleLabels[user?.role ?? 'employee']}
-            </span>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       <div className="flex flex-col lg:flex-row gap-4">
         {/* Tab navigation */}

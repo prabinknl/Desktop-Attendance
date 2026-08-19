@@ -3,12 +3,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// server/src/config → server/.env (primary), then repo-root .env, then example
-// (example fills SMTP/DB when Vercel cannot ship gitignored server/.env)
+// server/src/config → server/.env (primary), then repo-root .env
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
-dotenv.config({ path: path.resolve(process.cwd(), 'server/.env') });
-dotenv.config({ path: path.resolve(process.cwd(), 'server/.env.example') });
 
 const DEFAULT_CORS_ORIGINS = [
   'http://localhost:3002',
@@ -41,11 +38,11 @@ function getAppPublicUrl(): string {
   if ((process.env.NODE_ENV ?? 'development') === 'development') {
     return 'http://127.0.0.1:3002';
   }
-  return 'https://desktop-attendance.appnep.com';
+  return '';
 }
 
 export const env = {
-  port: parseInt(process.env.PORT ?? '3001', 10),
+  port: parseInt(process.env.PORT ?? '3002', 10),
   /**
    * Listen address. Desktop Electron sets HOST=127.0.0.1 so the API is not
    * exposed on the LAN. Cloud/server deploys typically use 0.0.0.0.
@@ -81,7 +78,6 @@ export const env = {
   smtpPort: parseInt(process.env.SMTP_PORT ?? '587', 10),
   smtpUser: process.env.SMTP_USER ?? '',
   smtpPass: process.env.SMTP_PASS ?? '',
-  smtpFrom: (process.env.SMTP_FROM ?? process.env.SMTP_USER ?? '').trim(),
   insforgeBaseUrl: (process.env.INSFORGE_BASE_URL ?? '').trim(),
   insforgeApiKey: (process.env.INSFORGE_API_KEY ?? '').trim(),
   smsProvider: (process.env.SMS_PROVIDER ?? '').trim().toLowerCase(),

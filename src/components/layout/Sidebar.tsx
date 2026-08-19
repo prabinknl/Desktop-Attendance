@@ -317,44 +317,49 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </div>
 
       {/* ── User info ────────────────────────────── */}
-      <div className={cn(
-        'flex items-center gap-3 p-3 mx-3 mb-3 rounded-xl',
-        'bg-slate-50 dark:bg-slate-800',
-        collapsed && 'justify-center'
-      )}>
-        <div className="flex-shrink-0 relative">
-          <div className="w-8 h-8 rounded-full overflow-hidden bg-primary-100 dark:bg-primary-900/40 flex items-center justify-center">
-            {user?.avatar ? (
-              <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
-            ) : (
-              <span className="text-xs font-bold text-primary-600">
-                {getInitials(user?.name ?? '?')}
-              </span>
-            )}
+      {(() => {
+        const displayName = user?.name?.trim() || user?.email?.trim() || 'User';
+        return (
+          <div className={cn(
+            'flex items-center gap-3 p-3 mx-3 mb-3 rounded-xl',
+            'bg-slate-50 dark:bg-slate-800',
+            collapsed && 'justify-center'
+          )}>
+            <div className="flex-shrink-0 relative">
+              <div className="w-8 h-8 rounded-full overflow-hidden bg-primary-100 dark:bg-primary-900/40 flex items-center justify-center">
+                {user?.avatar ? (
+                  <img src={user.avatar} alt={displayName} className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-xs font-bold text-primary-600">
+                    {getInitials(displayName)}
+                  </span>
+                )}
+              </div>
+              <span className={cn(
+                'absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-slate-800',
+                roleColors[user?.role ?? 'employee']
+              )} />
+            </div>
+            <AnimatePresence>
+              {!collapsed && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="overflow-hidden min-w-0"
+                >
+                  <p className="text-sm font-semibold text-slate-900 dark:text-white truncate leading-none">
+                    {displayName}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-none">
+                    {roleLabels[user?.role ?? 'employee']}
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-          <span className={cn(
-            'absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-slate-800',
-            roleColors[user?.role ?? 'employee']
-          )} />
-        </div>
-        <AnimatePresence>
-          {!collapsed && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="overflow-hidden min-w-0"
-            >
-              <p className="text-sm font-semibold text-slate-900 dark:text-white truncate leading-none">
-                {user?.name}
-              </p>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-none">
-                {roleLabels[user?.role ?? 'employee']}
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+        );
+      })()}
 
       {/* ── Add Client Modal for Owner ───────────────── */}
       <AddClientModal open={inviteOpen} onClose={() => setInviteOpen(false)} />

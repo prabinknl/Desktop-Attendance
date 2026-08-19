@@ -4,9 +4,7 @@ dist-electron
 electron-resources
 release
 release-builds
-server/dist
-server/data
-server/.env
+server
 .git
 *.exe
 *.zip

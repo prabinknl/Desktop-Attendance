@@ -1,17 +1,11 @@
 {
-  "functions": {
-    "api/*.ts": {
-      "maxDuration": 30,
-      "includeFiles": "server/.env.example"
-    }
-  },
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api"
+      "source": "/api/:path*",
+      "destination": "https://attendance-api.fly.dev/api/:path*"
     },
     {
-      "source": "/((?!api/).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]

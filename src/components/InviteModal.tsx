@@ -46,6 +46,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
 
   const [step, setStep] = useState<'role' | 'email' | 'done'>('role');
   const [selectedRole, setSelectedRole] = useState<InviteRole | null>(null);
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState('');
   const [inviteCode, setInviteCode] = useState('');
@@ -59,6 +60,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
       setTimeout(() => {
         setStep('role');
         setSelectedRole(null);
+        setName('');
         setEmail('');
         setEmailError('');
         setInviteCode('');
@@ -88,11 +90,16 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
       setEmailError('');
       setSending(true);
       try {
-        const { token, link } = createInvitation(email.trim().toLowerCase(), selectedRole!);
+        const trimmedEmail = email.trim().toLowerCase();
+        const trimmedName = name.trim();
+        const { token, link } = createInvitation(trimmedEmail, selectedRole!, {
+          name: trimmedName || undefined,
+        });
         setInviteCode(token);
 
         const res = await authApi.sendInviteEmail({
-          email: email.trim().toLowerCase(),
+          email: trimmedEmail,
+          name: trimmedName || undefined,
           role: selectedRole!,
           inviteLink: link,
           token,
@@ -102,7 +109,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
         if (res.code) setInviteCode(res.code);
 
         if (res.success) {
-          toast('success', `Invitation code sent to ${email.trim()}`);
+          toast('success', `Invitation code sent to ${trimmedEmail}`);
         } else {
           toast('warning', res.message || 'Invitation code generated, but email could not be sent.');
         }
@@ -284,7 +291,24 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
 
                       <div>
                         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                          Email Address
+                          Full Name / Display Name <span className="text-xs text-slate-400 font-normal">(Optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          disabled={sending}
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          placeholder="e.g. Jane Doe"
+                          className={cn(
+                            'input-field w-full',
+                            sending && 'opacity-60 cursor-not-allowed bg-slate-50 dark:bg-slate-800'
+                          )}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+                          Email Address <span className="text-rose-500">*</span>
                         </label>
                         <input
                           ref={emailRef}
@@ -350,9 +374,22 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
                           <Check size={32} className="text-emerald-500" />
                         </div>
                         <p className="font-semibold text-slate-900 dark:text-white">Invitation code sent!</p>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                          Code sent to <strong className="text-slate-700 dark:text-slate-300">{email}</strong>
-                        </p>
+                        <div className="mt-2 space-y-1 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800 text-left text-xs">
+                          {name.trim() && (
+                            <div className="flex justify-between py-0.5">
+                              <span className="text-slate-400">Invited Name:</span>
+                              <span className="font-semibold text-slate-800 dark:text-slate-200">{name.trim()}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between py-0.5">
+                            <span className="text-slate-400">Email Address:</span>
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">{email.trim()}</span>
+                          </div>
+                          <div className="flex justify-between py-0.5">
+                            <span className="text-slate-400">Role:</span>
+                            <span className="font-semibold text-primary-600 dark:text-primary-400">{roleInfo?.label}</span>
+                          </div>
+                        </div>
                       </div>
 
                       <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-center">
@@ -384,7 +421,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
 
                       <div className="flex gap-3">
                         <button
-                          onClick={() => { setStep('role'); setSelectedRole(null); setEmail(''); setInviteCode(''); }}
+                          onClick={() => { setStep('role'); setSelectedRole(null); setName(''); setEmail(''); setInviteCode(''); }}
                           className="btn flex-1 py-3 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl text-sm"
                         >
                           New Invite

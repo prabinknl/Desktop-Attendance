@@ -135,7 +135,11 @@ export default function DashboardPage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-            Good morning, {user?.name?.split(' ')[0]} 👋
+            {(() => {
+              const displayName = user?.name?.trim() || user?.email?.trim() || 'User';
+              const greeting = displayName.includes('@') ? displayName : displayName.split(' ')[0];
+              return `Good morning, ${greeting} 👋`;
+            })()}
           </h1>
           <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
             {formatDate(new Date())} · Here's what's happening today

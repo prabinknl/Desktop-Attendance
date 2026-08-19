@@ -130,6 +130,9 @@ export default function InviteSignupPage() {
       if (isMounted) {
         if (result.ok) {
           setInvite(result.invitation);
+          if (result.invitation.name) {
+            setValue('name', result.invitation.name, { shouldValidate: true, shouldDirty: true });
+          }
           setInviteError(null);
         } else {
           setInvite(null);
@@ -362,12 +365,20 @@ export default function InviteSignupPage() {
             <h1 className="text-3xl font-extrabold text-slate-900 dark:text-white mb-2">
               Complete your sign-up
             </h1>
-            <div className="flex items-center gap-3 mt-3">
+            <div className="flex flex-wrap items-center gap-3 mt-3">
               <span className={cn('px-3 py-1 rounded-full text-xs font-semibold', roleBadgeColor)}>
                 {roleLabel}
               </span>
               <span className="text-sm text-slate-500 dark:text-slate-400">
-                Invited as: <span className="font-medium text-slate-700 dark:text-slate-200">{invite.email}</span>
+                {invite.name ? (
+                  <>
+                    Invited: <strong className="font-semibold text-slate-700 dark:text-slate-200">{invite.name}</strong> ({invite.email})
+                  </>
+                ) : (
+                  <>
+                    Invited as: <span className="font-medium text-slate-700 dark:text-slate-200">{invite.email}</span>
+                  </>
+                )}
               </span>
             </div>
           </div>

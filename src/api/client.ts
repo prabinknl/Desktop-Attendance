@@ -19,10 +19,6 @@ function isHostedFrontendOrigin(origin: string): boolean {
  * Local web dev goes through the Vite proxy on a relative path; the hosted
  * build needs VITE_API_BASE_URL pointing at the Express API (…/api). The
  * Electron shell exposes a loopback API URL via preload.
- *
- * If VITE_API_BASE_URL was set to the frontend host by mistake (for example
- * https://ahu7znxh.insforge.site), use same-origin /api so Vercel can serve
- * the Express handler.
  */
 function resolveApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
@@ -91,7 +87,7 @@ const UNREACHABLE_MESSAGE =
 
 export function getReadableApiError(error: unknown): string {
   if (axios.isAxiosError(error)) {
-    const ax = error as AxiosError<{ message?: string; success?: boolean; error?: string }>;
+    const ax = error as AxiosError<unknown>;
     if (!ax.response) {
       if (ax.code === 'ECONNABORTED') return 'Request timed out waiting for the backend.';
       if (ax.code === 'ERR_NETWORK' || ax.message === 'Network Error') {
@@ -102,17 +98,24 @@ export function getReadableApiError(error: unknown): string {
       return UNREACHABLE_MESSAGE;
     }
 
-    const resData = ax.response.data;
+    const resData: unknown = ax.response.data;
     let serverMessage = '';
+    let serverSuccess: boolean | undefined;
+
     if (typeof resData === 'string') {
-      if (!resData.trim().startsWith('<')) {
-        serverMessage = resData.trim();
+      const trimmed = resData.trim();
+      if (!trimmed.startsWith('<')) {
+        serverMessage = trimmed;
       }
     } else if (typeof resData === 'object' && resData !== null) {
-      if (typeof resData.message === 'string') {
-        serverMessage = resData.message;
-      } else if (typeof resData.error === 'string') {
-        serverMessage = resData.error;
+      const obj = resData as Record<string, unknown>;
+      if (typeof obj.message === 'string') {
+        serverMessage = obj.message;
+      } else if (typeof obj.error === 'string') {
+        serverMessage = obj.error;
+      }
+      if (typeof obj.success === 'boolean') {
+        serverSuccess = obj.success;
       }
     }
 
@@ -134,10 +137,10 @@ export function getReadableApiError(error: unknown): string {
         : 'Backend API route does not accept this request method (HTTP 405).');
     }
     if (ax.response.status === 502 || ax.response.status === 503 || ax.response.status === 504) {
-      if (serverMessage && resData && typeof resData === 'object' && resData.success === false) {
+      if (serverMessage && serverSuccess === false) {
         return serverMessage;
       }
-      return 'Backend service or device is temporarily unavailable (HTTP ' + ax.response.status + ').';
+      return `Backend service or device is temporarily unavailable (HTTP ${ax.response.status}).`;
     }
     if (ax.response.status >= 500) {
       if (/database|ECONNREFUSED|postgres/i.test(serverMessage)) {

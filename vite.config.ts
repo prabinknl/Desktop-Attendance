@@ -13,15 +13,11 @@ export default defineConfig({
     // Bind IPv4 explicitly so Electron + wait-on (127.0.0.1) can reach the UI.
     // On some Windows setups Vite defaults to ::1 only.
     host: '127.0.0.1',
-    port: 3002,
+    port: 3000,
     open: true,
-    watch: {
-      // OneDrive conflict copies are often cloud placeholders and crash HMR reads.
-      ignored: ['**/*-DESKTOP-*', '**/*-Bishnu-DeLL*'],
-    },
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:3001',
+        target: 'http://127.0.0.1:3002',
         changeOrigin: true,
       },
     },
