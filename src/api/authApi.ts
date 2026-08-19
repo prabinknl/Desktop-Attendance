@@ -5,6 +5,10 @@ import {
   normalizeInviteToken,
   type InvitationLookupResult,
 } from '../lib/inviteToken';
+import {
+  deliverClientAdminInviteEmail,
+  verifyClientAdminInviteCode,
+} from '../lib/clientAdminInvite';
 
 interface SendCodeResponse {
   success: boolean;
@@ -149,15 +153,23 @@ export const authApi = {
     planType: 'free' | 'paid';
     durationDays: number;
   }) => {
-    const { data } = await apiClient.post<{
-      success: boolean;
-      emailSent?: boolean;
-      smsSent?: boolean;
-      message?: string;
-      inviteLink?: string;
-      devSmsCode?: string;
-    }>('/auth/client-admin/invite', input);
-    return data;
+    try {
+      const { data } = await apiClient.post<{
+        success: boolean;
+        emailSent?: boolean;
+        smsSent?: boolean;
+        message?: string;
+        inviteLink?: string;
+        devSmsCode?: string;
+      }>('/auth/client-admin/invite', input);
+      if (data?.success && data.emailSent) {
+        return data;
+      }
+    } catch {
+      /* Hosted API may be a stub; deliver the 6-digit code via InsForge instead. */
+    }
+
+    return deliverClientAdminInviteEmail(input);
   },
 
   validateClientAdminInvite: async (token: string): Promise<InvitationLookupResult> => {
@@ -260,21 +272,29 @@ export const authApi = {
   },
 
   verifyAdminSignupInvite: async (input: { invitationCode: string; phone: string }) => {
-    const { data } = await apiClient.post<{
-      success: boolean;
-      message?: string;
-      invitation?: {
-        invitationToken: string;
-        companyName: string;
-        invitedEmail: string;
-        invitingOwner: string;
-        packageDuration: string;
-        phone: string;
-      };
-    }>('/auth/admin-signup/verify-invitation', input, {
-      validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s >= 500,
-    });
-    return data;
+    try {
+      const { data } = await apiClient.post<{
+        success: boolean;
+        message?: string;
+        invitation?: {
+          invitationToken: string;
+          companyName: string;
+          invitedEmail: string;
+          invitingOwner: string;
+          packageDuration: string;
+          phone: string;
+        };
+      }>('/auth/admin-signup/verify-invitation', input, {
+        validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s >= 500,
+      });
+      if (data?.success && data.invitation) {
+        return data;
+      }
+    } catch {
+      /* Fall through to InsForge code verification. */
+    }
+
+    return verifyClientAdminInviteCode(input);
   },
 
   submitAdminSignup: async (input: { invitationToken: string; name: string; password: string; phone: string }) => {

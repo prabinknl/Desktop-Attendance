@@ -4,12 +4,8 @@ import {
   Building2,
   Mail,
   X,
-  Copy,
-  Check,
   ChevronRight,
-  Sparkles,
   Zap,
-  ShieldCheck,
   Clock,
   Calendar,
   Send,
@@ -74,8 +70,6 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
 
   const [emailError, setEmailError] = useState('');
   const [phoneError, setPhoneError] = useState('');
-  const [inviteLink, setInviteLink] = useState('');
-  const [copied, setCopied] = useState(false);
   const [sending, setSending] = useState(false);
 
   const emailRef = useRef<HTMLInputElement>(null);
@@ -95,8 +89,6 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
         setIsCustomDays(false);
         setEmailError('');
         setPhoneError('');
-        setInviteLink('');
-        setCopied(false);
         setSending(false);
       }, 300);
     }
@@ -176,62 +168,38 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
     setSending(true);
 
     const activeDays = planType === 'free' ? freeDays : paidDays;
-
-    // 1. Generate invitation in local context first so the invite link is always created
-    const { link } = createInvitation(email.trim().toLowerCase(), 'client', {
-      phone: phone.trim(),
-      planType,
-      freeTrialDays: planType === 'free' ? freeDays : undefined,
-      paidDays: planType === 'paid' ? paidDays : undefined,
-      durationDays: activeDays,
-      companyName: companyName.trim() || undefined,
-    });
-    setInviteLink(link);
+    const invitedEmail = email.trim().toLowerCase();
 
     try {
-      // 2. Call backend API to persist in cloud DB, send email, and send SMS code if available
       const res = await authApi.createClientAdminInvite({
-        email: email.trim().toLowerCase(),
+        email: invitedEmail,
         phone: phone.trim(),
         companyName: companyName.trim() || undefined,
         planType,
         durationDays: activeDays,
       });
 
-      if (res.inviteLink) {
-        setInviteLink(res.inviteLink);
+      if (!res.success || !res.emailSent) {
+        toast('error', 'Code Not Sent', res.message || `Could not email the 6-digit verification code to ${invitedEmail}.`);
+        return;
       }
 
-      if (res.success) {
-        if (res.emailSent && res.smsSent) {
-          toast('success', 'Client Invite Sent!', res.message || `6-digit verification code emailed to ${email.trim()}.`);
-        } else if (res.emailSent) {
-          toast('info', 'Partial Invitation Delivery', res.message || `Invitation email sent to ${email.trim()}, but SMS code failed to deliver.`);
-        } else {
-          toast('success', 'Client Invite Created!', res.message || 'Invitation created successfully.');
-        }
-      } else {
-        toast('warning', 'Invitation Created', res.message || 'Invitation link generated. You can copy and share it manually.');
-      }
+      createInvitation(invitedEmail, 'client', {
+        phone: phone.trim(),
+        planType,
+        freeTrialDays: planType === 'free' ? freeDays : undefined,
+        paidDays: planType === 'paid' ? paidDays : undefined,
+        durationDays: activeDays,
+        companyName: companyName.trim() || undefined,
+      });
 
+      toast('success', 'Verification Code Sent', res.message || `6-digit verification code emailed to ${invitedEmail}.`);
       setStep('done');
     } catch (err) {
-      console.warn('Backend invite notification skipped (API unreachable / offline):', err);
-      toast('warning', 'Invitation Link Created', 'Invitation link generated. Backend delivery service was not reachable, but you can copy and share the link manually.');
-      setStep('done');
+      const message = err instanceof Error ? err.message : `Could not email the 6-digit verification code to ${invitedEmail}.`;
+      toast('error', 'Code Not Sent', message);
     } finally {
       setSending(false);
-    }
-  };
-
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(inviteLink);
-      setCopied(true);
-      toast('success', 'Invitation link copied!');
-      setTimeout(() => setCopied(false), 2500);
-    } catch {
-      toast('error', 'Could not copy automatically.');
     }
   };
 
@@ -605,34 +573,13 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
 
                     <div className="space-y-1.5">
                       <h3 className="text-lg font-extrabold text-slate-900 dark:text-white">
-                        Client Admin Invitation Sent!
+                        Verification Code Emailed
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         A 6-digit verification code was emailed to <strong className="text-slate-700 dark:text-slate-200">{email}</strong>
-                        {phone ? <> and sent by SMS to <strong className="text-slate-700 dark:text-slate-200">{phone}</strong></> : null}
                         {' '}({planType === 'free' ? `Free (${formatDurationLabel(freeDays)})` : `Paid (${formatDurationLabel(paidDays)})`}).
+                        The invitee should open Admin Sign Up and enter that code with this mobile number.
                       </p>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3.5 text-left dark:border-slate-800 dark:bg-slate-950">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                        Client Sign up Link
-                      </label>
-                      <div className="flex items-center justify-between gap-2">
-                        <input
-                          type="text"
-                          readOnly
-                          value={inviteLink}
-                          className="w-full bg-transparent text-xs font-mono text-slate-800 dark:text-slate-200 focus:outline-none truncate"
-                        />
-                        <button
-                          onClick={copyLink}
-                          className="flex items-center gap-1 rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 cursor-pointer"
-                        >
-                          {copied ? <Check size={14} /> : <Copy size={14} />}
-                          <span>{copied ? 'Copied' : 'Copy'}</span>
-                        </button>
-                      </div>
                     </div>
 
                     <button

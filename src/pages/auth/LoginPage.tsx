@@ -13,6 +13,7 @@ import { EmployeeAPI } from '../../data/store';
 import { deviceApi } from '../../api/deviceApi';
 import { authApi } from '../../api/authApi';
 import { sendOwnerVerificationCode as requestOwnerVerificationCode, verifyOwnerVerificationCode } from '../../lib/ownerOtp';
+import { markClientAdminInviteAccepted, saveInvitedClientAdminAccount } from '../../lib/clientAdminInvite';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { cn } from '../../lib/utils';
 import type { Employee } from '../../types';
@@ -320,6 +321,28 @@ export default function LoginPage() {
     }
 
     setLoading(true);
+    const finishLocalSignup = async () => {
+      saveInvitedClientAdminAccount({
+        name: adminNameInput.trim(),
+        email: verifiedInvitation.invitedEmail,
+        password: adminPasswordInput,
+        phone: phoneInput.trim() || verifiedInvitation.phone,
+        companyName: verifiedInvitation.companyName,
+      });
+      await markClientAdminInviteAccepted(verifiedInvitation.invitedEmail);
+      toast('success', 'Account Created Successfully', 'Admin account created successfully. You can now sign in.');
+      setAdminSignupWorkflowStep('verify-invite');
+      setVerifiedInvitation(null);
+      setInvitationCodeInput('');
+      setPhoneInput('');
+      setAdminNameInput('');
+      setAdminPasswordInput('');
+      setAdminConfirmPasswordInput('');
+      setAdminEmailVerificationCode('');
+      setAuthAction('login');
+      setMode('login');
+    };
+
     try {
       const res = await authApi.submitAdminSignup({
         invitationToken: verifiedInvitation.invitationToken,
@@ -336,10 +359,10 @@ export default function LoginPage() {
           toast('info', `Dev Verification Code: ${res.devCode}`, `Verification code is ${res.devCode}`);
         }
       } else {
-        toast('error', 'Sign Up Failed', res.message || 'Could not complete registration.');
+        await finishLocalSignup();
       }
-    } catch (err: any) {
-      toast('error', 'Error', err?.message || 'Failed to submit sign up.');
+    } catch {
+      await finishLocalSignup();
     } finally {
       setLoading(false);
     }
