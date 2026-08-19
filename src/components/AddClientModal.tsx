@@ -177,8 +177,19 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
 
     const activeDays = planType === 'free' ? freeDays : paidDays;
 
+    // 1. Generate invitation in local context first so the invite link is always created
+    const { link } = createInvitation(email.trim().toLowerCase(), 'client', {
+      phone: phone.trim(),
+      planType,
+      freeTrialDays: planType === 'free' ? freeDays : undefined,
+      paidDays: planType === 'paid' ? paidDays : undefined,
+      durationDays: activeDays,
+      companyName: companyName.trim() || undefined,
+    });
+    setInviteLink(link);
+
     try {
-      // 1. Call backend API to create invitation, send email, and send 6-digit SMS code
+      // 2. Call backend API to persist in cloud DB, send email, and send SMS code if available
       const res = await authApi.createClientAdminInvite({
         email: email.trim().toLowerCase(),
         phone: phone.trim(),
@@ -187,37 +198,27 @@ export default function AddClientModal({ open, onClose }: AddClientModalProps) {
         durationDays: activeDays,
       });
 
-      if (!res.success) {
-        toast('error', 'Invitation Failed', res.message || 'Could not create client invitation.');
-        return;
+      if (res.inviteLink) {
+        setInviteLink(res.inviteLink);
       }
 
-      // 2. Also register in local invitation context cache for UI lists
-      const { link } = createInvitation(email.trim().toLowerCase(), 'client', {
-        phone: phone.trim(),
-        planType,
-        freeTrialDays: planType === 'free' ? freeDays : undefined,
-        paidDays: planType === 'paid' ? paidDays : undefined,
-        durationDays: activeDays,
-        companyName: companyName.trim() || undefined,
-      });
-
-      const finalLink = res.inviteLink || link;
-      setInviteLink(finalLink);
-
-      if (res.emailSent && res.smsSent) {
-        toast('success', 'Client Invite Sent!', res.message || `6-digit verification code emailed to ${email.trim()}.`);
-      } else if (res.emailSent) {
-        toast('info', 'Partial Invitation Delivery', res.message || `Invitation email sent to ${email.trim()}, but SMS code failed to deliver.`);
+      if (res.success) {
+        if (res.emailSent && res.smsSent) {
+          toast('success', 'Client Invite Sent!', res.message || `6-digit verification code emailed to ${email.trim()}.`);
+        } else if (res.emailSent) {
+          toast('info', 'Partial Invitation Delivery', res.message || `Invitation email sent to ${email.trim()}, but SMS code failed to deliver.`);
+        } else {
+          toast('success', 'Client Invite Created!', res.message || 'Invitation created successfully.');
+        }
       } else {
-        toast('success', 'Client Invite Created!', res.message || 'Invitation created successfully.');
+        toast('warning', 'Invitation Created', res.message || 'Invitation link generated. You can copy and share it manually.');
       }
 
       setStep('done');
     } catch (err) {
-      console.error('Failed to create client invite:', err);
-      const msg = err instanceof Error ? err.message : 'Error sending invite.';
-      toast('error', 'Invite Delivery Error', msg);
+      console.warn('Backend invite notification skipped (API unreachable / offline):', err);
+      toast('warning', 'Invitation Link Created', 'Invitation link generated. Backend delivery service was not reachable, but you can copy and share the link manually.');
+      setStep('done');
     } finally {
       setSending(false);
     }

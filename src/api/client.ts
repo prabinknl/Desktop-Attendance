@@ -103,9 +103,18 @@ export function getReadableApiError(error: unknown): string {
     }
 
     const resData = ax.response.data;
-    const serverMessage = typeof resData === 'object' && resData !== null
-      ? (resData.message || resData.error || '')
-      : '';
+    let serverMessage = '';
+    if (typeof resData === 'string') {
+      if (!resData.trim().startsWith('<')) {
+        serverMessage = resData.trim();
+      }
+    } else if (typeof resData === 'object' && resData !== null) {
+      if (typeof resData.message === 'string') {
+        serverMessage = resData.message;
+      } else if (typeof resData.error === 'string') {
+        serverMessage = resData.error;
+      }
+    }
 
     if (ax.response.status === 404) {
       return serverMessage || 'API route was not found (HTTP 404).';
@@ -125,7 +134,7 @@ export function getReadableApiError(error: unknown): string {
         : 'Backend API route does not accept this request method (HTTP 405).');
     }
     if (ax.response.status === 502 || ax.response.status === 503 || ax.response.status === 504) {
-      if (serverMessage && resData?.success === false) {
+      if (serverMessage && resData && typeof resData === 'object' && resData.success === false) {
         return serverMessage;
       }
       return 'Backend service or device is temporarily unavailable (HTTP ' + ax.response.status + ').';
@@ -142,9 +151,14 @@ export function getReadableApiError(error: unknown): string {
       }
       return serverMessage || 'Server error while processing the request.';
     }
-    return serverMessage || ax.message || 'An unexpected API error occurred.';
+    return serverMessage || (typeof ax.message === 'string' ? ax.message : '') || 'An unexpected API error occurred.';
   }
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error) {
+    return error.message && typeof error.message === 'string' && error.message !== '[object Object]'
+      ? error.message
+      : 'An unexpected error occurred';
+  }
+  if (typeof error === 'string') return error;
   return 'An unexpected error occurred';
 }
 

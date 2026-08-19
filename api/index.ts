@@ -13,10 +13,21 @@ export const config = {
 };
 
 export default function handler(req: IncomingMessage, res: ServerResponse) {
-  const original = req.url ?? '/';
-  if (!original.startsWith('/api')) {
-    const path = original.startsWith('/') ? original : `/${original}`;
-    req.url = `/api${path}`;
+  const reqUrl = req.url ?? '/';
+  const matchedPath =
+    (req.headers['x-matched-path'] as string) ||
+    (req.headers['x-forwarded-url'] as string) ||
+    '';
+
+  let resolved = reqUrl;
+  if ((reqUrl === '/api' || reqUrl === '/api/' || reqUrl === '/') && matchedPath && matchedPath.startsWith('/api')) {
+    resolved = matchedPath;
   }
+
+  if (!resolved.startsWith('/api')) {
+    resolved = `/api${resolved.startsWith('/') ? resolved : `/${resolved}`}`;
+  }
+
+  req.url = resolved;
   return app(req, res);
 }
