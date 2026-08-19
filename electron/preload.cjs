@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld(
   'attendanceDesktop',
   Object.freeze({
     isElectron: true,
-    /** Same-origin relative path — Express serves both UI and /api directly on the same port. */
+    /** Same-origin relative path — Electron main proxies to the local API. */
     apiBaseUrl: '/api',
     getApiBaseUrl: () => ipcRenderer.invoke('desktop:get-api-base-url'),
     platform: process.platform,

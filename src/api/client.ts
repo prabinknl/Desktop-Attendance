@@ -1,16 +1,47 @@
 import axios, { AxiosError } from 'axios';
 
+function isHostedFrontendOrigin(origin: string): boolean {
+  try {
+    const { hostname } = new URL(origin);
+    return hostname.endsWith('.insforge.site') || hostname.endsWith('.vercel.app');
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Local web dev goes through the Vite proxy on a relative path; the hosted
- * build needs VITE_API_BASE_URL. The Electron shell exposes a loopback API
- * URL via preload (attendanceDesktop.apiBaseUrl).
+ * build needs VITE_API_BASE_URL pointing at the Express API (…/api). The
+ * Electron shell exposes a loopback API URL via preload.
+ *
+ * If VITE_API_BASE_URL was set to the frontend host by mistake (for example
+ * https://ahu7znxh.insforge.site), use same-origin /api so Vercel can serve
+ * the Express handler.
  */
 function resolveApiBaseUrl(): string {
   const desktopUrl = window.attendanceDesktop?.apiBaseUrl;
   if (typeof desktopUrl === 'string' && desktopUrl.trim()) {
     return desktopUrl.replace(/\/$/, '');
   }
-  return (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/$/, '');
+
+  const configured = String(import.meta.env.VITE_API_BASE_URL ?? '').trim().replace(/\/$/, '');
+  if (!configured || configured === '/api') return '/api';
+
+  if (configured.startsWith('http')) {
+    try {
+      const url = new URL(configured);
+      const sameOrigin = url.origin === window.location.origin;
+      if (sameOrigin || isHostedFrontendOrigin(url.origin)) {
+        return url.pathname.replace(/\/$/, '') === '/api' ? configured : '/api';
+      }
+      if (url.pathname !== '/api' && !url.pathname.endsWith('/api')) {
+        return `${configured}/api`;
+      }
+    } catch {
+      /* use configured */
+    }
+  }
+  return configured;
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();
@@ -35,9 +66,14 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-const UNREACHABLE_MESSAGE = API_BASE_URL.startsWith('http')
-  ? 'Backend server is not reachable.'
-  : 'Backend server is not reachable. Start the API with npm run dev:server (port 3001).';
+const isLocalHost =
+  typeof window !== 'undefined' &&
+  /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+
+const UNREACHABLE_MESSAGE =
+  API_BASE_URL.startsWith('http') || !isLocalHost
+    ? 'Backend server is not reachable.'
+    : 'Backend server is not reachable. Start the API with npm run dev:server (port 3001).';
 
 export function getReadableApiError(error: unknown): string {
   if (axios.isAxiosError(error)) {

@@ -12,7 +12,6 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { EmployeeAPI } from '../../data/store';
 import { deviceApi } from '../../api/deviceApi';
 import { authApi } from '../../api/authApi';
-import { sendOwnerVerificationCode as requestOwnerVerificationCode, verifyOwnerVerificationCode } from '../../lib/ownerOtp';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { cn } from '../../lib/utils';
 import type { Employee } from '../../types';
@@ -534,7 +533,7 @@ export default function LoginPage() {
     if (loading) return;
     setLoading(true);
     try {
-      const res = await requestOwnerVerificationCode(OWNER_SIGNIN_EMAILS);
+      const res = await authApi.sendAdminCode({ name: 'Owner', emails: OWNER_SIGNIN_EMAILS });
       if (!res.success || !res.emailSent) {
         toast('error', 'Verification failed', res.message || 'Could not send the owner verification code.');
         return;
@@ -543,7 +542,7 @@ export default function LoginPage() {
       setOwnerCodeSentAt(Date.now());
       setOwnerResendSeconds(60);
       setOwnerMode('code');
-      toast('success', 'Verification code sent', res.message || `A verification code was sent to ${formatEmailList(OWNER_SIGNIN_EMAILS)}.`);
+      toast('success', 'Verification code sent', `A verification code was sent to ${formatEmailList(OWNER_SIGNIN_EMAILS)}.`);
       if (res.devCode) {
         toast('info', `Verification Code: ${res.devCode}`, `Dev Mode: code is ${res.devCode}`);
       }
@@ -562,7 +561,7 @@ export default function LoginPage() {
     }
     setLoading(true);
     try {
-      const verified = await verifyOwnerVerificationCode(OWNER_SIGNIN_EMAILS, trimmed);
+      const verified = await authApi.verifyAdminCode({ email: OWNER_SIGNIN_EMAILS[0], code: trimmed });
       if (!verified.success || !verified.verified) {
         toast('error', 'Verification failed', verified.message || 'Invalid or expired code.');
         return;
@@ -905,7 +904,7 @@ export default function LoginPage() {
                   className="input"
                   autoFocus
                 />
-                <p className="text-xs text-slate-500 mt-1">Enter the 6-digit code from any of {formatEmailList(OWNER_SIGNIN_EMAILS)}.</p>
+                <p className="text-xs text-slate-500 mt-1">Enter the 6-digit code sent to {formatEmailList(OWNER_SIGNIN_EMAILS)}.</p>
               </div>
 
               <div className="flex gap-2">

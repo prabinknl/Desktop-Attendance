@@ -100,3 +100,7 @@ credentials/
 # Nested clone
 Desktop-Attendance/
 
+# OneDrive sync conflict copies
+*-DESKTOP-*
+*-Bishnu-DeLL*
+

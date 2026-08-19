@@ -7,6 +7,7 @@ export type InviteRole = 'accountant' | 'employee' | 'client';
 export interface Invitation {
   token: string;
   email: string;
+  name?: string;
   role: InviteRole;
   createdAt: string;
   expiresAt: string;
@@ -57,6 +58,7 @@ function cacheInvitation(invite: Invitation) {
 }
 
 interface ClientInviteDetails {
+  name?: string;
   phone?: string;
   planType?: 'free' | 'paid';
   freeTrialDays?: number;
@@ -96,6 +98,7 @@ export function InvitationProvider({ children }: { children: ReactNode }) {
       const invite: Invitation = {
         token,
         email: email.trim().toLowerCase(),
+        name: details?.name?.trim() || undefined,
         role,
         createdAt: now.toISOString(),
         expiresAt: expires.toISOString(),

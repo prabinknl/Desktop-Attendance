@@ -1,8 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import deviceRoutes from './routes/deviceRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
@@ -12,30 +9,6 @@ import { getInsForgeStatus } from './services/insforge/insforgeClient.js';
 
 import { authorizeAccountantPermissions } from './middleware/authMiddleware.js';
 import gatewayRoutes from './routes/gatewayRoutes.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-function resolveClientDistPath(): string | null {
-  if (process.env.CLIENT_DIST_PATH && fs.existsSync(path.join(process.env.CLIENT_DIST_PATH, 'index.html'))) {
-    return path.resolve(process.env.CLIENT_DIST_PATH);
-  }
-  const candidates = [
-    path.resolve(__dirname, '../../dist'),
-    path.resolve(__dirname, '../../dist-electron'),
-    path.resolve(__dirname, '../public'),
-    path.resolve(__dirname, 'public'),
-    path.resolve(process.cwd(), 'dist'),
-    path.resolve(process.cwd(), 'dist-electron'),
-    path.resolve(process.cwd(), 'public'),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, 'index.html'))) {
-      return candidate;
-    }
-  }
-  return null;
-}
 
 const app = express();
 
@@ -52,6 +25,9 @@ app.use(
 
       if (env.corsOrigins === true) return callback(null, true);
       if (Array.isArray(env.corsOrigins) && env.corsOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      if (/^https:\/\/([a-z0-9-]+\.)*(appnep\.com|insforge\.site|vercel\.app)$/i.test(origin)) {
         return callback(null, true);
       }
 
@@ -88,29 +64,12 @@ app.use('/api/attendance', attendanceRoutes);
 // Employees, departments, shifts, holidays, leave and punch requests
 app.use('/api/data', coreRoutes);
 
-// Serve frontend static assets and SPA fallback
-const clientDist = resolveClientDistPath();
-if (clientDist) {
-  console.log(`[Server] Serving frontend static assets from: ${clientDist}`);
-  app.use(express.static(clientDist));
-
-  // SPA fallback for all non-API GET routes
-  app.use((req, res, next) => {
-    if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
-    // Do not return HTML for missing static assets (.js, .css, .ico, etc.)
-    if (path.extname(req.path)) {
-      return res.status(404).send('Not found');
-    }
-    return res.sendFile(path.join(clientDist, 'index.html'));
-  });
-} else {
-  // Fallback for non-API GET routes when frontend dist is not built
-  app.use((req, res, next) => {
-    if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
-    const targetOrigin = env.appPublicUrl || 'http://127.0.0.1:3002';
-    return res.redirect(302, `${targetOrigin.replace(/\/+$/, '')}${req.originalUrl}`);
-  });
-}
+// Fallback for non-API GET routes (e.g., /client-admin/signup or /invite/...) when opened on the backend API port 3001
+app.use((req, res, next) => {
+  if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
+  const targetOrigin = env.appPublicUrl || 'http://127.0.0.1:3002';
+  return res.redirect(302, `${targetOrigin.replace(/\/+$/, '')}${req.originalUrl}`);
+});
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[API Error]', err.message);
@@ -118,4 +77,3 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 });
 
 export default app;
-

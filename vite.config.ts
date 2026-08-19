@@ -15,6 +15,10 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 3002,
     open: true,
+    watch: {
+      // OneDrive conflict copies are often cloud placeholders and crash HMR reads.
+      ignored: ['**/*-DESKTOP-*', '**/*-Bishnu-DeLL*'],
+    },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:3001',

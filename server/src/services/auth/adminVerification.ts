@@ -144,20 +144,22 @@ export async function sendAdminVerificationEmail(input: {
 
 export async function sendInvitationEmail(input: {
   to: string;
+  name?: string;
   role: string;
   inviteLink: string;
   code?: string;
 }): Promise<{ sent: boolean; devFallback?: boolean; error?: string }> {
   const isCodeInvite = input.role === 'accountant' || input.role === 'employee' || Boolean(input.code);
   const codeDisplay = input.code || extractTokenFromInviteLink(input.inviteLink) || '';
+  const recipientGreeting = input.name?.trim() ? `Hello ${input.name.trim()},` : 'Hello,';
 
   if (!smtpConfigured()) {
     console.log('\n==========================================================');
     console.log(`[Auth DEV MODE] SMTP not configured in server/.env`);
     if (isCodeInvite) {
-      console.log(`[Auth DEV MODE] Invitation Code for ${input.to} (${input.role}): ${codeDisplay}`);
+      console.log(`[Auth DEV MODE] Invitation Code for ${input.to} (${input.role}${input.name ? ` - ${input.name}` : ''}): ${codeDisplay}`);
     } else {
-      console.log(`[Auth DEV MODE] Invitation link for ${input.to} (${input.role}): ${input.inviteLink}`);
+      console.log(`[Auth DEV MODE] Invitation link for ${input.to} (${input.role}${input.name ? ` - ${input.name}` : ''}): ${input.inviteLink}`);
     }
     console.log('==========================================================\n');
     return {
@@ -189,7 +191,7 @@ export async function sendInvitationEmail(input: {
         to: input.to,
         subject: `Invitation Code to join PACE Attendance as an ${roleLabel}`,
         text: [
-          `Hello,`,
+          recipientGreeting,
           '',
           `You have been invited to join PACE Attendance as an ${roleLabel}.`,
           '',
@@ -204,7 +206,7 @@ export async function sendInvitationEmail(input: {
         html: `
         <div style="font-family: sans-serif; max-width: 500px; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px;">
           <h2 style="color: #0f172a; margin-top: 0; font-size: 20px;">PACE Attendance Invitation</h2>
-          <p style="color: #475569; font-size: 14px;">Hello,</p>
+          <p style="color: #475569; font-size: 14px;">${recipientGreeting}</p>
           <p style="color: #475569; font-size: 14px;">You have been invited to join PACE Attendance as an <strong>${roleLabel}</strong>.</p>
           <p style="color: #475569; font-size: 14px; margin-bottom: 8px;">Your 6-digit invitation code is:</p>
           <div style="background-color: #f1f5f9; padding: 18px; border-radius: 12px; text-align: center; margin: 16px 0;">

@@ -4,10 +4,6 @@ interface ImportMetaEnv {
   /** Absolute API origin for hosted builds, e.g. https://attendance-api.fly.dev/api.
    *  Unset locally so requests go through the Vite proxy on /api. */
   readonly VITE_API_BASE_URL?: string;
-  /** InsForge backend URL for hosted owner OTP (auth emails). */
-  readonly VITE_INSFORGE_URL?: string;
-  /** InsForge anon key for hosted owner OTP. */
-  readonly VITE_INSFORGE_ANON_KEY?: string;
   /** Set at Electron UI build time (`vite.config.electron.ts`). */
   readonly VITE_IS_ELECTRON?: string;
 }

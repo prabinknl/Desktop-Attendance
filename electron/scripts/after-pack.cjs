@@ -52,14 +52,6 @@ exports.default = async function afterPack(context) {
     fs.copyFileSync(exampleEnv, path.join(resourcesServer, '.env.example'));
   }
 
-  const stagedPublic = path.join(stagedServer, 'public');
-  if (fs.existsSync(stagedPublic)) {
-    const publicDest = path.join(resourcesServer, 'public');
-    fs.rmSync(publicDest, { recursive: true, force: true });
-    copyDir(stagedPublic, publicDest);
-    console.log(`[afterPack] Copied frontend public -> ${publicDest}`);
-  }
-
   const srcModules = path.join(stagedServer, 'node_modules');
   const destModules = path.join(resourcesServer, 'node_modules');
   console.log(`[afterPack] Copying server node_modules -> ${destModules}`);

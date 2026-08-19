@@ -137,6 +137,7 @@ import {
 export async function sendInviteEmail(req: Request, res: Response) {
   try {
     const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const name = String(req.body?.name ?? '').trim();
     const role = String(req.body?.role ?? '').trim();
     const inviteLink = String(req.body?.inviteLink ?? '').trim();
     let token = normalizeInviteToken(String(req.body?.token ?? req.body?.code ?? ''));
@@ -158,6 +159,7 @@ export async function sendInviteEmail(req: Request, res: Response) {
       await InvitationModel.save({
         token,
         email,
+        name: name || undefined,
         role,
         created_at: now.toISOString(),
         expires_at: expires.toISOString(),
@@ -178,6 +180,7 @@ export async function sendInviteEmail(req: Request, res: Response) {
 
     const mail = await sendInvitationEmail({
       to: email,
+      name: name || undefined,
       role,
       inviteLink: publicLink,
       code: token || undefined,
