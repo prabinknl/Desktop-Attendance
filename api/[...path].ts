@@ -18,14 +18,18 @@ export default function handler(req: IncomingMessage, res: ServerResponse) {
   const matchedPath =
     (req.headers['x-matched-path'] as string) ||
     (req.headers['x-forwarded-url'] as string) ||
+    (req.headers['x-vercel-matched-path'] as string) ||
     '';
 
   let resolved = reqUrl;
-  if ((reqUrl === '/api' || reqUrl === '/api/' || reqUrl === '/') && matchedPath && matchedPath.startsWith('/api')) {
-    resolved = matchedPath;
-  }
-
-  if (!resolved.startsWith('/api')) {
+  if (matchedPath && matchedPath.startsWith('/api')) {
+    const queryIdx = reqUrl.indexOf('?');
+    if (queryIdx !== -1 && !matchedPath.includes('?')) {
+      resolved = `${matchedPath}${reqUrl.slice(queryIdx)}`;
+    } else {
+      resolved = matchedPath;
+    }
+  } else if (!resolved.startsWith('/api')) {
     resolved = `/api${resolved.startsWith('/') ? resolved : `/${resolved}`}`;
   }
 

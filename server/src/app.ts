@@ -62,6 +62,14 @@ app.use(
 );
 app.use(express.json({ limit: '2mb' }));
 
+app.get('/api', async (_req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'Attendance API is operational',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.get('/api/health', async (_req, res) => {
   const insforgeStatus = await getInsForgeStatus();
   res.json({

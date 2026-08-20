@@ -1,14 +1,14 @@
-import { createClient } from '@insforge/sdk';
 import { env } from '../../config/env.js';
 
-let clientInstance: ReturnType<typeof createClient> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let clientInstance: any = null;
 let isInitialized = false;
 
 /**
  * Initializes and returns the InsForge SDK client using environment variables.
  * Safe fallback: Returns null if INSFORGE_BASE_URL or INSFORGE_API_KEY are missing.
  */
-export function getInsForgeClient() {
+export async function getInsForgeClient() {
   const baseUrl = env.insforgeBaseUrl || process.env.INSFORGE_BASE_URL;
   const apiKey = env.insforgeApiKey || process.env.INSFORGE_API_KEY;
 
@@ -22,6 +22,7 @@ export function getInsForgeClient() {
 
   if (!clientInstance) {
     try {
+      const { createClient } = await import('@insforge/sdk');
       clientInstance = createClient({
         baseUrl,
         anonKey: apiKey,
@@ -58,7 +59,7 @@ export async function getInsForgeStatus(): Promise<{
     };
   }
 
-  const client = getInsForgeClient();
+  const client = await getInsForgeClient();
   if (!client) {
     return {
       enabled: true,
@@ -90,7 +91,7 @@ export async function getInsForgeStatus(): Promise<{
  * Operates with safe error handling so failures never crash primary server workflows.
  */
 export async function syncAttendanceToInsForge(records: Array<Record<string, unknown>>): Promise<boolean> {
-  const client = getInsForgeClient();
+  const client = await getInsForgeClient();
   if (!client || !records.length) return false;
 
   try {
