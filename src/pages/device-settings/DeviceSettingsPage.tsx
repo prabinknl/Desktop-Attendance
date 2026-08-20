@@ -35,10 +35,12 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  useAutoReconnect,
   useDevice,
   useDeviceLogs,
   useDeviceMutations,
   useDeviceStatus,
+  useStableCallback,
   deviceQueryKeys,
   cachedLogsForRange,
 } from '../../hooks/useDeviceSettings';
@@ -96,7 +98,8 @@ function statusLabel(
   if (status === 'syncing') return 'Syncing…';
   if (status === 'online' || authState === 'authenticated') return 'Connected';
   if (status === 'connecting') return 'Connecting…';
-  if (!opts?.hasDevice) return 'Device Offline';
+  if (!opts?.hasDevice) return 'No device configured';
+  if (authState === 'searching') return 'Searching for device on LAN…';
   if (authState === 'offline' || authState === 'device_unreachable') {
     return 'Device not found on the local network';
   }
@@ -122,7 +125,7 @@ export default function DeviceSettingsPage() {
   const logDateTo = dateRange.to;
   const calendar = dateSettings.calendarSystem;
 
-  const { data: device, isLoading: deviceLoading } = useDevice();
+  const { data: device, isLoading: deviceLoading, isFetched: deviceLoaded } = useDevice();
   const { data: status } = useDeviceStatus();
   const { data: logs = [], isLoading: logsLoading } = useDeviceLogs({
     from: logDateFrom,
@@ -192,22 +195,32 @@ export default function DeviceSettingsPage() {
     });
   }, [validLogs, logEmpFilter]);
 
-  // Automatically connect when on the same network or when device is saved
-  useEffect(() => {
-    if (device && !isOnline && connectionMode === 'local_direct') {
-      void reconnect.mutateAsync();
-    }
-  }, [device?.id, isOnline, connectionMode]);
+  // Stable callback reference prevents useAutoReconnect from re-firing on every render
+  const stableReconnect = useStableCallback(() => {
+    void reconnect.mutateAsync();
+  });
 
-  // When network reconnects (e.g. computer connected to office WiFi/LAN) or window refocuses
+  // Fire reconnect exactly once per mount after device data loads (offline + local_direct only).
+  // Subsequent reconnects are handled by the server-side 15-second watcher.
+  useAutoReconnect({
+    deviceId: device?.id,
+    isOnline,
+    connectionMode,
+    deviceLoaded,
+    reconnectPending: reconnect.isPending,
+    onReconnect: stableReconnect,
+  });
+
+  // When the network interface comes back online or the user switches back to this tab,
+  // trigger one more reconnect attempt — but only if nothing is already in flight.
   useEffect(() => {
     const handleNetworkOnline = () => {
-      if (device && !isOnline) {
+      if (device && !isOnline && !reconnect.isPending) {
         void reconnect.mutateAsync();
       }
     };
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && device && !isOnline) {
+      if (document.visibilityState === 'visible' && device && !isOnline && !reconnect.isPending) {
         void reconnect.mutateAsync();
       }
     };
@@ -217,7 +230,9 @@ export default function DeviceSettingsPage() {
       window.removeEventListener('online', handleNetworkOnline);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [device, isOnline]);
+    // reconnect.mutateAsync is stable (mutation object identity); device and isOnline
+    // are safe deps — they only change when real data changes, not on every poll.
+  }, [device, isOnline, reconnect]);
 
   // Keep Employees page names in sync with machine log names (valid punches only)
   useEffect(() => {

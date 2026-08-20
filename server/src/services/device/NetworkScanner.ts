@@ -7,6 +7,9 @@ import { logDeviceAction } from './deviceLogger.js';
 
 const HIKVISION_PORTS = [80, 8000, 443];
 
+/** Monotonically increasing generation counter — incremented on each new scan. */
+let scanGeneration = 0;
+
 /** Check if a TCP port is open on a host (fast timeout). */
 function probePort(host: string, port: number, timeoutMs = 500): Promise<boolean> {
   return new Promise((resolve) => {
@@ -126,10 +129,6 @@ export function getLocalNetworkInfo(prioritizeSubnet?: string): {
   return { addresses, subnets };
 }
 
-function getLocalSubnets(): string[] {
-  return getLocalNetworkInfo().subnets;
-}
-
 /**
  * Helper to run an array of async tasks with concurrency limit.
  */
@@ -152,8 +151,16 @@ async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit = 48)
 /**
  * Scan the local network for Hikvision ISAPI devices only.
  * Fast, concurrency-controlled scan of valid local subnets.
+ *
+ * Each call bumps the global scan generation, so any in-flight tasks from
+ * a previous scan silently drop their results — preventing overlapping scans
+ * from corrupting each other's output or flooding the network.
  */
 export async function scanNetwork(preferredSubnet?: string, customPort?: number): Promise<ScanResult> {
+  // Bump generation: tasks from a previous scan that finish late see a stale
+  // generation and discard their results.
+  const myGeneration = ++scanGeneration;
+
   const netInfo = getLocalNetworkInfo(preferredSubnet);
   const subnets = netInfo.subnets;
 
@@ -182,7 +189,9 @@ export async function scanNetwork(preferredSubnet?: string, customPort?: number)
       .map((a) => `${a.address} (subnet ${a.subnet}.0/24)`)
       .join(', ')}`,
   );
-  console.log(`[Device] Subnet scan started on ${subnets.join(', ')} ports ${portsToScan.join(',')}`);
+  console.log(
+    `[Device] Subnet scan started (gen=${myGeneration}) on ${subnets.join(', ')} ports ${portsToScan.join(',')}`,
+  );
 
   const results: DiscoveredDevice[] = [];
   const seen = new Set<string>();
@@ -193,13 +202,23 @@ export async function scanNetwork(preferredSubnet?: string, customPort?: number)
       const ip = `${subnet}.${host}`;
       for (const port of portsToScan) {
         probeTasks.push(async () => {
+          // Abort immediately if a newer scan has started
+          if (scanGeneration !== myGeneration) return;
+
           const open = await probePort(ip, port);
           if (!open) return;
+
+          // Re-check after the async TCP probe
+          if (scanGeneration !== myGeneration) return;
+
           const key = `${ip}:${port}`;
           if (seen.has(key)) return;
 
           const hik = await probeHikvisionIsapi(ip, port);
           if (!hik) return;
+
+          // Re-check after the ISAPI probe (can take up to 1.5s)
+          if (scanGeneration !== myGeneration) return;
 
           seen.add(key);
           console.log(
@@ -219,6 +238,14 @@ export async function scanNetwork(preferredSubnet?: string, customPort?: number)
   }
 
   await runWithConcurrency(probeTasks, 48);
+
+  // If our scan was superseded by a newer one, return empty rather than stale results
+  if (scanGeneration !== myGeneration) {
+    console.info(
+      `[Device] Scan gen=${myGeneration} superseded by gen=${scanGeneration} — discarding results`,
+    );
+    return { devices: [], discoveryAvailable: true, message: 'Scan superseded by newer request' };
+  }
 
   logDeviceAction({
     action: 'scanNetwork',

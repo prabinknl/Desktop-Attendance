@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { deviceApi } from '../api/deviceApi';
 import type { AttendanceLogEntry, DeviceFormValues, ConnectionMode } from '../types/device';
 import { loadDeviceLogsCache, saveDeviceLogsCache } from '../lib/deviceLogsCache';
@@ -144,4 +144,61 @@ export function useDeviceMutations() {
     createConnectorToken,
     reconnect,
   };
+}
+
+/**
+ * Fires a reconnect attempt exactly once per page mount after device data loads,
+ * but only when the device is configured, offline, and in local_direct mode.
+ *
+ * Rules:
+ * - Waits until `deviceLoaded` is true (the initial query has settled).
+ * - Only fires if `reconnectPending` is false (no concurrent call).
+ * - Uses a `firedRef` so it never fires more than once per mount, regardless of
+ *   how many times the status query re-renders (every 10 s).
+ * - Does NOT fire on visibility changes or network-online events — the server-side
+ *   15-second watcher handles those cases automatically.
+ */
+export function useAutoReconnect({
+  deviceId,
+  isOnline,
+  connectionMode,
+  deviceLoaded,
+  reconnectPending,
+  onReconnect,
+}: {
+  deviceId: string | undefined;
+  isOnline: boolean;
+  connectionMode: string;
+  deviceLoaded: boolean;
+  reconnectPending: boolean;
+  onReconnect: () => void;
+}): void {
+  const firedRef = useRef(false);
+
+  // Reset the guard when the device identity changes (e.g. first-time save reloads the page)
+  useEffect(() => {
+    firedRef.current = false;
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (firedRef.current) return;         // already fired this mount
+    if (!deviceLoaded) return;            // wait for the initial query to settle
+    if (!deviceId) return;               // no device configured yet
+    if (isOnline) return;                // already online — nothing to do
+    if (connectionMode !== 'local_direct') return;  // cloud connector: server handles it
+    if (reconnectPending) return;        // already in flight
+
+    firedRef.current = true;
+    onReconnect();
+  }, [deviceId, deviceLoaded, isOnline, connectionMode, reconnectPending, onReconnect]);
+}
+
+/** Stable callback ref — prevents useAutoReconnect re-firing when parent re-renders. */
+export function useStableCallback<T extends (...args: unknown[]) => unknown>(fn: T): T {
+  const ref = useRef(fn);
+  useEffect(() => {
+    ref.current = fn;
+  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useCallback((...args: unknown[]) => ref.current(...args), []) as T;
 }

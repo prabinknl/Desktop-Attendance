@@ -3,6 +3,7 @@
  * Tries the saved IP first, then scans only the current local subnet.
  * Runs a single guarded reconnect loop (no overlapping attempts).
  */
+import net from 'net';
 import {
   getActiveDeviceRecord,
   updateDeviceStatus,
@@ -20,6 +21,25 @@ import { resolveConnectionMode } from '../connector/devicePresence.js';
 import { env } from '../../config/env.js';
 
 const RECONNECT_INTERVAL_MS = 15_000;
+
+/** Fast TCP reachability check — resolves in ≤ timeoutMs without ISAPI overhead. */
+function tcpProbe(host: string, port: number, timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, host);
+  });
+}
 
 let reconnectTimer: ReturnType<typeof setInterval> | null = null;
 let reconnectInFlight = false;
@@ -52,6 +72,8 @@ async function markOnline(
     model: info.model,
     macAddress: info.macAddress,
     deviceTime: info.deviceTime,
+    // Record the successful authentication timestamp so the UI shows "Last Auth OK"
+    lastSync: info.deviceTime ? undefined : new Date(),
   });
   await refreshSyncScheduler();
 }
@@ -113,13 +135,26 @@ export async function tryReconnectOnce(): Promise<ReconnectOutcome> {
     }
 
     if (record.status === 'online') {
-      await refreshSyncScheduler();
-      return {
-        connected: true,
-        ipAddress: record.ip_address,
-        port: record.port,
-        model: record.model ?? undefined,
-      };
+      // Verify the device is still reachable before trusting the persisted status.
+      // A cold-start after overnight shutdown must not show "Connected" for an offline machine.
+      const stillUp = await tcpProbe(record.ip_address, record.port, 1500);
+      if (stillUp) {
+        await refreshSyncScheduler();
+        console.log(
+          `[Device] Verified device still reachable at ${record.ip_address}:${record.port} — staying online`,
+        );
+        return {
+          connected: true,
+          ipAddress: record.ip_address,
+          port: record.port,
+          model: record.model ?? undefined,
+        };
+      }
+      // TCP probe failed — clear the ghost-online status and fall through to full reconnect.
+      console.info(
+        `[Device] Persisted status=online but ${record.ip_address}:${record.port} is unreachable — running full reconnect`,
+      );
+      await updateDeviceStatus(record.id, 'offline').catch(() => {});
     }
 
     const preferredSubnet = record.ip_address
