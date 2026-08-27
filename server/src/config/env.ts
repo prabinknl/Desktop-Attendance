@@ -2,10 +2,15 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// server/src/config → server/.env (primary), then repo-root .env
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+try {
+  const envDir = path.dirname(fileURLToPath(import.meta.url));
+  // server/src/config → server/.env (primary), then repo-root .env
+  // Vercel injects process.env directly; local .env files are absent there.
+  dotenv.config({ path: path.resolve(envDir, '../../.env') });
+  dotenv.config({ path: path.resolve(envDir, '../../../.env') });
+} catch {
+  dotenv.config();
+}
 
 const DEFAULT_CORS_ORIGINS = [
   'http://localhost:3002',
@@ -74,10 +79,11 @@ export const env = {
    * In development mode, defaults to http://127.0.0.1:3002 if APP_PUBLIC_URL is not set.
    */
   appPublicUrl: getAppPublicUrl(),
-  smtpHost: process.env.SMTP_HOST ?? '',
-  smtpPort: parseInt(process.env.SMTP_PORT ?? '587', 10),
-  smtpUser: process.env.SMTP_USER ?? '',
+  smtpHost: (process.env.SMTP_HOST ?? '').trim(),
+  smtpPort: parseInt(process.env.SMTP_PORT || '587', 10) || 587,
+  smtpUser: (process.env.SMTP_USER ?? '').trim(),
   smtpPass: process.env.SMTP_PASS ?? '',
+  smtpFrom: (process.env.SMTP_FROM ?? '').trim(),
   insforgeBaseUrl: (process.env.INSFORGE_BASE_URL ?? '').trim(),
   insforgeApiKey: (process.env.INSFORGE_API_KEY ?? '').trim(),
   smsProvider: (process.env.SMS_PROVIDER ?? '').trim().toLowerCase(),

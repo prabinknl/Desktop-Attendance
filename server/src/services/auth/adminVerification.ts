@@ -70,8 +70,42 @@ export function verifyStoredCode(email: string, code: string): { ok: boolean; me
   return { ok: true };
 }
 
+function smtpConfigError(): string {
+  const missing: string[] = [];
+  if (!env.smtpHost) missing.push('SMTP_HOST');
+  if (!env.smtpUser) missing.push('SMTP_USER');
+  if (!env.smtpPass) missing.push('SMTP_PASS');
+  if (missing.length === 0) return '';
+  return `Missing required email environment variables: ${missing.join(', ')}. Set them in the hosting environment (Vercel project settings), not as VITE_* variables.`;
+}
+
 function smtpConfigured(): boolean {
-  return Boolean(env.smtpHost && env.smtpUser && env.smtpPass);
+  return smtpConfigError() === '';
+}
+
+function mailFromAddress(): string {
+  return env.smtpFrom || env.smtpUser;
+}
+
+function createMailTransporter() {
+  const port = Number.isFinite(env.smtpPort) && env.smtpPort > 0 ? env.smtpPort : 587;
+  return nodemailer.createTransport({
+    host: env.smtpHost,
+    port,
+    secure: port === 465,
+    auth: {
+      user: env.smtpUser,
+      pass: env.smtpPass,
+    },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
+    // Vercel IPv6 often cannot reach SMTP hosts; force IPv4.
+    family: 4,
+    tls: {
+      rejectUnauthorized: false,
+    },
+  } as Parameters<typeof nodemailer.createTransport>[0]);
 }
 
 export async function sendAdminVerificationEmail(input: {
@@ -88,25 +122,14 @@ export async function sendAdminVerificationEmail(input: {
     }
     return {
       sent: false,
-      error: 'SMTP credentials (SMTP_USER and SMTP_PASS) are not configured in server/.env. Please set your SMTP credentials to send verification emails.',
+      error: smtpConfigError(),
     };
   }
 
   try {
-    const transporter = nodemailer.createTransport({
-      host: env.smtpHost,
-      port: env.smtpPort,
-      secure: env.smtpPort === 465,
-      auth: {
-        user: env.smtpUser,
-        pass: env.smtpPass,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-    });
+    const transporter = createMailTransporter();
 
-    const from = (env as any).smtpFrom || env.smtpUser;
+    const from = mailFromAddress();
     await transporter.sendMail({
       from: `"PACE Attendance" <${from}>`,
       to: input.to,
@@ -155,34 +178,23 @@ export async function sendInvitationEmail(input: {
 
   if (!smtpConfigured()) {
     console.log('\n==========================================================');
-    console.log(`[Auth DEV MODE] SMTP not configured in server/.env`);
+    console.log(`[Auth DEV MODE] SMTP not configured`);
     if (isCodeInvite) {
       console.log(`[Auth DEV MODE] Invitation Code for ${input.to} (${input.role}${input.name ? ` - ${input.name}` : ''}): ${codeDisplay}`);
     } else {
       console.log(`[Auth DEV MODE] Invitation link for ${input.to} (${input.role}${input.name ? ` - ${input.name}` : ''}): ${input.inviteLink}`);
     }
     console.log('==========================================================\n');
-    return {
-      sent: true,
-      devFallback: true,
-    };
+    if (env.nodeEnv !== 'production') {
+      return { sent: true, devFallback: true };
+    }
+    return { sent: false, error: smtpConfigError() };
   }
 
   try {
-    const transporter = nodemailer.createTransport({
-      host: env.smtpHost,
-      port: env.smtpPort,
-      secure: env.smtpPort === 465,
-      auth: {
-        user: env.smtpUser,
-        pass: env.smtpPass,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-    });
+    const transporter = createMailTransporter();
 
-    const from = (env as any).smtpFrom || env.smtpUser;
+    const from = mailFromAddress();
     const roleLabel = input.role.charAt(0).toUpperCase() + input.role.slice(1);
 
     if (isCodeInvite) {
@@ -281,24 +293,16 @@ export async function sendClientAdminInvitationEmail(input: {
     console.log(`[Auth DEV MODE] 6-digit verification code: ${input.verificationCode}`);
     console.log(`[Auth DEV MODE] Code/invite expires at: ${input.expiresAtFormatted}`);
     console.log('==========================================================\n');
-    return { sent: true, devFallback: true };
+    if (env.nodeEnv !== 'production') {
+      return { sent: true, devFallback: true };
+    }
+    return { sent: false, error: smtpConfigError() };
   }
 
   try {
-    const transporter = nodemailer.createTransport({
-      host: env.smtpHost,
-      port: env.smtpPort,
-      secure: env.smtpPort === 465,
-      auth: {
-        user: env.smtpUser,
-        pass: env.smtpPass,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-    });
+    const transporter = createMailTransporter();
 
-    const from = (env as any).smtpFrom || env.smtpUser;
+    const from = mailFromAddress();
     await transporter.sendMail({
       from: `"PACE Attendance" <${from}>`,
       to: input.to,
@@ -369,24 +373,16 @@ export async function sendClientAdminVerificationCodeEmail(input: {
     console.log(`[Auth DEV MODE] Client Email: ${input.clientEmail}${companyStr}`);
     console.log(`[Auth DEV MODE] Verification Code: ${input.code}`);
     console.log('==========================================================\n');
-    return { sent: true, devFallback: true };
+    if (env.nodeEnv !== 'production') {
+      return { sent: true, devFallback: true };
+    }
+    return { sent: false, error: smtpConfigError() };
   }
 
   try {
-    const transporter = nodemailer.createTransport({
-      host: env.smtpHost,
-      port: env.smtpPort,
-      secure: env.smtpPort === 465,
-      auth: {
-        user: env.smtpUser,
-        pass: env.smtpPass,
-      },
-      tls: {
-        rejectUnauthorized: false,
-      },
-    });
+    const transporter = createMailTransporter();
 
-    const from = (env as any).smtpFrom || env.smtpUser;
+    const from = mailFromAddress();
     await transporter.sendMail({
       from: `"PACE Attendance" <${from}>`,
       to: targetEmail,

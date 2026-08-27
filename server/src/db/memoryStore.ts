@@ -72,7 +72,12 @@ let memoryLogs: MemoryLog[] = [];
 let memoryInvitations: InvitationRecord[] = [];
 let memoryUsers: MemoryUserRecord[] = [];
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let __dirname = process.cwd();
+try {
+  __dirname = path.dirname(fileURLToPath(import.meta.url));
+} catch {
+  /* Vercel bundles may not expose a file URL; fall back to cwd / ATTENDANCE_DATA_DIR. */
+}
 /** Electron sets ATTENDANCE_DATA_DIR to a writable userData folder. */
 const DATA_DIR = path.resolve(
   process.env.ATTENDANCE_DATA_DIR?.trim() || path.join(__dirname, '../../data'),

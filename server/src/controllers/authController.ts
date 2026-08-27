@@ -70,7 +70,7 @@ export async function sendAdminCode(req: Request, res: Response) {
         email,
         message:
           mail.error ||
-          'Could not send verification email. Configure SMTP_* in server/.env and try again.',
+          'Could not send verification email. Configure SMTP_HOST, SMTP_USER, and SMTP_PASS in the hosting environment and try again.',
       });
     }
 
@@ -192,7 +192,7 @@ export async function sendInviteEmail(req: Request, res: Response) {
         emailSent: false,
         message:
           mail.error ||
-          'Could not send invitation email. Configure SMTP_* in server/.env and try again.',
+          'Could not send invitation email. Configure SMTP_HOST, SMTP_USER, and SMTP_PASS in the hosting environment and try again.',
       });
     }
 
@@ -204,8 +204,12 @@ export async function sendInviteEmail(req: Request, res: Response) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to send invitation email';
-    console.error('[Auth] sendInviteEmail failed:', message);
-    return res.status(500).json({ success: false, message });
+    console.error('send-invite failed:', err);
+    return res.status(500).json({
+      success: false,
+      message,
+      emailSent: false,
+    });
   }
 }
 
