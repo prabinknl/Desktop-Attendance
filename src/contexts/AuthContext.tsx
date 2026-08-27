@@ -302,10 +302,10 @@ export async function hydrateCloudAuthUsers(): Promise<User[]> {
           && (existing?.status === 'deleted' || Boolean(archivedUser));
 
         // A later signup is a new identity (new id) and may reuse the email.
-        const isNewCloudIdentity =
-          !cloudDeleted
-          && Boolean(archivedUser)
-          && (!archivedUser.id || !cu.id || cu.id !== archivedUser.id);
+        let isNewCloudIdentity = false;
+        if (archivedUser && !cloudDeleted) {
+          isNewCloudIdentity = !archivedUser.id || !cu.id || cu.id !== archivedUser.id;
+        }
         if (locallyDeleted && isNewCloudIdentity) {
           releaseDeletedClientEmail(emailKey);
           map.set(recordKey, {
