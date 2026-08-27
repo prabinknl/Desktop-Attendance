@@ -754,6 +754,7 @@ export async function signupClientAdmin(req: Request, res: Response) {
       password,
       phone: inv.phone || undefined,
       clientId: inv.client_id || `client-org-${Date.now()}`,
+      companyName: inv.company_name || name,
       planType: (inv.plan_type === 'paid' ? 'paid' : 'free') as 'free' | 'paid',
       accessExpiresAt: inv.access_expires_at || inv.expires_at,
     };
@@ -899,6 +900,7 @@ export async function submitAdminSignup(req: Request, res: Response) {
       password,
       phone: phone || inv.phone || undefined,
       clientId: inv.client_id || `client-org-${Date.now()}`,
+      companyName: inv.company_name || name,
       planType: (inv.plan_type === 'paid' ? 'paid' : 'free') as 'free' | 'paid',
       accessExpiresAt: inv.access_expires_at || inv.expires_at,
       status: 'pending_verification',

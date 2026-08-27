@@ -68,6 +68,7 @@ function memoryToAppUser(user: MemoryUserRecord) {
     employeeId: user.employeeId,
     departmentId: user.departmentId,
     clientId: user.clientId,
+    companyName: user.companyName,
     planType: user.planType,
     accessExpiresAt: user.accessExpiresAt,
     status: user.status ?? 'active',
@@ -172,6 +173,7 @@ export const UserModel = {
     departmentId?: string;
     clientId?: string;
     client_id?: string;
+    companyName?: string;
     planType?: 'free' | 'paid';
     plan_type?: 'free' | 'paid' | string;
     accessExpiresAt?: string;
@@ -201,6 +203,7 @@ export const UserModel = {
       employeeId: user.employeeId,
       departmentId: user.departmentId,
       clientId,
+      companyName: user.companyName,
       planType,
       accessExpiresAt,
       status,
@@ -211,15 +214,6 @@ export const UserModel = {
 
     if (!isMemoryMode()) {
       try {
-        // If role is admin, replace any existing admin row to enforce 1 admin total
-        if (user.role === 'admin') {
-          try {
-            await query('DELETE FROM app_users WHERE role = $1 AND LOWER(email) <> $2', ['admin', emailLower]);
-          } catch {
-            /* ignore */
-          }
-        }
-
         const res = await query<UserRow>(
           `INSERT INTO app_users (
             id, name, email, role, password, avatar, phone, timezone, employee_id, department_id,

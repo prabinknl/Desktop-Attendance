@@ -257,6 +257,12 @@ function isDeletedClientEmail(email: string): boolean {
   return loadDeletedClients().some((u) => u.email.toLowerCase() === key);
 }
 
+/** Owner and client-admin may share an email; keep them as separate directory rows. */
+function authRecordKey(u: Pick<User, 'email' | 'role'>): string {
+  const email = u.email.toLowerCase();
+  return u.role === 'owner' ? `owner:${email}` : email;
+}
+
 function releaseDeletedClientEmail(email: string) {
   const key = email.trim().toLowerCase();
   if (!key) return;
@@ -269,48 +275,56 @@ export async function hydrateCloudAuthUsers(): Promise<User[]> {
     if (cloudUsers.length > 0) {
       const local = loadAuthUsers();
       const archived = loadDeletedClients();
-      const cloudEmails = new Set(cloudUsers.map((u) => u.email.toLowerCase()));
       const map = new Map<string, User>();
       for (const u of local) {
-        const key = u.email.toLowerCase();
-        const isOwner = OWNER_SIGNIN_EMAILS.includes(key) || u.role === 'owner';
-        const isOrgAccount = u.role === 'admin' || u.role === 'client';
-        const locallyDeleted = u.status === 'deleted' || archived.some((d) => d.email.toLowerCase() === key);
+        const emailKey = u.email.toLowerCase();
+        const locallyDeleted =
+          u.role !== 'owner'
+          && (u.status === 'deleted' || archived.some((d) => d.email.toLowerCase() === emailKey));
         // Keep owner-deleted accounts out of the active directory even if cloud
         // no longer has them (or still has a stale live copy).
         if (locallyDeleted) {
-          map.set(key, { ...u, status: 'deleted' });
+          map.set(authRecordKey(u), { ...u, status: 'deleted' });
           continue;
         }
-        // Cloud is source of truth for org accounts so a purged email can sign up again.
-        if (!isOwner && isOrgAccount && !cloudEmails.has(key)) continue;
-        map.set(key, u);
+        map.set(authRecordKey(u), u);
       }
       for (const cu of cloudUsers) {
-        const key = cu.email.toLowerCase();
-        const existing = map.get(key);
-        const archivedUser = archived.find((d) => d.email.toLowerCase() === key);
-        const cloudRole = (cu.role as string ?? '').trim().toLowerCase() || undefined;
+        const emailKey = cu.email.toLowerCase();
+        const cloudRole = ((cu.role as string ?? '').trim().toLowerCase() || undefined) as User['role'] | undefined;
+        const recordKey = authRecordKey({ email: cu.email, role: cloudRole || 'employee' });
+        const existing = map.get(recordKey);
+        const archivedUser = archived.find((d) => d.email.toLowerCase() === emailKey);
         const localRole = existing?.role;
         const cloudDeleted = String(cu.status ?? '').toLowerCase() === 'deleted';
-        const locallyDeleted = existing?.status === 'deleted' || Boolean(archivedUser);
+        const locallyDeleted =
+          existing?.role !== 'owner'
+          && (existing?.status === 'deleted' || Boolean(archivedUser));
 
         // A later signup is a new identity (new id) and may reuse the email.
-        if (locallyDeleted && !cloudDeleted && archivedUser && cu.id && archivedUser.id && cu.id !== archivedUser.id) {
-          releaseDeletedClientEmail(key);
-          map.set(key, {
+        const isNewCloudIdentity =
+          !cloudDeleted
+          && Boolean(archivedUser)
+          && (!archivedUser.id || !cu.id || cu.id !== archivedUser.id);
+        if (locallyDeleted && isNewCloudIdentity) {
+          releaseDeletedClientEmail(emailKey);
+          map.set(recordKey, {
             ...existing,
             ...cu,
             role: (cloudRole ?? localRole ?? 'employee') as User['role'],
             password: existing?.password ?? '',
             avatar: cu.avatar || existing?.avatar || '',
             status: (cu.status as User['status']) || 'active',
+            companyName: cu.companyName || existing?.companyName,
+            planType: cu.planType || existing?.planType,
+            clientId: cu.clientId || existing?.clientId,
+            accessExpiresAt: cu.accessExpiresAt || existing?.accessExpiresAt,
           });
           continue;
         }
 
         if (locallyDeleted || cloudDeleted) {
-          map.set(key, {
+          map.set(recordKey, {
             ...existing,
             ...cu,
             role: (cloudRole ?? localRole ?? 'employee') as User['role'],
@@ -319,16 +333,24 @@ export async function hydrateCloudAuthUsers(): Promise<User[]> {
             status: 'deleted',
             deletedAt: existing?.deletedAt || archivedUser?.deletedAt,
             deletedBy: existing?.deletedBy || archivedUser?.deletedBy,
+            companyName: cu.companyName || existing?.companyName,
+            planType: cu.planType || existing?.planType,
+            clientId: cu.clientId || existing?.clientId,
+            accessExpiresAt: cu.accessExpiresAt || existing?.accessExpiresAt,
           });
           continue;
         }
 
-        map.set(key, {
+        map.set(recordKey, {
           ...existing,
           ...cu,
           role: (cloudRole ?? localRole ?? 'employee') as User['role'],
           password: existing?.password ?? '',
           avatar: cu.avatar || existing?.avatar || '',
+          companyName: cu.companyName || existing?.companyName,
+          planType: cu.planType || existing?.planType,
+          clientId: cu.clientId || existing?.clientId,
+          accessExpiresAt: cu.accessExpiresAt || existing?.accessExpiresAt,
         });
       }
       const merged = Array.from(map.values());
@@ -419,11 +441,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  React.useEffect(() => {
-    hydrateCloudAuthUsers();
-  }, []);
+  const [usersVersion, setUsersVersion] = useState(0);
+  const bumpAuthUsers = useCallback(() => setUsersVersion((v) => v + 1), []);
 
-  const getAuthUsers = useCallback(() => loadAuthUsers(), []);
+  React.useEffect(() => {
+    let cancelled = false;
+    hydrateCloudAuthUsers().then(() => {
+      if (!cancelled) bumpAuthUsers();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bumpAuthUsers]);
+
+  const getAuthUsers = useCallback(() => loadAuthUsers(), [usersVersion]);
 
   const getDeletedClients = useCallback(() => loadDeletedClients(), []);
 
@@ -567,6 +598,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const next = migrateStoredUser(found);
     const safe = persistSession(next);
     setUser(safe);
+    if (next.role === 'admin' || next.role === 'client') {
+      const stored = loadAuthUsers();
+      const emailKey = next.email.toLowerCase();
+      const idx = stored.findIndex(
+        (u) => u.id === next.id || (u.role === next.role && u.email.toLowerCase() === emailKey),
+      );
+      const directoryUser: User = {
+        ...stored[idx],
+        ...next,
+        planType: next.planType ?? stored[idx]?.planType ?? 'free',
+        appStatus: next.appStatus ?? stored[idx]?.appStatus ?? 'running',
+        status: next.status ?? stored[idx]?.status ?? 'active',
+      };
+      if (idx >= 0) stored[idx] = directoryUser;
+      else stored.push(directoryUser);
+      saveAuthUsers(stored);
+      authApi.syncCloudUser(directoryUser);
+    }
+    bumpAuthUsers();
     // Keep machine employees + attendance available after re-login
     hydratePersistedStores();
     // Reconnect the saved attendance machine automatically if it is on the same network
@@ -576,7 +626,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
     return { success: true };
-  }, []);
+  }, [bumpAuthUsers]);
 
   const loginOwner = useCallback(async () => {
     const users = loadAuthUsers();
@@ -586,19 +636,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const safe = persistSession({ ...owner, role: 'owner' as UserRole });
-    saveAuthUsers(
-      ensureOwnerUser(
-        loadAuthUsers().map((u) => (
-          OWNER_SIGNIN_EMAILS.includes(u.email.toLowerCase())
-            ? { ...u, role: 'owner' as UserRole }
-            : u
-        )),
-      ),
-    );
+    // Keep registered client admins intact — owner sign-in must not rewrite
+    // an admin row that happens to use an owner-notification email.
+    saveAuthUsers(ensureOwnerUser(users));
     setUser(safe);
+    bumpAuthUsers();
     hydratePersistedStores();
+    deviceApi.reconnect().then((result) => {
+      if (result.connected) {
+        console.info('[Auth] Attendance machine reconnected automatically');
+      }
+    });
     return { success: true };
-  }, []);
+  }, [bumpAuthUsers]);
 
   const signupAdmin = useCallback(async (input: {
     name: string;
@@ -620,6 +670,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const users = loadAuthUsers();
+    const accessExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
     const created: User = {
       id: `u-admin-${Date.now()}`,
       name: input.name.trim() || 'Admin',
@@ -629,14 +680,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       phone: '',
       timezone: 'Asia/Kathmandu',
       avatar: ADMIN_BOY_AVATAR,
+      companyName: input.name.trim() || 'Organization',
+      planType: 'free',
+      freeDays: 30,
+      durationDays: 30,
+      accessExpiresAt,
+      appStatus: 'running',
+      status: 'active',
     };
 
-    // Anyone may create/recreate the admin — replace previous admin accounts
-    const withoutAdmins = users.filter((u) => u.role !== 'admin');
-    saveAuthUsers([...withoutAdmins, created]);
+    // Recreate this admin email only — never wipe other client-admin accounts.
+    const withoutSameAdmin = users.filter(
+      (u) => !(u.role === 'admin' && u.email.toLowerCase() === email),
+    );
+    saveAuthUsers([...withoutSameAdmin, created]);
+    bumpAuthUsers();
     authApi.syncCloudUser(created);
     return { success: true };
-  }, []);
+  }, [bumpAuthUsers]);
 
   const signupEmployee = useCallback(async (input: {
     name: string;
@@ -876,6 +937,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           : u,
       );
       saveAuthUsers(remaining.filter((u) => u.status !== 'deleted'));
+      bumpAuthUsers();
 
       const purgeEmail = targetClient?.email || (key.includes('@') ? clientIdOrEmail : '');
       if (purgeEmail) {
@@ -896,7 +958,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         type: 'danger',
       });
     },
-    [user]
+    [user, bumpAuthUsers]
   );
 
   const impersonateClient = useCallback(

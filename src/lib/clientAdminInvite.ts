@@ -252,6 +252,7 @@ export function saveInvitedClientAdminAccount(input: {
     phone: input.phone,
     timezone: 'Asia/Kathmandu',
     companyName: input.companyName,
+    planType: 'free' as const,
     status: 'active' as const,
     emailVerified: true,
     avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(email)}`,

@@ -1,9 +1,9 @@
 import app from './app.js';
 import { env } from './config/env.js';
 import { runMigrations } from './db/migrate.js';
-import { setMemoryMode } from './models/DeviceModel.js';
+import { isExplicitMemoryStore, isMemoryMode, setMemoryMode } from './models/DeviceModel.js';
 import { refreshSyncScheduler, startSyncSettingsWatcher } from './services/device/BackgroundSyncService.js';
-import { autoReconnectDevice } from './services/device/AutoReconnectService.js';
+import { autoReconnectDevice, tryReconnectOnce } from './services/device/AutoReconnectService.js';
 import { getInsForgeStatus } from './services/insforge/insforgeClient.js';
 
 const DB_BOOT_TIMEOUT_MS = 10_000;
@@ -46,6 +46,45 @@ async function prepareDatabase(): Promise<void> {
   }
 }
 
+async function recoverDatabase(): Promise<boolean> {
+  if (isExplicitMemoryStore()) return false;
+  try {
+    await withTimeout(runMigrations(), DB_BOOT_TIMEOUT_MS, 'Database recovery');
+    setMemoryMode(false);
+    console.log('[Server] Database recovered — retrying device auto-connect');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function startDatabaseRecoveryWatcher(): void {
+  if (isExplicitMemoryStore()) return;
+  if (!isMemoryMode()) return;
+
+  const delays = [5_000, 15_000, 30_000];
+  let attempt = 0;
+
+  const tick = async () => {
+    if (!isMemoryMode() || isExplicitMemoryStore()) return;
+    const ok = await recoverDatabase();
+    if (ok) {
+      const outcome = await tryReconnectOnce().catch(() => null);
+      if (outcome?.connected) {
+        console.log(
+          `[Device] Auto-reconnected after database recovery: ${outcome.ipAddress}:${outcome.port}`,
+        );
+      }
+      return;
+    }
+    attempt += 1;
+    const wait = delays[Math.min(attempt, delays.length - 1)] ?? 60_000;
+    setTimeout(() => void tick(), attempt < delays.length ? wait : 60_000);
+  };
+
+  setTimeout(() => void tick(), delays[0]);
+}
+
 async function start() {
   // Bind the HTTP port first so Electron's health check does not time out
   // while PostgreSQL / InsForge are still connecting.
@@ -67,6 +106,7 @@ async function start() {
     });
     startSyncSettingsWatcher();
     void autoReconnectDevice();
+    startDatabaseRecoveryWatcher();
   } else {
     console.log('[Server] Device sync disabled — the attendance machine is LAN-only');
   }

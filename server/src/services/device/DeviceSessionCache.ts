@@ -30,7 +30,7 @@ export function getOrCreateDeviceAdapter(device: DeviceRecord): IDeviceAdapter {
   const adapter = createDeviceAdapter(device.brand, {
     ipAddress: device.ip_address,
     port: device.port,
-    username: device.username ?? 'admin',
+    username: (device.username ?? 'admin').trim() || 'admin',
     password,
     model: device.model ?? undefined,
   });

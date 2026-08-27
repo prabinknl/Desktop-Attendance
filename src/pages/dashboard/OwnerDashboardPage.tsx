@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Building2,
@@ -23,7 +23,7 @@ import {
   Activity,
   Save,
 } from 'lucide-react';
-import { useAuth, OWNER_SIGNIN_EMAILS } from '../../contexts/AuthContext';
+import { useAuth, hydrateCloudAuthUsers } from '../../contexts/AuthContext';
 import { useInvitations } from '../../contexts/InvitationContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import AddClientModal from '../../components/AddClientModal';
@@ -84,21 +84,33 @@ export default function OwnerDashboardPage() {
 
   const refreshDirectory = () => setListVersion((v) => v + 1);
 
+  useEffect(() => {
+    let cancelled = false;
+    hydrateCloudAuthUsers().then(() => {
+      if (!cancelled) refreshDirectory();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Collect registered admins/clients + pending invitations
   const clients = useMemo<ClientItem[]>(() => {
-    const ownerEmails = new Set(OWNER_SIGNIN_EMAILS.map((e) => e.toLowerCase()));
     const deletedArchive = getDeletedClients();
     const registered = getAuthUsers()
       .filter((u) => {
-        if (ownerEmails.has(u.email.toLowerCase())) return false;
-        if (u.role === 'client') return true;
-        return u.role === 'admin' && Boolean(u.clientId || u.companyName || u.planType);
+        if (u.role === 'owner') return false;
+        return u.role === 'client' || u.role === 'admin';
       })
       .map((u) => {
         const pType = u.planType ?? 'free';
         const dDays = u.durationDays ?? (pType === 'free' ? u.freeDays ?? 30 : u.paidDays ?? 365);
         const archived = deletedArchive.find((d) => d.email.toLowerCase() === u.email.toLowerCase());
-        const isDeleted = u.status === 'deleted' || Boolean(archived);
+        // A live active/pending account wins over a leftover Deleted-tab archive
+        // for the same email (for example after the admin signs up again).
+        const isDeleted =
+          u.status === 'deleted' ||
+          (Boolean(archived) && u.status !== 'active' && u.status !== 'pending');
         return {
           id: u.id,
           name: u.companyName || u.name,
@@ -110,7 +122,7 @@ export default function OwnerDashboardPage() {
           paidDays: u.paidDays ?? 365,
           durationDays: dDays,
           appStatus: u.appStatus ?? 'running',
-          status: (isDeleted ? 'deleted' : (u.status || 'active')) as 'active' | 'pending' | 'deleted',
+          status: (isDeleted ? 'deleted' : (u.status === 'pending' ? 'pending' : 'active')) as 'active' | 'pending' | 'deleted',
           deletedAt: u.deletedAt || archived?.deletedAt,
           deletedBy: u.deletedBy || archived?.deletedBy,
           createdAt: 'Registered',
@@ -122,7 +134,7 @@ export default function OwnerDashboardPage() {
 
     const archived = getDeletedClients()
       .filter((u) => {
-        if (ownerEmails.has(u.email.toLowerCase())) return false;
+        if (u.role === 'owner') return false;
         return !registeredEmails.has(u.email.toLowerCase());
       })
       .map((u) => {
@@ -295,7 +307,7 @@ export default function OwnerDashboardPage() {
       const deletedEmails = new Set(getDeletedClients().map((u) => u.email.toLowerCase()));
       const directoryUsers = getAuthUsers().filter((u) => {
         const email = u.email.toLowerCase();
-        if (OWNER_SIGNIN_EMAILS.includes(email)) return false;
+        if (u.role === 'owner') return false;
         if (u.status === 'deleted' || deletedEmails.has(email)) return false;
         return u.role === 'client' || u.role === 'admin';
       });

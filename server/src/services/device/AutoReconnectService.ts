@@ -135,26 +135,43 @@ export async function tryReconnectOnce(): Promise<ReconnectOutcome> {
     }
 
     if (record.status === 'online') {
-      // Verify the device is still reachable before trusting the persisted status.
-      // A cold-start after overnight shutdown must not show "Connected" for an offline machine.
       const stillUp = await tcpProbe(record.ip_address, record.port, 1500);
-      if (stillUp) {
-        await refreshSyncScheduler();
-        console.log(
-          `[Device] Verified device still reachable at ${record.ip_address}:${record.port} — staying online`,
+      if (!stillUp) {
+        console.info(
+          `[Device] Persisted status=online but ${record.ip_address}:${record.port} is unreachable — running full reconnect`,
         );
-        return {
-          connected: true,
-          ipAddress: record.ip_address,
-          port: record.port,
-          model: record.model ?? undefined,
-        };
+        await updateDeviceStatus(record.id, 'offline').catch(() => {});
+      } else {
+        try {
+          const adapter = getAdapterForDevice(record);
+          const test = await adapter.testConnection();
+          if (test.online) {
+            const info = await adapter.getDeviceInfo();
+            await markOnline(record.id, {
+              model: info.model,
+              macAddress: info.macAddress,
+              deviceTime: info.deviceTime,
+            });
+            console.log(
+              `[Device] Auto-authenticated saved device at ${record.ip_address}:${record.port} (${info.model ?? record.brand})`,
+            );
+            return {
+              connected: true,
+              ipAddress: record.ip_address,
+              port: record.port,
+              model: info.model,
+            };
+          }
+          console.info(
+            `[Device] Device reachable but auth failed (${test.authState}) — running full reconnect`,
+          );
+        } catch (err) {
+          console.info(
+            '[Device] Saved-device auth check failed:',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
       }
-      // TCP probe failed — clear the ghost-online status and fall through to full reconnect.
-      console.info(
-        `[Device] Persisted status=online but ${record.ip_address}:${record.port} is unreachable — running full reconnect`,
-      );
-      await updateDeviceStatus(record.id, 'offline').catch(() => {});
     }
 
     const preferredSubnet = record.ip_address
@@ -281,7 +298,7 @@ export async function tryReconnectOnce(): Promise<ReconnectOutcome> {
       const probe = createDeviceAdapter(record.brand, {
         ipAddress: found.ipAddress,
         port: found.port,
-        username: record.username || 'admin',
+        username: record.username?.trim() || 'admin',
         password,
         model: found.model,
       });
@@ -360,7 +377,19 @@ export async function tryReconnectOnce(): Promise<ReconnectOutcome> {
 
 /** One-shot startup reconnect (also starts the periodic watcher). */
 export async function autoReconnectDevice(): Promise<void> {
-  const outcome = await tryReconnectOnce();
+  let outcome = await tryReconnectOnce();
+
+  // Device config often lives only in Postgres. If the first boot query
+  // failed, retry a few times before giving up — the 15s watcher also
+  // keeps trying, but a cold start should connect within seconds.
+  if (!outcome.connected && outcome.reason === 'no_device') {
+    for (const waitMs of [3_000, 8_000, 15_000]) {
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      outcome = await tryReconnectOnce();
+      if (outcome.connected || outcome.reason !== 'no_device') break;
+    }
+  }
+
   if (outcome.connected) {
     console.log(
       `[Device] Auto-reconnected: ${outcome.ipAddress}:${outcome.port}` +

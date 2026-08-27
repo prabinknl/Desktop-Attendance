@@ -1,5 +1,11 @@
 import { query } from '../db/pool.js';
-import { memoryStore, createMemoryRecord, isMemoryMode, setMemoryMode } from '../db/memoryStore.js';
+import {
+  memoryStore,
+  createMemoryRecord,
+  isMemoryMode,
+  isExplicitMemoryStore,
+  setMemoryMode,
+} from '../db/memoryStore.js';
 import { encryptPassword, decryptPassword } from '../services/crypto/passwordCrypto.js';
 import { getOrCreateDeviceAdapter, clearDeviceAdapterCache } from '../services/device/DeviceSessionCache.js';
 import {
@@ -8,6 +14,7 @@ import {
   resolveConnectionMode,
 } from '../services/connector/devicePresence.js';
 import { generateConnectorToken } from '../services/connector/connectorAuth.js';
+import { getInsForgeClient } from '../services/insforge/insforgeClient.js';
 import type {
   DeviceConnectPayload,
   DevicePublic,
@@ -44,39 +51,89 @@ export function toStatusResponse(record: DeviceRecord): DeviceStatusResponse {
   };
 }
 
-async function dbQuery<T extends import('pg').QueryResultRow>(
-  text: string,
-  params?: unknown[],
-): Promise<{ rows: T[] }> {
+/** Keep a local copy so auto-reconnect still works when PostgreSQL blips. */
+function cacheLocalDevice(record: DeviceRecord | null | undefined): void {
+  if (record) memoryStore.saveDevice(record);
+}
+
+/**
+ * InsForge HTTP still works when the Postgres TCP pool is down.
+ * Used so auto-reconnect can recover saved machine credentials.
+ */
+async function loadDeviceFromInsForge(): Promise<DeviceRecord | null> {
   try {
-    return await query<T>(text, params);
+    const client = await getInsForgeClient();
+    if (!client) return null;
+    const { data, error } = await client.database
+      .from('devices')
+      .select('*')
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (error) {
+      console.warn('[DeviceModel] InsForge device load failed:', error.message ?? error);
+      return null;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row || typeof row !== 'object') return null;
+    return row as DeviceRecord;
+  } catch (err) {
+    console.warn(
+      '[DeviceModel] InsForge device load failed:',
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
+ * Load the saved machine from PostgreSQL and mirror it to disk.
+ * On failure, try InsForge HTTP, then the locally cached device.
+ */
+async function loadDeviceFromPostgres(): Promise<DeviceRecord | null> {
+  try {
+    const result = await query<DeviceRecord>('SELECT * FROM devices ORDER BY updated_at DESC LIMIT 1');
+    const row = result.rows[0] ?? null;
+    if (row) {
+      cacheLocalDevice(row);
+      if (isMemoryMode() && !isExplicitMemoryStore()) {
+        setMemoryMode(false);
+      }
+      return row;
+    }
   } catch (err) {
     if (!isMemoryMode()) {
-      console.warn('[DeviceModel] DB unavailable, switching to memory store');
+      console.warn(
+        '[DeviceModel] DB unavailable, trying InsForge / local cache:',
+        err instanceof Error ? err.message : err,
+      );
       setMemoryMode(true);
     }
-    throw err;
   }
+
+  const fromCloud = await loadDeviceFromInsForge();
+  if (fromCloud) {
+    cacheLocalDevice(fromCloud);
+    console.log(`[Device] Loaded saved machine from InsForge (${fromCloud.ip_address}:${fromCloud.port})`);
+    return fromCloud;
+  }
+
+  return memoryStore.getDevice();
 }
 
 export async function getActiveDevice(): Promise<DevicePublic | null> {
-  if (isMemoryMode()) return memoryStore.getDevicePublic();
-  try {
-    const result = await dbQuery<DeviceRecord>('SELECT * FROM devices ORDER BY updated_at DESC LIMIT 1');
-    return result.rows[0] ? toPublic(result.rows[0]) : null;
-  } catch {
-    return memoryStore.getDevicePublic();
-  }
+  const record = await getActiveDeviceRecord();
+  return record ? toPublic(record) : null;
 }
 
 export async function getActiveDeviceRecord(): Promise<DeviceRecord | null> {
-  if (isMemoryMode()) return memoryStore.getDevice();
-  try {
-    const result = await dbQuery<DeviceRecord>('SELECT * FROM devices ORDER BY updated_at DESC LIMIT 1');
-    return result.rows[0] ?? null;
-  } catch {
-    return memoryStore.getDevice();
-  }
+  if (isExplicitMemoryStore()) return memoryStore.getDevice();
+
+  const cached = memoryStore.getDevice();
+  // Fallback memory mode with a cached device: return it immediately so
+  // auto-reconnect does not wait on a dead Postgres connection.
+  if (isMemoryMode() && cached) return cached;
+
+  return loadDeviceFromPostgres();
 }
 
 export async function saveDevice(payload: DeviceConnectPayload): Promise<DevicePublic> {
@@ -97,14 +154,17 @@ export async function saveDevice(payload: DeviceConnectPayload): Promise<DeviceP
     throw new Error('Password is required');
   }
 
+  const username = (payload.username ?? 'admin').trim() || 'admin';
   const encrypted =
     connectionMode === 'cloud_connector' && !passwordPlain
       ? existing?.password_encrypted ?? null
       : encryptPassword(passwordPlain);
   clearDeviceAdapterCache();
 
+  const trimmedPayload = { ...payload, username };
+
   if (isMemoryMode()) {
-    const record = createMemoryRecord(payload, encrypted, existing);
+    const record = createMemoryRecord(trimmedPayload, encrypted, existing);
     return memoryStore.saveDevice(record);
   }
 
@@ -118,11 +178,12 @@ export async function saveDevice(payload: DeviceConnectPayload): Promise<DeviceP
          WHERE id = $11 RETURNING *`,
         [
           payload.name, payload.brand, payload.model ?? null, payload.ipAddress, payload.port,
-          payload.username, encrypted, payload.location ?? null, payload.description ?? null,
+          username, encrypted, payload.location ?? null, payload.description ?? null,
           connectionMode,
           existing.id,
         ],
       );
+      cacheLocalDevice(result.rows[0]);
       return toPublic(result.rows[0]);
     }
 
@@ -131,29 +192,28 @@ export async function saveDevice(payload: DeviceConnectPayload): Promise<DeviceP
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [
         payload.name, payload.brand, payload.model ?? null, payload.ipAddress, payload.port,
-        payload.username, encrypted, payload.location ?? null, payload.description ?? null,
+        username, encrypted, payload.location ?? null, payload.description ?? null,
         connectionMode,
       ],
     );
+    cacheLocalDevice(result.rows[0]);
     return toPublic(result.rows[0]);
   } catch (err) {
     if (err instanceof Error && err.message === 'Password is required') throw err;
     setMemoryMode(true);
     const memExisting = memoryStore.getDevice();
-    const record = createMemoryRecord(payload, encrypted, memExisting);
+    const record = createMemoryRecord(trimmedPayload, encrypted, memExisting);
     return memoryStore.saveDevice(record);
   }
 }
 
 export async function updateDeviceStatus(id: string, status: DeviceStatus): Promise<void> {
-  if (isMemoryMode()) {
-    memoryStore.updateStatus(status);
-    return;
-  }
+  memoryStore.updateStatus(status);
+  if (isMemoryMode()) return;
   try {
     await query('UPDATE devices SET status = $1, updated_at = NOW() WHERE id = $2', [status, id]);
   } catch {
-    memoryStore.updateStatus(status);
+    /* local cache already updated */
   }
 }
 
@@ -162,16 +222,23 @@ export async function updateSyncSettings(
   autoSyncEnabled: boolean,
   syncIntervalSeconds: number,
 ): Promise<DevicePublic> {
+  memoryStore.updateMeta({ auto_sync_enabled: autoSyncEnabled, sync_interval_seconds: syncIntervalSeconds });
   if (isMemoryMode()) {
-    memoryStore.updateMeta({ auto_sync_enabled: autoSyncEnabled, sync_interval_seconds: syncIntervalSeconds });
     return memoryStore.getDevicePublic()!;
   }
-  const result = await query<DeviceRecord>(
-    `UPDATE devices SET auto_sync_enabled = $1, sync_interval_seconds = $2, updated_at = NOW()
-     WHERE id = $3 RETURNING *`,
-    [autoSyncEnabled, syncIntervalSeconds, id],
-  );
-  return toPublic(result.rows[0]);
+  try {
+    const result = await query<DeviceRecord>(
+      `UPDATE devices SET auto_sync_enabled = $1, sync_interval_seconds = $2, updated_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [autoSyncEnabled, syncIntervalSeconds, id],
+    );
+    cacheLocalDevice(result.rows[0]);
+    return toPublic(result.rows[0]);
+  } catch {
+    const pub = memoryStore.getDevicePublic();
+    if (!pub) throw new Error('No device configured');
+    return pub;
+  }
 }
 
 export async function updateDeviceMeta(
@@ -193,10 +260,8 @@ export async function updateDeviceMeta(
   if (fields.macAddress) memoryFields.mac_address = fields.macAddress;
   if (fields.status) memoryFields.status = fields.status;
 
-  if (isMemoryMode()) {
-    memoryStore.updateMeta(memoryFields);
-    return;
-  }
+  memoryStore.updateMeta(memoryFields);
+  if (isMemoryMode()) return;
 
   const sets: string[] = ['updated_at = NOW()'];
   const values: unknown[] = [];
@@ -213,7 +278,11 @@ export async function updateDeviceMeta(
   if (fields.status) { sets.push(`status = $${idx++}`); values.push(fields.status); }
 
   values.push(id);
-  await query(`UPDATE devices SET ${sets.join(', ')} WHERE id = $${idx}`, values);
+  try {
+    await query(`UPDATE devices SET ${sets.join(', ')} WHERE id = $${idx}`, values);
+  } catch {
+    /* local cache already updated */
+  }
 }
 
 /** Update the working LAN address on the existing device row (no duplicate records). */
@@ -224,10 +293,8 @@ export async function updateDeviceAddress(
 ): Promise<void> {
   clearDeviceAdapterCache();
 
-  if (isMemoryMode()) {
-    memoryStore.updateMeta({ ip_address: ipAddress, port });
-    return;
-  }
+  memoryStore.updateMeta({ ip_address: ipAddress, port });
+  if (isMemoryMode()) return;
 
   try {
     await query(
@@ -235,7 +302,7 @@ export async function updateDeviceAddress(
       [ipAddress, port, id],
     );
   } catch {
-    memoryStore.updateMeta({ ip_address: ipAddress, port });
+    /* local cache already updated */
   }
 }
 
@@ -500,4 +567,4 @@ export async function getCommandResult(commandId: string): Promise<Record<string
   return null;
 }
 
-export { toPublic, isMemoryMode, setMemoryMode };
+export { toPublic, isMemoryMode, isExplicitMemoryStore, setMemoryMode };

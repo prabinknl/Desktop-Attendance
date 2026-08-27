@@ -6,10 +6,12 @@ import Sidebar from './Sidebar';
 import Header from './Header';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { useQueryClient } from '@tanstack/react-query';
 import { hydratePersistedStores } from '../../data/store';
 import { deviceApi } from '../../api/deviceApi';
 import { fetchLogsWithCache } from '../../lib/deviceLogsCache';
 import { importAttendanceFromDeviceLogs } from '../../lib/deviceAttendanceSync';
+import { deviceQueryKeys } from '../../hooks/useDeviceSettings';
 import { cn } from '../../lib/utils';
 
 export default function AppShell() {
@@ -18,6 +20,7 @@ export default function AppShell() {
   const { formatKey } = useDateSettings();
   const { user, logout, isImpersonating, exitImpersonation } = useAuth();
   const location = useLocation();
+  const queryClient = useQueryClient();
 
   // Restore saved employees + attendance after login / app reopen
   useEffect(() => {
@@ -35,6 +38,20 @@ export default function AppShell() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Connect the saved attendance machine as soon as the signed-in app opens,
+  // not only when the user visits Device Settings or clicks Sign in again.
+  useEffect(() => {
+    let cancelled = false;
+    deviceApi.reconnect().then((result) => {
+      if (cancelled) return;
+      if (result.connected) {
+        void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.device });
+        void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.status });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [queryClient]);
 
   // Show Account Disabled screen if logged-in account is soft-deleted (and not owner viewing)
   if (user && user.role !== 'owner' && user.status === 'deleted' && !isImpersonating) {

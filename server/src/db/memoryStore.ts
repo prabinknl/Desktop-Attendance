@@ -57,6 +57,7 @@ export type MemoryUserRecord = {
   employeeId?: string;
   departmentId?: string;
   clientId?: string;
+  companyName?: string;
   planType?: 'free' | 'paid';
   accessExpiresAt?: string;
   status?: string;
@@ -78,28 +79,72 @@ const DATA_DIR = path.resolve(
 );
 const STORE_FILE = path.join(DATA_DIR, 'memory-store.json');
 
+function fallbackStoreFiles(): string[] {
+  const appData = process.env.APPDATA?.trim();
+  if (!appData) return [];
+  const candidates = [
+    path.join(appData, 'attendence', 'data', 'memory-store.json'),
+    path.join(appData, 'Attendance Desktop', 'data', 'memory-store.json'),
+  ];
+  const self = path.resolve(STORE_FILE);
+  return candidates.filter((file) => path.resolve(file) !== self && fs.existsSync(file));
+}
+
+function normalizeDevice(device: DeviceRecord): DeviceRecord {
+  return {
+    ...device,
+    username: (device.username ?? 'admin').trim() || 'admin',
+  };
+}
+
 function loadFromDisk() {
   try {
-    if (!fs.existsSync(STORE_FILE)) return;
-    const raw = fs.readFileSync(STORE_FILE, 'utf8');
-    const parsed = JSON.parse(raw) as {
-      device?: DeviceRecord | null;
-      logs?: MemoryLog[];
-      invitations?: InvitationRecord[];
-      users?: MemoryUserRecord[];
-    };
-    if (parsed.device && typeof parsed.device === 'object') {
-      memoryDevice = parsed.device;
+    if (fs.existsSync(STORE_FILE)) {
+      const raw = fs.readFileSync(STORE_FILE, 'utf8');
+      const parsed = JSON.parse(raw) as {
+        device?: DeviceRecord | null;
+        logs?: MemoryLog[];
+        invitations?: InvitationRecord[];
+        users?: MemoryUserRecord[];
+      };
+      if (parsed.device && typeof parsed.device === 'object') {
+        memoryDevice = normalizeDevice(parsed.device);
+      }
+      if (Array.isArray(parsed.logs)) {
+        memoryLogs = parsed.logs;
+      }
+      if (Array.isArray(parsed.invitations)) {
+        memoryInvitations = parsed.invitations;
+      }
+      if (Array.isArray(parsed.users)) {
+        memoryUsers = parsed.users;
+      }
     }
-    if (Array.isArray(parsed.logs)) {
-      memoryLogs = parsed.logs;
+
+    if (!memoryDevice) {
+      for (const extra of fallbackStoreFiles()) {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(extra, 'utf8')) as {
+            device?: DeviceRecord | null;
+            logs?: MemoryLog[];
+          };
+          if (parsed.device && typeof parsed.device === 'object') {
+            memoryDevice = normalizeDevice(parsed.device);
+            if (Array.isArray(parsed.logs) && parsed.logs.length && memoryLogs.length === 0) {
+              memoryLogs = parsed.logs;
+            }
+            console.log(
+              `[MemoryStore] Imported saved machine from ${extra} (${memoryDevice.ip_address}:${memoryDevice.port})`,
+            );
+            saveToDisk();
+            break;
+          }
+        } catch {
+          /* try next */
+        }
+      }
     }
-    if (Array.isArray(parsed.invitations)) {
-      memoryInvitations = parsed.invitations;
-    }
-    if (Array.isArray(parsed.users)) {
-      memoryUsers = parsed.users;
-    }
+
     console.log(
       `[MemoryStore] Restored from disk: device=${memoryDevice ? memoryDevice.id : 'none'} logs=${memoryLogs.length} invitations=${memoryInvitations.length} users=${memoryUsers.length}`,
     );
@@ -132,12 +177,30 @@ function saveToDisk() {
 
 loadFromDisk();
 
+/** True only when the operator set USE_MEMORY_STORE=true — never auto-cleared. */
+function envWantsMemoryStore(): boolean {
+  return (process.env.USE_MEMORY_STORE ?? '').toLowerCase() === 'true';
+}
+
+/** Set when PostgreSQL is temporarily unreachable. Recovery may clear this. */
+let fallbackMemoryMode = false;
+
+export function isExplicitMemoryStore(): boolean {
+  return envWantsMemoryStore();
+}
+
 export function isMemoryMode(): boolean {
-  return process.env.USE_MEMORY_STORE === 'true';
+  return envWantsMemoryStore() || fallbackMemoryMode;
 }
 
 export function setMemoryMode(enabled: boolean): void {
-  process.env.USE_MEMORY_STORE = enabled ? 'true' : 'false';
+  // Never mutate USE_MEMORY_STORE — a previous bug flipped it to 'true' after
+  // one failed query and then never read PostgreSQL again for the process life.
+  if (envWantsMemoryStore()) {
+    fallbackMemoryMode = true;
+    return;
+  }
+  fallbackMemoryMode = enabled;
 }
 
 function toPublic(record: DeviceRecord): DevicePublic {
@@ -305,14 +368,12 @@ export const memoryStore = {
       createdAt: user.createdAt ?? now,
     };
 
-    // Enforce a single admin account in memory mode (mirrors DB upsert behavior).
-    if (next.role === 'admin') {
-      memoryUsers = memoryUsers.filter(
-        (u) => !(u.role === 'admin' && u.email.trim().toLowerCase() !== emailLower),
-      );
-    }
-
-    const idx = memoryUsers.findIndex((u) => u.email.trim().toLowerCase() === emailLower);
+    const idx = memoryUsers.findIndex((u) => {
+      if (u.email.trim().toLowerCase() !== emailLower) return false;
+      // Owner and client-admin may share an email; do not overwrite one with the other.
+      if (next.role === 'owner' || u.role === 'owner') return u.role === next.role;
+      return true;
+    });
     if (idx >= 0) {
       memoryUsers[idx] = {
         ...memoryUsers[idx],
@@ -386,7 +447,7 @@ export function createMemoryRecord(
     model: payload.model ?? null,
     ip_address: payload.ipAddress,
     port: payload.port,
-    username: payload.username,
+    username: (payload.username ?? 'admin').trim() || 'admin',
     password_encrypted: encryptedPassword,
     location: payload.location ?? null,
     description: payload.description ?? null,
