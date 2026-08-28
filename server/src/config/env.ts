@@ -48,7 +48,15 @@ function getAppPublicUrl(): string {
 }
 
 export const env = {
-  port: parseInt(process.env.PORT ?? '3002', 10),
+  /**
+   * Hostinger injects PORT. Local/Electron keep 3002 so Vite can use 3000.
+   * Production fallback is 3000 only when PORT is unset.
+   */
+  port: parseInt(
+    process.env.PORT ||
+      ((process.env.NODE_ENV ?? 'development') === 'production' ? '3000' : '3002'),
+    10,
+  ),
   /**
    * Listen address. Desktop Electron sets HOST=127.0.0.1 so the API is not
    * exposed on the LAN. Cloud/server deploys typically use 0.0.0.0.

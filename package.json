@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.8",
   "type": "module",
-  "main": "electron/main.cjs",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "start:api": "node server/dist/index.js",
@@ -13,16 +13,16 @@
     "dev:client": "vite --host 127.0.0.1 --port 3000 --open",
     "dev:all": "concurrently -k -n server,vite -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
     "dev:single": "tsx watch server/src/index.ts",
-    "build": "tsc -b && vite build",
+    "build": "npm run build:server && tsc -b && vite build",
     "build:server": "tsc -p server/tsconfig.json && node -e \"require('fs').cpSync('server/src/db/migrations','server/dist/db/migrations',{recursive:true})\"",
-    "build:web": "npm run build:server && npm run build",
+    "build:web": "npm run build",
     "build:electron-ui": "vite build --config vite.config.electron.ts",
     "build:icon": "node electron/scripts/generate-icon.mjs",
     "lint": "oxlint",
     "test": "vitest run",
     "test:invitations": "vitest run server/src/services/auth/invitationService.test.ts src/lib/inviteToken.test.ts",
     "preview": "vite preview",
-    "electron:dev": "concurrently -k -n server,vite,electron -c blue,green,magenta \"npm run dev:server\" \"npm run dev:client\" \"wait-on http://127.0.0.1:3000 http://127.0.0.1:3002/api/health && electron .\"",
+    "electron:dev": "concurrently -k -n server,vite,electron -c blue,green,magenta \"npm run dev:server\" \"npm run dev:client\" \"wait-on http://127.0.0.1:3000 http://127.0.0.1:3002/api/health && electron electron/main.cjs\"",
     "electron:pack": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs --dir",
     "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs",
     "dist": "npm run build:icon && npm run electron:build",
@@ -169,6 +169,9 @@
       "deleteAppDataOnUninstall": false
     },
     "asar": true,
-    "afterPack": "electron/scripts/after-pack.cjs"
+    "afterPack": "electron/scripts/after-pack.cjs",
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    }
   }
 }
