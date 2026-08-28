@@ -52,6 +52,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
   const [inviteCode, setInviteCode] = useState('');
   const [copied, setCopied] = useState(false);
   const [sending, setSending] = useState(false);
+  const [emailSentOk, setEmailSentOk] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
 
   // Reset when closed
@@ -66,6 +67,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
         setInviteCode('');
         setCopied(false);
         setSending(false);
+        setEmailSentOk(false);
       }, 300);
     }
   }, [open]);
@@ -108,16 +110,18 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
 
         if (res.code) setInviteCode(res.code);
 
-        if (res.success) {
+        if (res.success && res.emailSent !== false) {
+          setEmailSentOk(true);
           toast('success', `Invitation code sent to ${trimmedEmail}`);
         } else {
-          toast('warning', res.message || 'Invitation code generated, but email could not be sent.');
+          setEmailSentOk(false);
+          toast('error', res.message || 'Invitation created, but email could not be sent. Please try again.');
         }
         setStep('done');
       } catch (err) {
         console.error('Failed to send invitation email:', err);
-        const msg = err instanceof Error ? err.message : 'Could not send invitation email.';
-        toast('warning', `${msg} Code generated, you can share it manually.`);
+        setEmailSentOk(false);
+        toast('error', 'Invitation created, but email could not be sent. Please try again.');
         setStep('done');
       } finally {
         setSending(false);
@@ -175,7 +179,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
                     <p className="text-xs text-slate-400">
                       {step === 'role' && 'Choose a role to invite'}
                       {step === 'email' && `Invite as ${roleInfo?.label}`}
-                      {step === 'done' && 'Invitation code ready!'}
+                      {step === 'done' && (emailSentOk ? 'Invitation code sent!' : 'Email was not sent')}
                     </p>
                   </div>
                 </div>
@@ -370,10 +374,19 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
                       className="space-y-5"
                     >
                       <div className="text-center py-2">
-                        <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center mx-auto mb-3">
-                          <Check size={32} className="text-emerald-500" />
+                        <div className={cn(
+                          'w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3',
+                          emailSentOk
+                            ? 'bg-emerald-100 dark:bg-emerald-900/30'
+                            : 'bg-amber-100 dark:bg-amber-900/30',
+                        )}>
+                          <Check size={32} className={emailSentOk ? 'text-emerald-500' : 'text-amber-500'} />
                         </div>
-                        <p className="font-semibold text-slate-900 dark:text-white">Invitation code sent!</p>
+                        <p className="font-semibold text-slate-900 dark:text-white">
+                          {emailSentOk
+                            ? 'Invitation code sent!'
+                            : 'Invitation created, but email could not be sent. Please try again.'}
+                        </p>
                         <div className="mt-2 space-y-1 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800 text-left text-xs">
                           {name.trim() && (
                             <div className="flex justify-between py-0.5">
@@ -421,7 +434,7 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
 
                       <div className="flex gap-3">
                         <button
-                          onClick={() => { setStep('role'); setSelectedRole(null); setName(''); setEmail(''); setInviteCode(''); }}
+                          onClick={() => { setStep('role'); setSelectedRole(null); setName(''); setEmail(''); setInviteCode(''); setEmailSentOk(false); }}
                           className="btn flex-1 py-3 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl text-sm"
                         >
                           New Invite

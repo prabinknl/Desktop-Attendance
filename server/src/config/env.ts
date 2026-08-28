@@ -4,8 +4,7 @@ import { fileURLToPath } from 'url';
 
 try {
   const envDir = path.dirname(fileURLToPath(import.meta.url));
-  // server/src/config → server/.env (primary), then repo-root .env
-  // Vercel injects process.env directly; local .env files are absent there.
+  // Hostinger (and other Node hosts) inject process.env; local .env files are optional.
   dotenv.config({ path: path.resolve(envDir, '../../.env') });
   dotenv.config({ path: path.resolve(envDir, '../../../.env') });
 } catch {
@@ -43,7 +42,7 @@ function getAppPublicUrl(): string {
   if ((process.env.NODE_ENV ?? 'development') === 'development') {
     return 'http://127.0.0.1:3002';
   }
-  return '';
+  return 'https://desktop-attendance.appnep.com';
 }
 
 export const env = {
@@ -81,6 +80,7 @@ export const env = {
   appPublicUrl: getAppPublicUrl(),
   smtpHost: (process.env.SMTP_HOST ?? '').trim(),
   smtpPort: parseInt(process.env.SMTP_PORT || '587', 10) || 587,
+  smtpSecure: (process.env.SMTP_SECURE ?? '').trim().toLowerCase() === 'true',
   smtpUser: (process.env.SMTP_USER ?? '').trim(),
   smtpPass: process.env.SMTP_PASS ?? '',
   smtpFrom: (process.env.SMTP_FROM ?? '').trim(),

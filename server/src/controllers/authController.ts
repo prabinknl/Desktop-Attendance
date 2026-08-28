@@ -174,9 +174,11 @@ export async function sendInviteEmail(req: Request, res: Response) {
       });
     }
 
-    const publicLink = env.appPublicUrl && token
-      ? `${env.appPublicUrl}/invite/${token}`
-      : (inviteLink || (token ? `http://localhost:3002/invite/${token}` : ''));
+    const publicLink =
+      env.appPublicUrl && token
+        ? `${env.appPublicUrl}/invite/${token}`
+        : inviteLink ||
+          (token && env.nodeEnv !== 'production' ? `http://localhost:3002/invite/${token}` : '');
 
     const mail = await sendInvitationEmail({
       to: email,
@@ -187,12 +189,13 @@ export async function sendInviteEmail(req: Request, res: Response) {
     });
 
     if (!mail.sent) {
+      if (mail.error) {
+        console.error('[Auth] Invitation email not sent:', mail.error);
+      }
       return res.status(503).json({
         success: false,
         emailSent: false,
-        message:
-          mail.error ||
-          'Could not send invitation email. Configure SMTP_HOST, SMTP_USER, and SMTP_PASS in the hosting environment and try again.',
+        message: 'Invitation created, but email could not be sent. Please try again.',
       });
     }
 
@@ -204,10 +207,10 @@ export async function sendInviteEmail(req: Request, res: Response) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to send invitation email';
-    console.error('send-invite failed:', err);
+    console.error('[Auth] send-invite failed:', message);
     return res.status(500).json({
       success: false,
-      message,
+      message: 'Invitation created, but email could not be sent. Please try again.',
       emailSent: false,
     });
   }

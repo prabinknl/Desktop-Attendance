@@ -70,13 +70,27 @@ export function verifyStoredCode(email: string, code: string): { ok: boolean; me
   return { ok: true };
 }
 
+function redactSmtpSecrets(text: string): string {
+  let safe = text;
+  const pass = process.env.SMTP_PASS ?? '';
+  const user = (process.env.SMTP_USER ?? '').trim();
+  if (pass) safe = safe.split(pass).join('[redacted]');
+  if (user) safe = safe.split(user).join('[redacted]');
+  return safe;
+}
+
+function logSmtpFailure(context: string, err: unknown): void {
+  const raw = err instanceof Error ? err.message : String(err);
+  console.error(`[Auth] ${context}:`, redactSmtpSecrets(raw));
+}
+
 function smtpConfigError(): string {
   const missing: string[] = [];
-  if (!env.smtpHost) missing.push('SMTP_HOST');
-  if (!env.smtpUser) missing.push('SMTP_USER');
-  if (!env.smtpPass) missing.push('SMTP_PASS');
+  if (!(process.env.SMTP_HOST ?? '').trim()) missing.push('SMTP_HOST');
+  if (!(process.env.SMTP_USER ?? '').trim()) missing.push('SMTP_USER');
+  if (!(process.env.SMTP_PASS ?? '')) missing.push('SMTP_PASS');
   if (missing.length === 0) return '';
-  return `Missing required email environment variables: ${missing.join(', ')}. Set them in the hosting environment (Vercel project settings), not as VITE_* variables.`;
+  return `Missing required email environment variables: ${missing.join(', ')}. Set them in the hosting environment, not as VITE_* variables.`;
 }
 
 function smtpConfigured(): boolean {
@@ -84,28 +98,42 @@ function smtpConfigured(): boolean {
 }
 
 function mailFromAddress(): string {
-  return env.smtpFrom || env.smtpUser;
+  return (process.env.SMTP_FROM ?? '').trim() || (process.env.SMTP_USER ?? '').trim();
 }
 
 function createMailTransporter() {
-  const port = Number.isFinite(env.smtpPort) && env.smtpPort > 0 ? env.smtpPort : 587;
+  const host = (process.env.SMTP_HOST ?? '').trim();
+  const port = Number(process.env.SMTP_PORT || 587);
+  const secure = process.env.SMTP_SECURE === 'true';
   return nodemailer.createTransport({
-    host: env.smtpHost,
+    host,
     port,
-    secure: port === 465,
+    secure,
     auth: {
-      user: env.smtpUser,
-      pass: env.smtpPass,
+      user: (process.env.SMTP_USER ?? '').trim(),
+      pass: process.env.SMTP_PASS,
     },
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 15_000,
-    // Vercel IPv6 often cannot reach SMTP hosts; force IPv4.
+    // Prefer IPv4 — some SMTP hosts (including Hostinger mail) reject IPv6.
     family: 4,
     tls: {
       rejectUnauthorized: false,
     },
   } as Parameters<typeof nodemailer.createTransport>[0]);
+}
+
+async function sendMailConfirmed(
+  transporter: ReturnType<typeof nodemailer.createTransport>,
+  options: Parameters<ReturnType<typeof nodemailer.createTransport>['sendMail']>[0],
+) {
+  const info = await transporter.sendMail(options);
+  const accepted = Array.isArray(info.accepted) ? info.accepted : [];
+  if (accepted.length === 0) {
+    throw new Error(info.response || 'SMTP server did not accept the message');
+  }
+  return info;
 }
 
 export async function sendAdminVerificationEmail(input: {
@@ -188,6 +216,7 @@ export async function sendInvitationEmail(input: {
     if (env.nodeEnv !== 'production') {
       return { sent: true, devFallback: true };
     }
+    console.error('[Auth] Invitation email blocked:', smtpConfigError());
     return { sent: false, error: smtpConfigError() };
   }
 
@@ -198,7 +227,7 @@ export async function sendInvitationEmail(input: {
     const roleLabel = input.role.charAt(0).toUpperCase() + input.role.slice(1);
 
     if (isCodeInvite) {
-      await transporter.sendMail({
+      await sendMailConfirmed(transporter, {
         from: `"PACE Attendance" <${from}>`,
         to: input.to,
         subject: `Invitation Code to join PACE Attendance as an ${roleLabel}`,
@@ -230,7 +259,7 @@ export async function sendInvitationEmail(input: {
       `,
       });
     } else {
-      await transporter.sendMail({
+      await sendMailConfirmed(transporter, {
         from: `"PACE Attendance" <${from}>`,
         to: input.to,
         subject: `Invitation to join PACE Attendance as an ${roleLabel}`,
@@ -262,7 +291,7 @@ export async function sendInvitationEmail(input: {
     return { sent: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to send email';
-    console.error('[Auth] Failed to send invitation email:', message);
+    logSmtpFailure('Failed to send invitation email', err);
     if (env.nodeEnv !== 'production') {
       console.log('\n==========================================================');
       console.log(`[Auth DEV MODE] SMTP send failed. Using console fallback.`);
@@ -270,7 +299,7 @@ export async function sendInvitationEmail(input: {
       console.log('==========================================================\n');
       return { sent: true, devFallback: true };
     }
-    return { sent: false, error: message };
+    return { sent: false, error: redactSmtpSecrets(message) };
   }
 }
 
