@@ -71,13 +71,29 @@ app.get('/api', async (_req, res) => {
 });
 
 app.get('/api/health', async (_req, res) => {
-  const insforgeStatus = await getInsForgeStatus();
+  let insforge: { enabled: boolean; connected: boolean; message: string } = {
+    enabled: false,
+    connected: false,
+    message: 'InsForge status unavailable',
+  };
+  try {
+    const insforgeStatus = await getInsForgeStatus();
+    insforge = {
+      enabled: insforgeStatus.enabled,
+      connected: insforgeStatus.connected,
+      message: insforgeStatus.message,
+    };
+  } catch (err) {
+    insforge.message = err instanceof Error ? err.message : 'InsForge status check failed';
+  }
   res.json({
+    ok: true,
+    service: 'attendance-backend',
     status: 'ok',
     timestamp: new Date().toISOString(),
     // The frontend hides device settings when the API cannot reach the LAN
     deviceSyncEnabled: env.deviceSyncEnabled,
-    insforge: insforgeStatus,
+    insforge,
   });
 });
 
@@ -112,9 +128,14 @@ if (clientDist) {
     return res.sendFile(path.join(clientDist, 'index.html'));
   });
 } else {
-  // Fallback for non-API GET routes when frontend dist is not built
+  // Frontend dist is not built. Never send browsers to loopback in production.
   app.use((req, res, next) => {
     if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
+    if (env.nodeEnv === 'production') {
+      return res
+        .status(503)
+        .send('Frontend build is missing. Run npm run build:web so dist/index.html exists.');
+    }
     const targetOrigin = env.appPublicUrl || 'http://127.0.0.1:3002';
     return res.redirect(302, `${targetOrigin.replace(/\/+$/, '')}${req.originalUrl}`);
   });

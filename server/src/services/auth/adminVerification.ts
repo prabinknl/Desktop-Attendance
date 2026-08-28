@@ -79,9 +79,49 @@ function redactSmtpSecrets(text: string): string {
   return safe;
 }
 
+function smtpErrorCode(err: unknown): string {
+  if (err && typeof err === 'object' && 'code' in err && typeof (err as { code?: unknown }).code === 'string') {
+    return (err as { code: string }).code;
+  }
+  return '';
+}
+
+function smtpResponseCode(err: unknown): number {
+  if (err && typeof err === 'object' && 'responseCode' in err) {
+    const code = Number((err as { responseCode?: unknown }).responseCode);
+    return Number.isFinite(code) ? code : 0;
+  }
+  return 0;
+}
+
+function classifySmtpError(err: unknown): string {
+  const code = smtpErrorCode(err);
+  const responseCode = smtpResponseCode(err);
+  const raw = redactSmtpSecrets(err instanceof Error ? err.message : String(err));
+
+  if (code === 'EAUTH' || responseCode === 535 || /invalid login|authentication failed|535-5\.7/i.test(raw)) {
+    return 'SMTP authentication failure';
+  }
+  if (code === 'ETIMEDOUT' || code === 'ETIME' || /timeout/i.test(raw)) {
+    return 'SMTP connection timeout';
+  }
+  if (
+    code === 'EENVELOPE' ||
+    responseCode === 550 ||
+    responseCode === 551 ||
+    responseCode === 553 ||
+    /invalid recipient|mailbox unavailable|user unknown|550[- ]5\./i.test(raw)
+  ) {
+    return 'invalid recipient';
+  }
+  if (code === 'ECONNECTION' || code === 'ESOCKET' || code === 'ECONNREFUSED' || code === 'ENOTFOUND') {
+    return 'SMTP connection failed';
+  }
+  return raw ? `email delivery failed: ${raw}` : 'email delivery failed';
+}
+
 function logSmtpFailure(context: string, err: unknown): void {
-  const raw = err instanceof Error ? err.message : String(err);
-  console.error(`[Auth] ${context}:`, redactSmtpSecrets(raw));
+  console.error(`[Auth] ${context}:`, classifySmtpError(err));
 }
 
 function smtpConfigError(): string {
@@ -101,10 +141,18 @@ function mailFromAddress(): string {
   return (process.env.SMTP_FROM ?? '').trim() || (process.env.SMTP_USER ?? '').trim();
 }
 
+function smtpSecureEnabled(port: number): boolean {
+  const raw = (process.env.SMTP_SECURE ?? '').trim().toLowerCase();
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  // Hostinger and many mail hosts use implicit TLS on 465.
+  return port === 465;
+}
+
 function createMailTransporter() {
   const host = (process.env.SMTP_HOST ?? '').trim();
   const port = Number(process.env.SMTP_PORT || 587);
-  const secure = process.env.SMTP_SECURE === 'true';
+  const secure = smtpSecureEnabled(port);
   return nodemailer.createTransport({
     host,
     port,
@@ -158,7 +206,7 @@ export async function sendAdminVerificationEmail(input: {
     const transporter = createMailTransporter();
 
     const from = mailFromAddress();
-    await transporter.sendMail({
+    await sendMailConfirmed(transporter, {
       from: `"PACE Attendance" <${from}>`,
       to: input.to,
       subject: 'Admin signup verification code',
@@ -181,15 +229,14 @@ export async function sendAdminVerificationEmail(input: {
 
     return { sent: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to send email';
-    console.error('[Auth] Failed to send verification email via SMTP:', message);
+    logSmtpFailure('Failed to send verification email', err);
     if (env.nodeEnv !== 'production') {
       console.log('\n==========================================================');
       console.log(`[Auth DEV MODE] SMTP send failed — Admin verification code for ${Array.isArray(input.to) ? input.to.join(', ') : input.to}: ${input.code}`);
       console.log('==========================================================\n');
       return { sent: true, devFallback: true };
     }
-    return { sent: false, error: message };
+    return { sent: false, error: classifySmtpError(err) };
   }
 }
 
@@ -290,7 +337,6 @@ export async function sendInvitationEmail(input: {
 
     return { sent: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to send email';
     logSmtpFailure('Failed to send invitation email', err);
     if (env.nodeEnv !== 'production') {
       console.log('\n==========================================================');
@@ -299,7 +345,7 @@ export async function sendInvitationEmail(input: {
       console.log('==========================================================\n');
       return { sent: true, devFallback: true };
     }
-    return { sent: false, error: redactSmtpSecrets(message) };
+    return { sent: false, error: classifySmtpError(err) };
   }
 }
 
@@ -332,7 +378,7 @@ export async function sendClientAdminInvitationEmail(input: {
     const transporter = createMailTransporter();
 
     const from = mailFromAddress();
-    await transporter.sendMail({
+    await sendMailConfirmed(transporter, {
       from: `"PACE Attendance" <${from}>`,
       to: input.to,
       subject: `Your 6-digit PACE Attendance verification code${companyStr}`,
@@ -377,13 +423,12 @@ export async function sendClientAdminInvitationEmail(input: {
 
     return { sent: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to send email';
-    console.error('[Auth] Failed to send client admin invitation email:', message);
+    logSmtpFailure('Failed to send client admin invitation email', err);
     if (env.nodeEnv !== 'production') {
       console.log(`[Auth DEV MODE] Console fallback for ${input.to}. Code: ${input.verificationCode}`);
       return { sent: true, devFallback: true };
     }
-    return { sent: false, error: message };
+    return { sent: false, error: classifySmtpError(err) };
   }
 }
 
@@ -412,7 +457,7 @@ export async function sendClientAdminVerificationCodeEmail(input: {
     const transporter = createMailTransporter();
 
     const from = mailFromAddress();
-    await transporter.sendMail({
+    await sendMailConfirmed(transporter, {
       from: `"PACE Attendance" <${from}>`,
       to: targetEmail,
       subject: `Your 6-digit PACE Attendance verification code`,
@@ -446,13 +491,12 @@ export async function sendClientAdminVerificationCodeEmail(input: {
     console.log(`[Auth] Verification code email sent to invited admin ${targetEmail}`);
     return { sent: true };
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to send verification code email';
-    console.error('[Auth] Failed to send verification code email:', message);
+    logSmtpFailure('Failed to send verification code email', err);
     if (env.nodeEnv !== 'production') {
       console.log(`[Auth DEV MODE] Console fallback for verification code to ${targetEmail}. Code: ${input.code}`);
       return { sent: true, devFallback: true };
     }
-    return { sent: false, error: message };
+    return { sent: false, error: classifySmtpError(err) };
   }
 }
 

@@ -1,9 +1,11 @@
 name: Deploy to InsForge
 
+# Hostinger (GitHub main) is the production Node.js + frontend host.
+# InsForge remains the database/auth/storage backend only.
+# Automatic SPA deploys to *.insforge.site would bypass Hostinger, so this
+# workflow is manual (workflow_dispatch) rather than on every push to main.
+
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:

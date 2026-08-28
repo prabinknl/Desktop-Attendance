@@ -1,5 +1,5 @@
 import app from './app.js';
-import { env } from './config/env.js';
+import { env, logStartupEnvironment } from './config/env.js';
 import { runMigrations } from './db/migrate.js';
 import { isExplicitMemoryStore, isMemoryMode, setMemoryMode } from './models/DeviceModel.js';
 import { refreshSyncScheduler, startSyncSettingsWatcher } from './services/device/BackgroundSyncService.js';
@@ -91,6 +91,7 @@ async function start() {
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(env.port, env.host, () => {
       console.log(`[Server] API listening on http://${env.host}:${env.port}`);
+      logStartupEnvironment();
       resolve();
     });
     server.once('error', reject);

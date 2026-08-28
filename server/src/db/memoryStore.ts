@@ -76,7 +76,7 @@ let __dirname = process.cwd();
 try {
   __dirname = path.dirname(fileURLToPath(import.meta.url));
 } catch {
-  /* Vercel bundles may not expose a file URL; fall back to cwd / ATTENDANCE_DATA_DIR. */
+  /* Bundled serverless runtimes may not expose a file URL; fall back to cwd / ATTENDANCE_DATA_DIR. */
 }
 /** Electron sets ATTENDANCE_DATA_DIR to a writable userData folder. */
 const DATA_DIR = path.resolve(

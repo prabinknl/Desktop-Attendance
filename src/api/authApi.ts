@@ -161,12 +161,18 @@ export const authApi = {
         message?: string;
         inviteLink?: string;
         devSmsCode?: string;
-      }>('/auth/client-admin/invite', input);
-      if (data?.success && data.emailSent) {
+      }>('/auth/client-admin/invite', input, {
+        validateStatus: (status) => status < 500 || status === 503,
+      });
+      if (data) {
         return data;
       }
-    } catch {
-      /* Hosted API may be a stub; deliver the 6-digit code via InsForge instead. */
+    } catch (err) {
+      return {
+        success: false,
+        emailSent: false,
+        message: err instanceof Error ? err.message : 'Could not reach the server to send the invitation email.',
+      };
     }
 
     return deliverClientAdminInviteEmail(input);
@@ -287,11 +293,11 @@ export const authApi = {
       }>('/auth/admin-signup/verify-invitation', input, {
         validateStatus: (s) => s === 200 || s === 400 || s === 404 || s === 410 || s >= 500,
       });
-      if (data?.success && data.invitation) {
+      if (data) {
         return data;
       }
     } catch {
-      /* Fall through to InsForge code verification. */
+      /* Hostinger unreachable — optional InsForge OTP verification remains available. */
     }
 
     return verifyClientAdminInviteCode(input);

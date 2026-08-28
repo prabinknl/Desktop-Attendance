@@ -12,6 +12,8 @@ try {
 }
 
 const DEFAULT_CORS_ORIGINS = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
   'http://localhost:3002',
   'http://127.0.0.1:3002',
   'https://desktop-attendance.appnep.com',
@@ -80,7 +82,10 @@ export const env = {
   appPublicUrl: getAppPublicUrl(),
   smtpHost: (process.env.SMTP_HOST ?? '').trim(),
   smtpPort: parseInt(process.env.SMTP_PORT || '587', 10) || 587,
-  smtpSecure: (process.env.SMTP_SECURE ?? '').trim().toLowerCase() === 'true',
+  smtpSecure:
+    (process.env.SMTP_SECURE ?? '').trim().toLowerCase() === 'true' ||
+    ((process.env.SMTP_SECURE ?? '').trim() === '' &&
+      (parseInt(process.env.SMTP_PORT || '587', 10) || 587) === 465),
   smtpUser: (process.env.SMTP_USER ?? '').trim(),
   smtpPass: process.env.SMTP_PASS ?? '',
   smtpFrom: (process.env.SMTP_FROM ?? '').trim(),
@@ -95,3 +100,51 @@ export const env = {
   smsApiKey: (process.env.SMS_API_KEY ?? '').trim(),
   smsSenderId: (process.env.SMS_SENDER_ID ?? 'PACE').trim(),
 };
+
+/**
+ * Logs production/local configuration at boot without printing secret values.
+ * Missing optional variables warn in production; they do not crash local development.
+ */
+export function logStartupEnvironment(): void {
+  const isProd = env.nodeEnv === 'production';
+  const smtpReady = Boolean(env.smtpHost && env.smtpUser && env.smtpPass);
+  const insforgeReady = Boolean(env.insforgeBaseUrl && env.insforgeApiKey);
+  const databaseSet = Boolean((process.env.DATABASE_URL ?? '').trim());
+
+  console.log('[Server] Configuration:', {
+    nodeEnv: env.nodeEnv,
+    port: env.port,
+    host: env.host,
+    appPublicUrl: env.appPublicUrl,
+    smtpConfigured: smtpReady,
+    smtpHost: env.smtpHost || '(not set)',
+    smtpPort: env.smtpPort,
+    smtpSecure: env.smtpSecure,
+    smtpUserSet: Boolean(env.smtpUser),
+    smtpFromSet: Boolean(env.smtpFrom || env.smtpUser),
+    insforgeConfigured: insforgeReady,
+    databaseUrlSet: databaseSet,
+    deviceSyncEnabled: env.deviceSyncEnabled,
+  });
+
+  if (!isProd) return;
+
+  if (!smtpReady) {
+    console.warn(
+      '[Server] SMTP configuration missing. Set SMTP_HOST, SMTP_USER, and SMTP_PASS for invitation emails.',
+    );
+  }
+  if (!insforgeReady) {
+    console.warn(
+      '[Server] InsForge is not fully configured. Set INSFORGE_BASE_URL and INSFORGE_API_KEY for database/auth/storage.',
+    );
+  }
+  if (!databaseSet) {
+    console.warn('[Server] DATABASE_URL is not set. Persistent storage will fall back if PostgreSQL is unreachable.');
+  }
+  if (/localhost|127\.0\.0\.1/i.test(env.appPublicUrl)) {
+    console.warn(
+      '[Server] APP_PUBLIC_URL points at loopback. Set it to the public HTTPS origin (e.g. https://desktop-attendance.appnep.com).',
+    );
+  }
+}

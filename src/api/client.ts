@@ -5,7 +5,6 @@ function isHostedFrontendOrigin(origin: string): boolean {
     const { hostname } = new URL(origin);
     return (
       hostname.endsWith('.insforge.site') ||
-      hostname.endsWith('.vercel.app') ||
       hostname.endsWith('.appnep.com') ||
       hostname === 'desktop-attendance.appnep.com' ||
       hostname === 'attendance.appnep.com'
@@ -16,9 +15,9 @@ function isHostedFrontendOrigin(origin: string): boolean {
 }
 
 /**
- * Local web dev goes through the Vite proxy on a relative path; the hosted
- * build needs VITE_API_BASE_URL pointing at the Express API (…/api). The
- * Electron shell exposes a loopback API URL via preload.
+ * Local web dev goes through the Vite proxy on a relative path; production
+ * uses same-origin `/api` when Express serves the built frontend. Set
+ * VITE_API_BASE_URL only if the API is on a different host.
  */
 function resolveApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
@@ -38,6 +37,15 @@ function resolveApiBaseUrl(): string {
   if (configured.startsWith('http')) {
     try {
       const url = new URL(configured);
+      const isLoopback = /^(localhost|127\.0\.0\.1)$/i.test(url.hostname);
+      const hostedProd =
+        typeof import.meta !== 'undefined' &&
+        Boolean(import.meta.env?.PROD) &&
+        typeof window !== 'undefined' &&
+        !/^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+      // Published Hostinger/Electron-web builds must not call a local API.
+      if (hostedProd && isLoopback) return '/api';
+
       const sameOrigin = typeof window !== 'undefined' && url.origin === window.location.origin;
       if (sameOrigin || isHostedFrontendOrigin(url.origin)) {
         return url.pathname.replace(/\/$/, '') === '/api' ? configured : '/api';

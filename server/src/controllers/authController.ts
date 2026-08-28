@@ -195,7 +195,9 @@ export async function sendInviteEmail(req: Request, res: Response) {
       return res.status(503).json({
         success: false,
         emailSent: false,
-        message: 'Invitation created, but email could not be sent. Please try again.',
+        message: mail.error
+          ? `Invitation created, but email could not be sent (${mail.error}).`
+          : 'Invitation created, but email could not be sent. Please try again.',
       });
     }
 
@@ -539,7 +541,9 @@ export async function createClientAdminInvite(req: Request, res: Response) {
         success: false,
         emailSent: false,
         codeEmailSent: false,
-        message: 'Failed to deliver the 6-digit verification code to the invited email.',
+        message: mailRes.error
+          ? `Failed to deliver the 6-digit verification code (${mailRes.error}).`
+          : 'Failed to deliver the 6-digit verification code to the invited email.',
       });
     }
 

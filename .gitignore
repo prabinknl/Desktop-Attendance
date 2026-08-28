@@ -16,6 +16,7 @@ release
 server/dist
 server/.env
 server/data/
+.vercel
 *.local
 
 # Environment files
@@ -46,9 +47,7 @@ out-electron
 !vite.config*.ts
 !postcss.config.js
 !tailwind.config.js
-!vercel.json
 !.oxlintrc.json
-!.vercelignore
 !index.html
 
 # Database credentials & local data
