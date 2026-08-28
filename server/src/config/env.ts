@@ -77,7 +77,12 @@ export const env = {
    * only reachable from the office LAN, so a cloud-hosted instance must run
    * with DEVICE_SYNC_ENABLED=false to avoid pointless scans and reconnects.
    */
-  deviceSyncEnabled: (process.env.DEVICE_SYNC_ENABLED ?? 'true').toLowerCase() !== 'false',
+  deviceSyncEnabled:
+    (process.env.DEVICE_SYNC_ENABLED ??
+      ((process.env.NODE_ENV ?? 'development') === 'production' &&
+      (process.env.ELECTRON_DESKTOP ?? '').trim() !== '1'
+        ? 'false'
+        : 'true')).toLowerCase() !== 'false',
   /** Legacy shared secret; prefer per-device connector_token_hash when set. */
   gatewaySecret: (process.env.GATEWAY_SECRET ?? '').trim(),
   /** Expected connector heartbeat interval (seconds). */

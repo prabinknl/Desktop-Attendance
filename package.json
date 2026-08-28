@@ -3,9 +3,9 @@
   "private": true,
   "version": "1.0.8",
   "type": "module",
-  "main": "server.js",
+  "main": "server/dist/index.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node server/dist/index.js",
     "start:api": "node server/dist/index.js",
     "serve": "tsx server/src/index.ts",
     "dev": "concurrently -k -n server,vite -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
@@ -22,6 +22,7 @@
     "test": "vitest run",
     "test:invitations": "vitest run server/src/services/auth/invitationService.test.ts src/lib/inviteToken.test.ts",
     "preview": "vite preview",
+    "electron:start": "electron electron/main.cjs",
     "electron:dev": "concurrently -k -n server,vite,electron -c blue,green,magenta \"npm run dev:server\" \"npm run dev:client\" \"wait-on http://127.0.0.1:3000 http://127.0.0.1:3002/api/health && electron electron/main.cjs\"",
     "electron:pack": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs --dir",
     "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs",
@@ -120,6 +121,7 @@
     "files": [
       "dist-electron/**/*",
       "electron/main.cjs",
+      "electron/main-electron.cjs",
       "electron/preload.cjs",
       "package.json"
     ],

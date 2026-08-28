@@ -5,7 +5,7 @@
  *   Application type: Express
  *   Node.js version: 22
  *   Build command: npm run build
- *   Start command / entry file: npm start  (server.js → server/dist/index.js)
+ *   Start command / entry file: npm start  (node server/dist/index.js)
  *
  * Hostinger injects PORT; do not hardcode the listen port in this file.
  */
