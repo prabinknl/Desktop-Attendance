@@ -30,7 +30,7 @@ function resolveApiBaseUrl(): string {
   const envBaseUrl =
     typeof import.meta !== 'undefined' && import.meta.env
       ? import.meta.env.VITE_API_BASE_URL
-      : (typeof process !== 'undefined' ? process.env?.VITE_API_BASE_URL : undefined);
+      : undefined;
   const configured = String(envBaseUrl ?? '').trim().replace(/\/$/, '');
   if (!configured || configured === '/api') return '/api';
 

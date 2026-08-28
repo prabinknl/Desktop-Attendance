@@ -23,5 +23,12 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"],
-  "exclude": ["src/**/*-DESKTOP-*", "src/**/*-Bishnu-DeLL*"]
+  "exclude": [
+    "src/**/*-DESKTOP-*",
+    "src/**/*-Bishnu-DeLL*",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx"
+  ]
 }
