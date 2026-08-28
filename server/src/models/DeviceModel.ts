@@ -5,6 +5,7 @@ import {
   isMemoryMode,
   isExplicitMemoryStore,
   setMemoryMode,
+  type MemoryLog,
 } from '../db/memoryStore.js';
 import { encryptPassword, decryptPassword } from '../services/crypto/passwordCrypto.js';
 import { getOrCreateDeviceAdapter, clearDeviceAdapterCache } from '../services/device/DeviceSessionCache.js';
@@ -318,6 +319,18 @@ export interface DeviceLogsRange {
   to?: string;
 }
 
+type DeviceAttendanceLogRow = {
+  id: string;
+  event_time: string;
+  employee_id: string | null;
+  employee_name: string | null;
+  check_type: string;
+  auth_method: string | null;
+  card_number: string | null;
+  source: string | null;
+  raw_event_code: string | null;
+};
+
 export async function getDeviceLogs(
   deviceId: string,
   range?: DeviceLogsRange,
@@ -350,7 +363,7 @@ export async function getDeviceLogs(
     const deviceName = device?.name ?? 'Device';
     return memoryStore
       .getLogs(deviceId, range)
-      .map((row) => ({
+      .map((row: MemoryLog) => ({
         id: row.id,
         time: row.event_time,
         employeeId: row.employee_id ?? '—',
@@ -387,17 +400,7 @@ export async function getDeviceLogs(
   }
   values.push(limit);
 
-  const result = await query<{
-    id: string;
-    event_time: string;
-    employee_id: string | null;
-    employee_name: string | null;
-    check_type: string;
-    auth_method: string | null;
-    card_number: string | null;
-    source: string | null;
-    raw_event_code: string | null;
-  }>(
+  const result = await query<DeviceAttendanceLogRow>(
     `SELECT id, event_time, employee_id, employee_name, check_type,
             auth_method, card_number, source, raw_event_code
      FROM device_attendance_logs
@@ -408,7 +411,7 @@ export async function getDeviceLogs(
   );
 
   return result.rows
-    .map((row) => ({
+    .map((row: DeviceAttendanceLogRow) => ({
       id: row.id,
       time: row.event_time,
       employeeId: row.employee_id ?? '—',

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DeviceConnectPayload, DevicePublic, DeviceRecord, DeviceStatus } from '../types/index.js';
 
-type MemoryLog = {
+export type MemoryLog = {
   id: string;
   device_id: string;
   external_id: string;
@@ -258,7 +258,7 @@ export const memoryStore = {
     }
   },
 
-  getLogs(deviceId: string, range?: { from?: string; to?: string }) {
+  getLogs(deviceId: string, range?: { from?: string; to?: string }): MemoryLog[] {
     const fromIso = range?.from
       ? new Date(`${range.from}T00:00:00`).toISOString()
       : undefined;

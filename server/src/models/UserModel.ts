@@ -103,7 +103,7 @@ export const UserModel = {
     if (!isMemoryMode()) {
       try {
         const res = await query<UserRow>('SELECT * FROM app_users ORDER BY created_at ASC');
-        return res.rows.map((row) => toSafeUser(rowToAppUser(row)));
+        return res.rows.map((row: UserRow) => toSafeUser(rowToAppUser(row)));
       } catch (err) {
         console.warn('[UserModel] getAllSafe error, falling back to memory store:', err instanceof Error ? err.message : err);
       }
