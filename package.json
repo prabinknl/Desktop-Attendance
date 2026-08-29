@@ -1,7 +1,7 @@
 {
   "name": "attendence",
   "private": true,
-  "version": "1.0.8",
+  "version": "1.0.9",
   "type": "module",
   "main": "server/dist/index.js",
   "scripts": {
