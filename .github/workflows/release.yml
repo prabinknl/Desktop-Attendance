@@ -8,6 +8,8 @@ name: Build & Release Attendance Desktop
 #   2. Commit and push to main
 #   3. Create and push a matching tag: git tag v1.0.4 && git push origin v1.0.4
 #   4. This workflow builds NSIS installer and publishes a GitHub Release
+#      Assets: versioned .exe + .blockmap + latest.yml (updater) and
+#      Attendance-Desktop-Setup.exe (stable website download URL)
 #
 # Tag MUST be v{package.json version}, e.g. package 1.0.4 → tag v1.0.4
 # Tags like v.1.o.4 or V1.0.4 or V.1.0.4 are INVALID — use lowercase v + strict semver.
@@ -79,21 +81,43 @@ jobs:
             --win \
             --publish always
 
+      - name: Create stable installer filename
+        shell: bash
+        run: node scripts/create-stable-installer.cjs
+
+      - name: Upload stable installer to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          # electron-builder already published the versioned installer, blockmap, and latest.yml.
+          # The stable filename is a post-build copy for website downloads only.
+          gh release upload "${GITHUB_REF_NAME}" \
+            "release/Attendance-Desktop-Setup.exe" \
+            --clobber
+
       - name: Verify release assets exist
         shell: bash
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
           RELEASE_DIR="release"
           INSTALLER="Attendance.Desktop.Setup.${PKG_VERSION}.exe"
+          BLOCKMAP="Attendance.Desktop.Setup.${PKG_VERSION}.exe.blockmap"
           LATEST_YML="latest.yml"
+          STABLE="Attendance-Desktop-Setup.exe"
 
           echo "Checking release output directory: ${RELEASE_DIR}/"
           ls -la "${RELEASE_DIR}/" || true
 
-          if [ ! -f "${RELEASE_DIR}/${INSTALLER}" ] && [ ! -f "${RELEASE_DIR}/${LATEST_YML}" ]; then
-            echo "::warning::Could not find expected installer in release/. Assets were likely uploaded directly to GitHub Release by electron-builder."
-          else
-            echo "✅ Release assets found:"
-            ls -la "${RELEASE_DIR}/${INSTALLER}" 2>/dev/null || true
-            ls -la "${RELEASE_DIR}/${LATEST_YML}" 2>/dev/null || true
+          missing=0
+          for f in "${INSTALLER}" "${BLOCKMAP}" "${LATEST_YML}" "${STABLE}"; do
+            if [ -f "${RELEASE_DIR}/${f}" ]; then
+              echo "✅ ${f}"
+            else
+              echo "::error::Missing ${RELEASE_DIR}/${f}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
           fi

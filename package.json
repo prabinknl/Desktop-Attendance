@@ -25,7 +25,7 @@
     "electron:start": "electron electron/main.cjs",
     "electron:dev": "concurrently -k -n server,vite,electron -c blue,green,magenta \"npm run dev:server\" \"npm run dev:client\" \"wait-on http://127.0.0.1:3000 http://127.0.0.1:3002/api/health && electron electron/main.cjs\"",
     "electron:pack": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs --dir",
-    "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs",
+    "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs && node scripts/create-stable-installer.cjs",
     "dist": "npm run build:icon && npm run electron:build",
     "dist:dir": "npm run electron:pack"
   },

@@ -76,7 +76,9 @@ if (!tryCleanWinUnpacked(outDir)) {
 
 console.log(`[electron:build-win] output -> ${outDir}`);
 
-const builderArgs = ['--win', `-c.win.artifactName=Attendance.Desktop.Setup.\${ext}`, `-c.nsis.artifactName=Attendance.Desktop.Setup.\${ext}`, `--config.directories.output=${outDir}`];
+// Keep package.json artifactName (Attendance.Desktop.Setup.${version}.${ext}) so
+// electron-updater latest.yml continues to reference the versioned installer.
+const builderArgs = ['--win', `--config.directories.output=${outDir}`];
 if (dirMode) builderArgs.unshift('--dir');
 
 // Run electron-builder via node + cli.js so paths with spaces work on Windows
@@ -117,6 +119,23 @@ if (!fs.existsSync(packagedExpress)) {
     `[electron:build-win] Packaged API missing express at ${packagedExpress}. afterPack failed.`,
   );
   process.exit(1);
+}
+
+// Stable website filename: copy versioned NSIS installer after a successful build.
+// Skipped for --dir (unpacked) builds. Does not rename updater artifacts.
+if (!dirMode) {
+  const copyScript = path.join(root, 'scripts', 'create-stable-installer.cjs');
+  const copyResult = spawnSync(process.execPath, [copyScript, outDir], {
+    cwd: root,
+    stdio: 'inherit',
+  });
+  if (copyResult.error) {
+    console.error('[electron:build-win] Failed to start create-stable-installer:', copyResult.error.message);
+    process.exit(1);
+  }
+  if (copyResult.status !== 0) {
+    process.exit(copyResult.status ?? 1);
+  }
 }
 
 // Copy built artifacts back to project release directory if outDir was fallback
