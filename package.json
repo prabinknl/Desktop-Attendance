@@ -1,7 +1,7 @@
 {
   "name": "attendence",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.0.10",
   "type": "module",
   "main": "server/dist/index.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "dev:all": "concurrently -k -n server,vite -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
     "dev:single": "tsx watch server/src/index.ts",
     "build": "npm run build:server && tsc -b && vite build",
-    "build:server": "tsc -p server/tsconfig.json && node -e \"require('fs').cpSync('server/src/db/migrations','server/dist/db/migrations',{recursive:true})\"",
+    "build:server": "node -e \"require('fs').rmSync('server/dist',{recursive:true,force:true})\" && tsc -p server/tsconfig.json && node -e \"require('fs').cpSync('server/src/db/migrations','server/dist/db/migrations',{recursive:true})\"",
     "build:web": "npm run build",
     "build:electron-ui": "vite build --config vite.config.electron.ts",
     "build:icon": "node electron/scripts/generate-icon.mjs",

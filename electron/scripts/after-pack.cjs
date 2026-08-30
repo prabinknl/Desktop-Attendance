@@ -2,22 +2,16 @@
  * electron-builder afterPack: ensure server dist + production node_modules are
  * present under resources/server. FileSet skips gitignored paths (including
  * node_modules and electron-resources/), which otherwise ships a broken API
- * (express missing → health check timeout on port 3001).
+ * (express missing → health check timeout).
+ *
+ * Copy uses statSync so OneDrive Files On-Demand placeholders are hydrated
+ * instead of silently skipped (Dirent.isFile() is false for those).
  */
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-
-function copyDir(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const from = path.join(src, entry.name);
-    const to = path.join(dest, entry.name);
-    if (entry.isDirectory()) copyDir(from, to);
-    else if (entry.isFile()) fs.copyFileSync(from, to);
-  }
-}
+const { copyDir, assertCopied, assertServerDist } = require('./copy-tree.cjs');
 
 function assertExists(filePath, label) {
   if (!fs.existsSync(filePath)) {
@@ -36,13 +30,17 @@ exports.default = async function afterPack(context) {
     path.join(stagedServer, 'node_modules', 'express', 'package.json'),
     'staged express (run prepare-server-resources first)',
   );
+  assertServerDist(path.join(stagedServer, 'dist'), 'afterPack staged');
 
   fs.mkdirSync(resourcesServer, { recursive: true });
 
   // dist + package metadata (FileSet may have partially copied these)
+  const distSrc = path.join(stagedServer, 'dist');
   const distDest = path.join(resourcesServer, 'dist');
   fs.rmSync(distDest, { recursive: true, force: true });
-  copyDir(path.join(stagedServer, 'dist'), distDest);
+  copyDir(distSrc, distDest, { skipTests: true });
+  assertCopied(distSrc, distDest, 'afterPack dist', { skipTests: true });
+  assertServerDist(distDest, 'afterPack packaged');
   fs.copyFileSync(
     path.join(stagedServer, 'package.json'),
     path.join(resourcesServer, 'package.json'),
@@ -57,6 +55,7 @@ exports.default = async function afterPack(context) {
     const publicDest = path.join(resourcesServer, 'public');
     fs.rmSync(publicDest, { recursive: true, force: true });
     copyDir(stagedPublic, publicDest);
+    assertCopied(stagedPublic, publicDest, 'afterPack public');
     console.log(`[afterPack] Copied frontend public -> ${publicDest}`);
   }
 

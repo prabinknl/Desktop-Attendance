@@ -4,8 +4,12 @@
  */
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
+
+const require = createRequire(import.meta.url);
+const { copyDir, assertCopied, assertServerDist } = require('./copy-tree.cjs');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '../..');
@@ -34,49 +38,15 @@ function rmWithRetry(target, attempts = 5) {
   }
 }
 
-function copyDirRobust(src, dest) {
-  // Prefer recursive Node copy with skips for OneDrive conflict copies.
-  // Avoids robocopy hanging forever on cloud-placeholder conflict files.
-  const skipName = (name) =>
-    /-DESKTOP-[A-Z0-9]+\./i.test(name) ||
-    /conflict/i.test(name);
-
-  const walk = (from, to) => {
-    fs.mkdirSync(to, { recursive: true });
-    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-      if (skipName(entry.name)) {
-        console.warn(`[prepare-server-resources] Skipping ${entry.name}`);
-        continue;
-      }
-      const fromPath = path.join(from, entry.name);
-      const toPath = path.join(to, entry.name);
-      if (entry.isDirectory()) {
-        walk(fromPath, toPath);
-      } else if (entry.isFile()) {
-        let lastErr;
-        for (let i = 0; i < 4; i++) {
-          try {
-            fs.copyFileSync(fromPath, toPath);
-            lastErr = undefined;
-            break;
-          } catch (err) {
-            lastErr = err;
-            sleep(500 * (i + 1));
-          }
-        }
-        if (lastErr) throw lastErr;
-      }
-    }
-  };
-
-  walk(src, dest);
-}
-
 rmWithRetry(outDir);
 fs.mkdirSync(outDir, { recursive: true });
 
-console.log(`[prepare-server-resources] Copying ${distSrc} -> ${path.join(outDir, 'dist')}`);
-copyDirRobust(distSrc, path.join(outDir, 'dist'));
+assertServerDist(distSrc, 'prepare-server-resources source');
+const distDest = path.join(outDir, 'dist');
+console.log(`[prepare-server-resources] Copying ${distSrc} -> ${distDest}`);
+copyDir(distSrc, distDest, { skipTests: true });
+assertCopied(distSrc, distDest, 'prepare-server-resources dist', { skipTests: true });
+assertServerDist(distDest, 'prepare-server-resources staged');
 fs.copyFileSync(path.join(serverSrc, 'package.json'), path.join(outDir, 'package.json'));
 if (fs.existsSync(path.join(serverSrc, '.env.example'))) {
   fs.copyFileSync(path.join(serverSrc, '.env.example'), path.join(outDir, '.env.example'));
@@ -96,7 +66,9 @@ for (const cand of clientDistCandidates) {
 
 if (clientDistSrc) {
   console.log(`[prepare-server-resources] Copying frontend UI ${clientDistSrc} -> ${path.join(outDir, 'public')}`);
-  copyDirRobust(clientDistSrc, path.join(outDir, 'public'));
+  const publicDest = path.join(outDir, 'public');
+  copyDir(clientDistSrc, publicDest);
+  assertCopied(clientDistSrc, publicDest, 'prepare-server-resources public');
 } else {
   console.warn('[prepare-server-resources] Warning: No frontend build found (dist-electron or dist).');
 }

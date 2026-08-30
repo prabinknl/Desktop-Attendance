@@ -121,6 +121,22 @@ if (!fs.existsSync(packagedExpress)) {
   process.exit(1);
 }
 
+const packagedDeviceRoutes = path.join(
+  outDir,
+  'win-unpacked',
+  'resources',
+  'server',
+  'dist',
+  'routes',
+  'deviceRoutes.js',
+);
+if (!fs.existsSync(packagedDeviceRoutes)) {
+  console.error(
+    `[electron:build-win] Packaged API missing ${packagedDeviceRoutes}. afterPack skipped OneDrive placeholders or dist is incomplete.`,
+  );
+  process.exit(1);
+}
+
 // Stable website filename: copy versioned NSIS installer after a successful build.
 // Skipped for --dir (unpacked) builds. Does not rename updater artifacts.
 if (!dirMode) {
