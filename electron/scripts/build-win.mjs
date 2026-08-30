@@ -78,7 +78,7 @@ console.log(`[electron:build-win] output -> ${outDir}`);
 
 // Keep package.json artifactName (Attendance.Desktop.Setup.${version}.${ext}) so
 // electron-updater latest.yml continues to reference the versioned installer.
-const builderArgs = ['--win', `--config.directories.output=${outDir}`];
+const builderArgs = ['--win', '--x64', `--config.directories.output=${outDir}`];
 if (dirMode) builderArgs.unshift('--dir');
 
 // Run electron-builder via node + cli.js so paths with spaces work on Windows

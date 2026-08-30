@@ -142,7 +142,8 @@
       {
         "provider": "github",
         "owner": "prabinknl",
-        "repo": "Desktop-Attendance"
+        "repo": "Desktop-Attendance",
+        "releaseType": "release"
       }
     ],
     "win": {

@@ -9,7 +9,8 @@ name: Build & Release Attendance Desktop
 #   3. Create and push a matching tag: git tag v1.0.4 && git push origin v1.0.4
 #   4. This workflow builds NSIS installer and publishes a GitHub Release
 #      Assets: versioned .exe + .blockmap + latest.yml (updater) and
-#      Attendance-Desktop-Setup.exe (stable website download URL)
+#      Attendance-Desktop-Setup.exe (stable website download URL).
+#      The release is published (not left as a draft) so electron-updater can see it.
 #
 # Tag MUST be v{package.json version}, e.g. package 1.0.4 → tag v1.0.4
 # Tags like v.1.o.4 or V1.0.4 or V.1.0.4 are INVALID — use lowercase v + strict semver.
@@ -79,21 +80,25 @@ jobs:
           # Use the local electron-builder CLI to avoid npx download race conditions.
           node node_modules/electron-builder/cli.js \
             --win \
+            --x64 \
             --publish always
 
       - name: Create stable installer filename
         shell: bash
         run: node scripts/create-stable-installer.cjs
 
-      - name: Upload stable installer to GitHub Release
+      - name: Upload website installer and updater blockmap
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
         run: |
-          # electron-builder already published the versioned installer, blockmap, and latest.yml.
-          # The stable filename is a post-build copy for website downloads only.
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          # electron-builder should already have uploaded the versioned installer
+          # and latest.yml. Re-upload the blockmap (v1.0.10 omitted it) and add
+          # the stable website filename. --clobber is safe if they already exist.
           gh release upload "${GITHUB_REF_NAME}" \
             "release/Attendance-Desktop-Setup.exe" \
+            "release/Attendance.Desktop.Setup.${PKG_VERSION}.exe.blockmap" \
             --clobber
 
       - name: Verify release assets exist
@@ -121,3 +126,14 @@ jobs:
           if [ "$missing" -ne 0 ]; then
             exit 1
           fi
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          # electron-builder defaults to a draft release. Drafts are invisible to
+          # electron-updater (no GitHub token is shipped in the app). Publish only
+          # after local artifacts are verified.
+          gh release edit "${GITHUB_REF_NAME}" --draft=false
+          echo "Published ${GITHUB_REF_NAME} — electron-updater can now see latest.yml"
