@@ -3,16 +3,21 @@
 /**
  * Secure bridge for the Attendance desktop shell.
  * Device passwords and tokens are never exposed here.
- * Local Hikvision access runs in the main-process Express API; the renderer
- * only receives a same-origin relative /api base URL.
+ *
+ * Packaged Electron: Loads UI from local backend (localhost:3002) and calls
+ * relative /api to reach the same local backend. This enables device sync.
+ *
+ * Unpackaged `electron:dev`: Uses relative /api so Vite proxy (port 3000)
+ * proxies to local Express (port 3002).
  */
 const { contextBridge, ipcRenderer } = require('electron');
+
+const isPackaged = __dirname.includes('app.asar');
 
 contextBridge.exposeInMainWorld(
   'attendanceDesktop',
   Object.freeze({
     isElectron: true,
-    /** Same-origin relative path — Express serves both UI and /api directly on the same port. */
     apiBaseUrl: '/api',
     getApiBaseUrl: () => ipcRenderer.invoke('desktop:get-api-base-url'),
     platform: process.platform,

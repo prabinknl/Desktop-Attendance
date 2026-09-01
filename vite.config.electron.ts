@@ -5,6 +5,11 @@ import react from '@vitejs/plugin-react'
  * Electron-only frontend build.
  * Uses relative asset URLs (base: './') and HashRouter-friendly output
  * without changing the hosted web Vite config.
+ *
+ * IMPORTANT: Packaged Electron starts a local backend on localhost:3002 with
+ * device sync enabled. The frontend must call this local backend (/api),
+ * not the production Hostinger API. Runtime (preload.cjs) determines if it's
+ * packaged or dev mode.
  */
 export default defineConfig({
   plugins: [react()],
@@ -37,8 +42,8 @@ export default defineConfig({
       },
     },
   },
-  // Same-origin /api — Electron main serves the UI and proxies /api to the cloud.
-  // Preload also exposes window.attendanceDesktop.apiBaseUrl = '/api'.
+  // Packaged Electron loads UI from local backend (http://127.0.0.1:${port}),
+  // so all API calls via relative /api route to the local backend.
   define: {
     'import.meta.env.VITE_API_BASE_URL': JSON.stringify('/api'),
     'import.meta.env.VITE_IS_ELECTRON': JSON.stringify('true'),

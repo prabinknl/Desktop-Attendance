@@ -52,25 +52,33 @@ if (fs.existsSync(path.join(serverSrc, '.env.example'))) {
   fs.copyFileSync(path.join(serverSrc, '.env.example'), path.join(outDir, '.env.example'));
 }
 
-const clientDistCandidates = [
-  path.join(root, 'dist-electron'),
-  path.join(root, 'dist'),
-];
+// Packaged Electron MUST use dist-electron/ which is built with the correct
+// API URL configuration (relative /api for local backend, not production API).
+// dist/ is for the published website and uses different Vite config.
+const electronDistPath = path.join(root, 'dist-electron');
+const webDistPath = path.join(root, 'dist');
+
 let clientDistSrc = null;
-for (const cand of clientDistCandidates) {
-  if (fs.existsSync(path.join(cand, 'index.html'))) {
-    clientDistSrc = cand;
-    break;
-  }
+if (fs.existsSync(path.join(electronDistPath, 'index.html'))) {
+  clientDistSrc = electronDistPath;
+} else if (fs.existsSync(path.join(webDistPath, 'index.html'))) {
+  clientDistSrc = webDistPath;
+  console.warn('[prepare-server-resources] WARNING: Using dist/ (web build). For Electron packaging,');
+  console.warn('[prepare-server-resources] dist-electron/ should be built first (npm run build:electron-ui)');
+  console.warn('[prepare-server-resources] This may cause API URL misconfigurations in the packaged app.');
 }
 
 if (clientDistSrc) {
-  console.log(`[prepare-server-resources] Copying frontend UI ${clientDistSrc} -> ${path.join(outDir, 'public')}`);
+  console.log(`[prepare-server-resources] Copying frontend UI from: ${clientDistSrc}`);
   const publicDest = path.join(outDir, 'public');
   copyDir(clientDistSrc, publicDest);
   assertCopied(clientDistSrc, publicDest, 'prepare-server-resources public');
 } else {
-  console.warn('[prepare-server-resources] Warning: No frontend build found (dist-electron or dist).');
+  console.error('[prepare-server-resources] FATAL: No frontend build found.');
+  console.error(`[prepare-server-resources] Expected: ${electronDistPath}/index.html`);
+  console.error(`[prepare-server-resources] Or: ${webDistPath}/index.html`);
+  console.error('[prepare-server-resources] Run: npm run build:electron-ui');
+  process.exit(1);
 }
 
 console.log('[prepare-server-resources] Installing production server dependencies...');
