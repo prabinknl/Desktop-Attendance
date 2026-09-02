@@ -779,8 +779,8 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Invite modal ─────────────────────────────────────────────────── */}
-      <InviteModal 
-        open={inviteOpen} 
+      <InviteModal
+        open={inviteOpen}
         onClose={() => setInviteOpen(false)}
         onInvitationSent={() => {
           // Refresh dashboard stats after invitation is sent
