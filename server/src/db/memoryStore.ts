@@ -437,6 +437,10 @@ export const memoryStore = {
     memoryInvitations = memoryInvitations.filter((i) => i.email.trim().toLowerCase() !== key);
     if (memoryInvitations.length !== before) saveToDisk();
   },
+
+  getAllInvitations(): InvitationRecord[] {
+    return memoryInvitations.map((i) => ({ ...i }));
+  },
 };
 
 export function createMemoryRecord(

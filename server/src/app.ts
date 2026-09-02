@@ -42,11 +42,11 @@ const app = express();
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, Postman, Electron file://)
-      if (!origin) return callback(null, true);
+      // Allow requests with no origin (mobile apps, curl, Postman, Electron file://)
+      if (!origin || origin === 'null' || origin === 'file://') return callback(null, true);
 
-      // In non-production development mode, allow any local loopback origin (port 3002, 3003, etc.)
-      if (env.nodeEnv !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      // Packaged Electron serves the UI from loopback (any port) while calling Hostinger.
+      if (/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
         return callback(null, true);
       }
 
@@ -112,9 +112,12 @@ app.use('/api/attendance', attendanceRoutes);
 // Employees, departments, shifts, holidays, leave and punch requests
 app.use('/api/data', coreRoutes);
 
-// Serve frontend static assets and SPA fallback
+// Serve the built SPA only in production (Hostinger / packaged Electron).
+// In local development Vite owns port 3000; serving dist/ on the API port (3002)
+// creates a second frontend with a different origin and stale client data.
 const clientDist = resolveClientDistPath();
-if (clientDist) {
+const serveBuiltFrontend = Boolean(clientDist) && env.nodeEnv === 'production';
+if (serveBuiltFrontend && clientDist) {
   console.log(`[Server] Serving frontend static assets from: ${clientDist}`);
   app.use(express.static(clientDist));
 
@@ -136,8 +139,8 @@ if (clientDist) {
         .status(503)
         .send('Frontend build is missing. Run npm run build:web so dist/index.html exists.');
     }
-    const targetOrigin = env.appPublicUrl || 'http://127.0.0.1:3002';
-    return res.redirect(302, `${targetOrigin.replace(/\/+$/, '')}${req.originalUrl}`);
+    const targetOrigin = 'http://127.0.0.1:3000';
+    return res.redirect(302, `${targetOrigin}${req.originalUrl}`);
   });
 }
 

@@ -23,6 +23,8 @@ import {
   cloudDepartmentApi, cloudEmployeeApi, cloudHolidayApi,
   cloudLeaveApi, cloudPunchRequestApi, cloudShiftApi,
 } from '../api/coreDataApi';
+import { authApi } from '../api/authApi';
+
 
 const ATTENDANCE_STORAGE_KEY = 'attendance-store-v1';
 const EMPLOYEE_STORAGE_KEY = 'employee-store-v1';
@@ -1035,13 +1037,31 @@ export const DashboardAPI = {
     const active = allEmp.filter(e => e.status === 'active');
     const todayAtt = attendanceStore.filter(a => a.date === d);
 
+    // Fetch pending employee invitations from the backend
+    let pendingInvitations: Array<{ email: string }> = [];
+    try {
+      pendingInvitations = await authApi.getInvitationsByRole('employee');
+    } catch (err) {
+      // Fallback silently if invitations endpoint is not available
+      console.debug('[Dashboard] Could not fetch invitations:', err);
+    }
+
+    // Deduplicate: count emails that are in invitations but not in active employees
+    const activeEmails = new Set(active.map(e => e.email.toLowerCase().trim()));
+    const uniquePendingEmails = new Set(
+      pendingInvitations
+        .map((inv: any) => inv.email.toLowerCase().trim())
+        .filter((email: string) => !activeEmails.has(email))
+    );
+
     const present = todayAtt.filter(a => a.status === 'present').length;
     const late = todayAtt.filter(a => a.status === 'late').length;
     const onLeave = todayAtt.filter(a => a.status === 'on_leave').length;
     const absent = active.length - todayAtt.filter(a => a.status !== 'absent').length;
+    const totalEmployees = active.length + uniquePendingEmails.size;
 
     return {
-      totalEmployees: active.length,
+      totalEmployees,
       presentToday: present + late,
       absentToday: Math.max(0, absent),
       lateToday: late,

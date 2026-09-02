@@ -24,18 +24,19 @@ export const InvitationModel = {
     try {
       await query(
         `INSERT INTO app_invitations (
-          token, email, role, created_at, expires_at, used,
+          token, email, name, role, created_at, expires_at, used,
           id, client_id, phone, company_name, plan_type, duration_days,
           access_start_at, access_expires_at, token_hash, sms_code_hash,
           sms_expires_at, sms_attempts, sms_last_sent_at, status, created_by, updated_at
         ) VALUES (
-          $1, $2, $3, $4, $5, $6,
-          $7, $8, $9, $10, $11, $12,
-          $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22
+          $1, $2, $3, $4, $5, $6, $7,
+          $8, $9, $10, $11, $12, $13,
+          $14, $15, $16, $17,
+          $18, $19, $20, $21, $22, $23
         )
         ON CONFLICT (token) DO UPDATE SET
           email = EXCLUDED.email,
+          name = EXCLUDED.name,
           role = EXCLUDED.role,
           created_at = EXCLUDED.created_at,
           expires_at = EXCLUDED.expires_at,
@@ -58,6 +59,7 @@ export const InvitationModel = {
         [
           inv.token,
           inv.email.toLowerCase(),
+          inv.name ?? null,
           inv.role,
           inv.created_at,
           inv.expires_at,
@@ -219,5 +221,23 @@ export const InvitationModel = {
     } catch (err) {
       console.warn('[InvitationModel] DB deleteByEmail error:', err instanceof Error ? err.message : err);
     }
+  },
+
+  async getByRoleAndStatus(role: string, statuses: string[] = ['pending', 'active']): Promise<InvitationRecord[]> {
+    if (!isMemoryMode()) {
+      try {
+        const placeholders = statuses.map((_, i) => `$${i + 2}`).join(',');
+        const res = await query<any>(
+          `SELECT * FROM app_invitations WHERE role = $1 AND status IN (${placeholders}) AND used = false ORDER BY created_at DESC`,
+          [role, ...statuses],
+        );
+        return res.rows.map(normalizeInvitationRecord);
+      } catch (err) {
+        console.warn('[InvitationModel] DB getByRoleAndStatus error, falling back to memory:', err instanceof Error ? err.message : err);
+      }
+    }
+    return memoryStore.getAllInvitations().filter(
+      (inv) => inv.role === role && statuses.includes(inv.status ?? 'pending') && !inv.used,
+    );
   },
 };

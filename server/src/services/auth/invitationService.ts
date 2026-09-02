@@ -150,6 +150,7 @@ export function serializeInvitation(inv: InvitationRecord) {
     id: inv.id,
     token: inv.token,
     email: inv.email,
+    name: inv.name,
     role: inv.role,
     createdAt,
     expiresAt,

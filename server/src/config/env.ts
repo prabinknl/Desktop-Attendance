@@ -42,7 +42,7 @@ function getAppPublicUrl(): string {
   const raw = (process.env.APP_PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
   if (raw) return raw;
   if ((process.env.NODE_ENV ?? 'development') === 'development') {
-    return 'http://127.0.0.1:3002';
+    return 'http://127.0.0.1:3000';
   }
   return 'https://desktop-attendance.appnep.com';
 }
@@ -90,7 +90,7 @@ export const env = {
   adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? 'appnep@pacenp.com').trim().toLowerCase(),
   /**
    * Public origin invited users can reach, e.g. https://attendance.appnep.com.
-   * In development mode, defaults to http://127.0.0.1:3002 if APP_PUBLIC_URL is not set.
+   * In development mode, defaults to http://127.0.0.1:3000 if APP_PUBLIC_URL is not set.
    */
   appPublicUrl: getAppPublicUrl(),
   smtpHost: (process.env.SMTP_HOST ?? '').trim(),

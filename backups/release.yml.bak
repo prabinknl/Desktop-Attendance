@@ -1,0 +1,99 @@
+name: Build & Release Attendance Desktop
+
+# Desktop Windows installer + electron-updater assets (latest.yml, blockmap).
+# Separate from InsForge web deploy (deploy-insforge.yml).
+#
+# Release process:
+#   1. Bump "version" in package.json (e.g. 1.0.4)
+#   2. Commit and push to main
+#   3. Create and push a matching tag: git tag v1.0.4 && git push origin v1.0.4
+#   4. This workflow builds NSIS installer and publishes a GitHub Release
+#
+# Tag MUST be v{package.json version}, e.g. package 1.0.4 → tag v1.0.4
+# Tags like v.1.o.4 or V1.0.4 or V.1.0.4 are INVALID — use lowercase v + strict semver.
+# electron-updater requires valid semver in latest.yml to detect updates correctly.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'   # matches v1.0.4, v2.0.0, etc. — NOT V1.0.0 or v.1.o.3
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Windows Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED="v${PKG_VERSION}"
+          if [ "$TAG" != "$EXPECTED" ]; then
+            echo "::error::Git tag '$TAG' does not match package.json version '$EXPECTED'."
+            echo "::error::Steps to fix:"
+            echo "::error::  1. Bump version in package.json to match your intended version"
+            echo "::error::  2. Commit and push to main"
+            echo "::error::  3. Re-tag: git tag ${EXPECTED} && git push origin ${EXPECTED}"
+            echo "::error::  4. Delete the wrong tag if needed: git push origin --delete ${TAG}"
+            exit 1
+          fi
+          echo "✅ Tag ${TAG} matches package.json version ${PKG_VERSION}"
+
+      - name: Build server (TypeScript → JavaScript)
+        run: npm run build:server
+
+      - name: Build Electron UI (Vite → dist-electron/)
+        run: npm run build:electron-ui
+
+      - name: Stage server resources for packaging
+        run: node electron/scripts/prepare-server-resources.mjs
+
+      - name: Build & Publish Windows Desktop Release
+        shell: bash
+        env:
+          # electron-builder reads GH_TOKEN for GitHub Releases publishing.
+          # GITHUB_TOKEN is automatically provided by GitHub Actions (no setup needed).
+          # Optionally set a GH_TOKEN secret (PAT) in repo Settings → Secrets if you
+          # need extra permissions (e.g. cross-repo releases), but it is NOT required.
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          # Use the local electron-builder CLI to avoid npx download race conditions.
+          node node_modules/electron-builder/cli.js \
+            --win \
+            --publish always
+
+      - name: Verify release assets exist
+        shell: bash
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          RELEASE_DIR="release"
+          INSTALLER="Attendance.Desktop.Setup.${PKG_VERSION}.exe"
+          LATEST_YML="latest.yml"
+
+          echo "Checking release output directory: ${RELEASE_DIR}/"
+          ls -la "${RELEASE_DIR}/" || true
+
+          if [ ! -f "${RELEASE_DIR}/${INSTALLER}" ] && [ ! -f "${RELEASE_DIR}/${LATEST_YML}" ]; then
+            echo "::warning::Could not find expected installer in release/. Assets were likely uploaded directly to GitHub Release by electron-builder."
+          else
+            echo "✅ Release assets found:"
+            ls -la "${RELEASE_DIR}/${INSTALLER}" 2>/dev/null || true
+            ls -la "${RELEASE_DIR}/${LATEST_YML}" 2>/dev/null || true
+          fi

@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Absolute API origin for hosted builds, e.g. https://attendance-api.fly.dev/api.
-   *  Unset locally so requests go through the Vite proxy on /api. */
+  /** Absolute API origin for hosted/Electron builds, e.g. https://desktop-attendance.appnep.com/api.
+   *  Unset for local web so requests go through the Vite proxy on /api. Public URL only — not a secret. */
   readonly VITE_API_BASE_URL?: string;
   /** InsForge backend URL for hosted owner OTP (auth emails). */
   readonly VITE_INSFORGE_URL?: string;

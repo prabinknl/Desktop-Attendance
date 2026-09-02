@@ -1,8 +1,8 @@
 ﻿/**
  * Electron main process for Attendance.
- * Dev: loads Vite at http://127.0.0.1:3002 (API via Vite proxy or local spawn).
- * Prod: loads Express API at http://127.0.0.1:3001 (which serves both the
- * frontend UI and the /api backend on a single port).
+ * Dev: loads the existing Vite server at http://127.0.0.1:3000 (API via Vite
+ * proxy to Express on 3002). Does not start a second frontend server.
+ * Prod: loads Express on 3002, which serves both the built UI and /api.
  */
 'use strict';
 
@@ -21,8 +21,10 @@ const DEFAULT_API_PORT = 3002;
 const HEALTH_TIMEOUT_MS = 60_000;
 const HEALTH_INTERVAL_MS = 400;
 
-/** Optional override ΓÇö when unset, desktop always uses the local Express API. */
+/** Optional override — when unset, desktop still starts local Express (LAN devices / UI). */
 const API_TARGET_OVERRIDE = (process.env.ELECTRON_API_TARGET || '').replace(/\/$/, '');
+/** Public Hostinger API used by the published website. Not a secret. */
+const PRODUCTION_API_BASE_URL = 'https://desktop-attendance.appnep.com/api';
 
 let mainWindow = null;
 /** @type {import('child_process').ChildProcess | null} */
@@ -723,8 +725,7 @@ function createWindow(startUrl) {
 }
 
 ipcMain.handle('desktop:get-api-base-url', () => {
-  // Same-origin relative path ΓÇö main process proxies /api to the local Express API.
-  return '/api';
+  return isDev ? '/api' : PRODUCTION_API_BASE_URL;
 });
 
 ipcMain.handle('desktop:get-local-api-origin', () => getLocalApiOrigin());
@@ -902,6 +903,9 @@ async function bootstrap() {
     await ensureApiServer();
     const startUrl = await resolveStartUrl();
     appendStartupLog(`[Electron] UI start URL: ${startUrl}`);
+    appendStartupLog(
+      `[Electron] Renderer API base: ${isDev ? '/api' : PRODUCTION_API_BASE_URL}`,
+    );
     createWindow(startUrl);
     checkAutoUpdateOnLaunch();
   } catch (err) {

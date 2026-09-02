@@ -571,7 +571,11 @@ export default function LoginPage() {
         toast('info', `Verification Code: ${res.devCode}`, `Dev Mode: code is ${res.devCode}`);
       }
     } catch (err) {
-      toast('error', 'Network error', err instanceof Error ? err.message : 'Could not reach the server.');
+      const message = err instanceof Error ? err.message : 'Could not reach the server.';
+      const title = /network error|not reachable|unreachable|timed out/i.test(message)
+        ? 'Network error'
+        : 'Verification failed';
+      toast('error', title, message);
     } finally {
       setLoading(false);
     }
@@ -598,7 +602,11 @@ export default function LoginPage() {
       toast('success', 'Welcome back!', 'Owner sign in completed.');
       navigate('/dashboard');
     } catch (err) {
-      toast('error', 'Network error', err instanceof Error ? err.message : 'Could not verify the code.');
+      const message = err instanceof Error ? err.message : 'Could not verify the code.';
+      const title = /network error|not reachable|unreachable|timed out/i.test(message)
+        ? 'Network error'
+        : 'Verification failed';
+      toast('error', title, message);
     } finally {
       setLoading(false);
     }

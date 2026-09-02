@@ -1,0 +1,1 @@
+ALTER TABLE app_invitations ADD COLUMN IF NOT EXISTS name TEXT;
