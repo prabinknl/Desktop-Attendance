@@ -34,9 +34,10 @@ const ROLES: { id: InviteRole; label: string; desc: string; color: string; icon:
 interface InviteModalProps {
   open: boolean;
   onClose: () => void;
+  onInvitationSent?: () => void;
 }
 
-export default function InviteModal({ open, onClose }: InviteModalProps) {
+export default function InviteModal({ open, onClose, onInvitationSent }: InviteModalProps) {
   const { user } = useAuth();
   const { createInvitation } = useInvitations();
   const { toast } = useNotifications();
@@ -113,6 +114,8 @@ export default function InviteModal({ open, onClose }: InviteModalProps) {
         if (res.success && res.emailSent !== false) {
           setEmailSentOk(true);
           toast('success', `Invitation code sent to ${trimmedEmail}`);
+          // Trigger dashboard refresh after successful invitation
+          onInvitationSent?.();
         } else {
           setEmailSentOk(false);
           toast('error', res.message || 'Invitation created, but email could not be sent. Please try again.');

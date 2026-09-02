@@ -277,6 +277,17 @@ export const authApi = {
     return data;
   },
 
+  deleteStaffAccess: async (email: string) => {
+    const { data } = await apiClient.post<{
+      success: boolean;
+      deletedEmail?: string;
+      message?: string;
+    }>('/auth/users/delete', { email }, {
+      validateStatus: (s) => s === 200 || s === 400 || s === 404 || s >= 500,
+    });
+    return data;
+  },
+
   verifyAdminSignupInvite: async (input: { invitationCode: string; phone: string }) => {
     try {
       const { data } = await apiClient.post<{
@@ -336,5 +347,27 @@ export const authApi = {
       validateStatus: (s) => s === 200 || s === 400 || s === 429 || s >= 500,
     });
     return data;
+  },
+
+  getInvitationsByRole: async (role: string) => {
+    try {
+      const { data } = await apiClient.get<{
+        success: boolean;
+        data?: Array<{
+          token: string;
+          email: string;
+          name?: string;
+          role: string;
+          status: string;
+          createdAt: string;
+          expiresAt: string;
+          used: boolean;
+        }>;
+        message?: string;
+      }>(`/auth/invitations/by-role/${role}`);
+      return data.success ? data.data ?? [] : [];
+    } catch {
+      return [];
+    }
   },
 };

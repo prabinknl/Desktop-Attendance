@@ -1,22 +1,25 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   Users, UserCheck, UserX, Clock, CalendarOff, TrendingUp,
   Plus, ClipboardList, CheckSquare, FileText, ArrowRight,
-  AlertCircle, UserPlus, Cpu,
+  AlertCircle, UserPlus, Trash2,
 } from 'lucide-react';
 import InviteModal from '../../components/InviteModal';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
+import { authApi } from '../../api/authApi';
 import { DashboardAPI, LeaveAPI, AttendanceAPI, EmployeeAPI } from '../../data/store';
 import { mockHolidays } from '../../data/mockData';
-import type { DashboardStats } from '../../types';
+import type { DashboardStats, Employee, User } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
+import { useInvitations } from '../../contexts/InvitationContext';
 import { useNotifications } from '../../contexts/NotificationContext';
-import { formatDate, formatTime, attendanceStatusLabel, cn } from '../../lib/utils';
+import { formatDate, formatTime, attendanceStatusLabel, cn, getInitials } from '../../lib/utils';
 import { TimeDisplay, isManualTime } from '../../components/common/TimeDisplay';
 
 const pieColors = ['#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4'];
@@ -46,8 +49,243 @@ function StatCard({
   );
 }
 
+interface DashboardAccessUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  avatar?: string;
+  meta?: string;
+}
+
+interface DashboardInviteRecord {
+  token: string;
+  email: string;
+  name?: string;
+  role: string;
+  status?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  used?: boolean;
+}
+
+const STAFF_ACCOUNT_ROLES = new Set<string>(['employee', 'account']);
+const DASHBOARD_INVITE_ROLES = new Set<string>(['employee', 'accountant']);
+
+function titleFromEmail(email: string) {
+  const local = email.split('@')[0]?.trim() || 'User';
+  return local
+    .replace(/[._-]+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || 'User';
+}
+
+function roleLabel(role?: string) {
+  switch ((role || '').toLowerCase()) {
+    case 'account':
+    case 'accountant':
+      return 'Accountant';
+    case 'employee':
+      return 'Employee';
+    default:
+      return 'User';
+  }
+}
+
+function formatListDate(iso?: string) {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function employeeName(employee: Employee) {
+  return `${employee.firstName} ${employee.lastName}`.trim() || employee.employeeId || titleFromEmail(employee.email);
+}
+
+function buildActiveAccessUsers(employees: Employee[], authUsers: User[]) {
+  const byEmail = new Map<string, DashboardAccessUser>();
+
+  employees
+    .filter((employee) => employee.status === 'active')
+    .forEach((employee) => {
+      const email = employee.email.trim().toLowerCase();
+      if (!email) return;
+      byEmail.set(email, {
+        id: employee.id,
+        name: employeeName(employee),
+        email: employee.email,
+        role: 'Employee',
+        avatar: employee.avatar,
+        meta: employee.designation || employee.employeeId,
+      });
+    });
+
+  authUsers
+    .filter((authUser) => STAFF_ACCOUNT_ROLES.has(authUser.role))
+    .filter((authUser) => !['deleted', 'pending', 'paused'].includes(String(authUser.status ?? 'active').toLowerCase()))
+    .forEach((authUser) => {
+      const email = authUser.email.trim().toLowerCase();
+      if (!email) return;
+      const existing = byEmail.get(email);
+      byEmail.set(email, {
+        id: existing?.id || authUser.id,
+        name: existing?.name || authUser.name || titleFromEmail(authUser.email),
+        email: existing?.email || authUser.email,
+        role: existing?.role || roleLabel(authUser.role),
+        avatar: existing?.avatar || authUser.avatar,
+        meta: existing?.meta || authUser.employeeId || 'Registered account',
+      });
+    });
+
+  return Array.from(byEmail.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function isPendingDashboardInvite(invite: DashboardInviteRecord) {
+  const role = invite.role.toLowerCase();
+  const status = String(invite.status ?? 'pending').toLowerCase();
+  if (!DASHBOARD_INVITE_ROLES.has(role)) return false;
+  if (invite.used || ['accepted', 'cancelled', 'deleted', 'expired'].includes(status)) return false;
+
+  if (invite.expiresAt) {
+    const expiresAt = new Date(invite.expiresAt).getTime();
+    if (!Number.isNaN(expiresAt) && expiresAt < Date.now()) return false;
+  }
+
+  return true;
+}
+
+function buildInvitedAccessUsers(invites: DashboardInviteRecord[], activeEmails: Set<string>) {
+  const byEmailAndRole = new Map<string, DashboardAccessUser & { createdAt?: string }>();
+
+  invites
+    .filter(isPendingDashboardInvite)
+    .forEach((invite) => {
+      const email = invite.email.trim().toLowerCase();
+      if (!email || activeEmails.has(email)) return;
+
+      const key = `${invite.role.toLowerCase()}:${email}`;
+      const createdAt = invite.createdAt;
+      const existing = byEmailAndRole.get(key);
+      if (existing?.createdAt && createdAt && existing.createdAt > createdAt) return;
+
+      byEmailAndRole.set(key, {
+        id: invite.token || key,
+        name: invite.name?.trim() || titleFromEmail(invite.email),
+        email: invite.email,
+        role: roleLabel(invite.role),
+        meta: formatListDate(createdAt) ? `Invited ${formatListDate(createdAt)}` : 'Invite sent',
+        createdAt,
+      });
+    });
+
+  return Array.from(byEmailAndRole.values())
+    .map(({ createdAt: _createdAt, ...item }) => item)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function AccessUserList({
+  title,
+  users,
+  emptyText,
+  icon: Icon,
+  tone,
+  onDelete,
+}: {
+  title: string;
+  users: DashboardAccessUser[];
+  emptyText: string;
+  icon: React.ElementType;
+  tone: 'active' | 'invited';
+  onDelete?: (user: DashboardAccessUser) => void;
+}) {
+  const styles =
+    tone === 'active'
+      ? {
+          icon: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300',
+          badge: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
+          dot: 'bg-emerald-500',
+          label: 'Active',
+        }
+      : {
+          icon: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300',
+          badge: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300',
+          dot: 'bg-indigo-500',
+          label: 'Invited',
+        };
+
+  return (
+    <div className="card p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className={cn('flex h-10 w-10 items-center justify-center rounded-xl', styles.icon)}>
+            <Icon size={19} />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">{title}</h3>
+            <p className="text-xs text-slate-400">{users.length} users</p>
+          </div>
+        </div>
+        <span className={cn('rounded-full px-2.5 py-1 text-xs font-bold', styles.badge)}>
+          {users.length}
+        </span>
+      </div>
+
+      {users.length === 0 ? (
+        <p className="rounded-xl bg-slate-50 px-4 py-6 text-center text-sm text-slate-400 dark:bg-slate-800/60">
+          {emptyText}
+        </p>
+      ) : (
+        <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+          {users.map((item) => (
+            <div key={`${item.role}-${item.email}-${item.id}`} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-2.5 dark:bg-slate-800/60">
+              {item.avatar ? (
+                <img src={item.avatar} alt="" className="h-9 w-9 rounded-full bg-slate-200 object-cover" />
+              ) : (
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                  {getInitials(item.name)}
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{item.name}</p>
+                <p className="truncate text-xs text-slate-500 dark:text-slate-400">{item.email}</p>
+                {item.meta && (
+                  <p className="truncate text-[11px] text-slate-400 dark:text-slate-500">{item.meta}</p>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <div className="flex flex-col items-end gap-1">
+                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">{item.role}</span>
+                  <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-bold', styles.badge)}>
+                    <span className={cn('h-1.5 w-1.5 rounded-full', styles.dot)} />
+                    {styles.label}
+                  </span>
+                </div>
+                {onDelete && (
+                  <button
+                    type="button"
+                    onClick={() => onDelete(item)}
+                    className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-900/30"
+                    title={`Delete ${item.name}`}
+                    aria-label={`Delete ${item.name}`}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, getAuthUsers, deleteStaffUser } = useAuth();
+  const { getAllInvitations, softDeleteInvitation } = useInvitations();
   const { toast } = useNotifications();
   const navigate = useNavigate();
 
@@ -57,21 +295,29 @@ export default function DashboardPage() {
   const [pendingLeaves, setPendingLeaves] = useState<any[]>([]);
   const [recentAtt, setRecentAtt] = useState<any[]>([]);
   const [lateEmployees, setLateEmployees] = useState<any[]>([]);
+  const [activeUsers, setActiveUsers] = useState<DashboardAccessUser[]>([]);
+  const [invitedUsers, setInvitedUsers] = useState<DashboardAccessUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [deletingAccess, setDeletingAccess] = useState<{
+    user: DashboardAccessUser;
+    tone: 'active' | 'invited';
+  } | null>(null);
 
   const today = new Date().toISOString().split('T')[0];
   const upcomingHolidays = mockHolidays.filter(h => h.date >= today).slice(0, 5);
 
-  useEffect(() => {
-    (async () => {
-      const [s, t, d, leaves, attendance, employees] = await Promise.all([
+  const loadDashboardData = useCallback(async () => {
+    try {
+      const [s, t, d, leaves, attendance, employees, employeeInvites, accountantInvites] = await Promise.all([
         DashboardAPI.getStats(),
         DashboardAPI.getTrend(14),
         DashboardAPI.getDeptStats(),
         LeaveAPI.getAll(),
         AttendanceAPI.getByDate(today),
         EmployeeAPI.getAll(),
+        authApi.getInvitationsByRole('employee'),
+        authApi.getInvitationsByRole('accountant'),
       ]);
 
       setStats(s);
@@ -86,9 +332,63 @@ export default function DashboardPage() {
 
       setLateEmployees(withEmp.filter(a => a.status === 'late').slice(0, 5));
       setRecentAtt(withEmp.slice(0, 8));
+
+      const activeAccessUsers = buildActiveAccessUsers(employees, getAuthUsers());
+      const activeEmails = new Set(activeAccessUsers.map((item) => item.email.trim().toLowerCase()));
+      const localInvites = getAllInvitations()
+        .filter((invite) => DASHBOARD_INVITE_ROLES.has(invite.role))
+        .map((invite) => ({
+          token: invite.token,
+          email: invite.email,
+          name: invite.name,
+          role: invite.role,
+          status: invite.status,
+          createdAt: invite.createdAt,
+          expiresAt: invite.expiresAt,
+          used: invite.used,
+        }));
+
+      setActiveUsers(activeAccessUsers);
+      setInvitedUsers(buildInvitedAccessUsers(
+        [...localInvites, ...employeeInvites, ...accountantInvites],
+        activeEmails,
+      ));
       setLoading(false);
-    })();
-  }, []);
+    } catch (err) {
+      console.error('[Dashboard] Load error:', err);
+      setLoading(false);
+    }
+  }, [getAllInvitations, getAuthUsers, today]);
+
+  useEffect(() => {
+    void loadDashboardData();
+  }, [loadDashboardData]);
+
+  const confirmDeleteAccess = async () => {
+    if (!deletingAccess) return;
+
+    const target = deletingAccess.user;
+    try {
+      if (deletingAccess.tone === 'active') {
+        await deleteStaffUser(target.email);
+        await EmployeeAPI.delete(target.id);
+      } else {
+        const result = await authApi.deleteStaffAccess(target.email);
+        if (!result.success) {
+          throw new Error(result.message || 'Could not delete this invitation.');
+        }
+        softDeleteInvitation(target.email);
+      }
+
+      setActiveUsers((items) => items.filter((item) => item.email.toLowerCase() !== target.email.toLowerCase()));
+      setInvitedUsers((items) => items.filter((item) => item.email.toLowerCase() !== target.email.toLowerCase()));
+      setDeletingAccess(null);
+      await loadDashboardData();
+      toast('success', deletingAccess.tone === 'active' ? 'User deleted' : 'Invitation deleted', `${target.name} was removed.`);
+    } catch (err) {
+      toast('error', 'Could not delete user', err instanceof Error ? err.message : 'Please try again.');
+    }
+  };
 
   const pieData = stats ? [
     { name: 'Present', value: stats.presentToday },
@@ -182,6 +482,26 @@ export default function DashboardPage() {
           color="bg-violet-500"
           sub="Today"
           delay={0.25}
+        />
+      </div>
+
+      {/* ── Active and invited users ─────────────────────────────────── */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <AccessUserList
+          title="Already Active Users"
+          users={activeUsers}
+          emptyText="No active users found."
+          icon={UserCheck}
+          tone="active"
+          onDelete={user?.role === 'admin' ? (item) => setDeletingAccess({ user: item, tone: 'active' }) : undefined}
+        />
+        <AccessUserList
+          title="Invited Users"
+          users={invitedUsers}
+          emptyText="No pending invited users found."
+          icon={UserPlus}
+          tone="invited"
+          onDelete={user?.role === 'admin' ? (item) => setDeletingAccess({ user: item, tone: 'invited' }) : undefined}
         />
       </div>
 
@@ -459,7 +779,25 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Invite modal ─────────────────────────────────────────────────── */}
-      <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} />
+      <InviteModal
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        onInvitationSent={() => {
+          // Refresh dashboard stats after invitation is sent
+          setTimeout(() => void loadDashboardData(), 500);
+        }}
+      />
+      <ConfirmDialog
+        open={!!deletingAccess}
+        title={deletingAccess?.tone === 'invited' ? 'Delete Invitation' : 'Delete User'}
+        message={deletingAccess
+          ? `Permanently delete ${deletingAccess.user.name} (${deletingAccess.user.email})?`
+          : ''}
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={() => void confirmDeleteAccess()}
+        onCancel={() => setDeletingAccess(null)}
+      />
     </div>
   );
 }

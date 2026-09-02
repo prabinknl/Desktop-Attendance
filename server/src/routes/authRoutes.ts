@@ -17,6 +17,8 @@ import {
   verifyAdminSignupEmail,
   resendAdminSignupEmail,
   purgeAdminAccount,
+  deleteStaffAccess,
+  getInvitationsByRole,
 } from '../controllers/authController.js';
 
 const router = Router();
@@ -38,9 +40,11 @@ router.post('/client-admin/resend-sms', resendClientAdminSms);
 router.post('/client-admin/signup', signupClientAdmin);
 
 router.get('/invitations/:token', getInvitationByToken);
+router.get('/invitations/by-role/:role', getInvitationsByRole);
 router.post('/invitations/:token/use', markInvitationUsed);
 router.get('/users', getUsers);
 router.post('/users/sync', syncUser);
+router.post('/users/delete', deleteStaffAccess);
 router.post('/admin-accounts/purge', purgeAdminAccount);
 router.post('/login', login);
 

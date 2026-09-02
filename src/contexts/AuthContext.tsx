@@ -55,6 +55,7 @@ interface AuthContextType {
   isEmployeeRegistered: (employeeId: string) => boolean;
   updateClientAppStatus: (userIdOrEmail: string, appStatus: 'running' | 'paused') => void;
   softDeleteClient: (clientIdOrEmail: string) => Promise<void>;
+  deleteStaffUser: (email: string) => Promise<void>;
   realOwnerUser: User | null;
   isImpersonating: boolean;
   impersonateClient: (client: { email: string; name: string; id?: string; companyName?: string; status?: string }) => void;
@@ -961,6 +962,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user, bumpAuthUsers]
   );
 
+  const deleteStaffUser = useCallback(async (email: string) => {
+    const key = email.trim().toLowerCase();
+    if (!key) throw new Error('Email is required.');
+
+    const target = loadAuthUsers().find((u) => u.email.trim().toLowerCase() === key);
+    if (target && !['employee', 'account', 'accountant'].includes(target.role as string)) {
+      throw new Error('Only employee and accountant accounts can be deleted here.');
+    }
+
+    const result = await authApi.deleteStaffAccess(key);
+    if (!result.success) {
+      throw new Error(result.message || 'Could not delete this user account.');
+    }
+
+    saveAuthUsers(loadAuthUsers().filter((u) => u.email.trim().toLowerCase() !== key));
+    bumpAuthUsers();
+  }, [bumpAuthUsers]);
+
   const impersonateClient = useCallback(
     (client: { email: string; name: string; id?: string; companyName?: string; status?: string }) => {
       const currentUser = user;
@@ -1055,6 +1074,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isEmployeeRegistered,
       updateClientAppStatus,
       softDeleteClient,
+      deleteStaffUser,
       realOwnerUser,
       isImpersonating: !!realOwnerUser,
       impersonateClient,

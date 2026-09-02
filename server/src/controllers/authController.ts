@@ -178,7 +178,7 @@ export async function sendInviteEmail(req: Request, res: Response) {
       env.appPublicUrl && token
         ? `${env.appPublicUrl}/invite/${token}`
         : inviteLink ||
-          (token && env.nodeEnv !== 'production' ? `http://localhost:3002/invite/${token}` : '');
+          (token && env.nodeEnv !== 'production' ? `http://localhost:3000/invite/${token}` : '');
 
     const mail = await sendInvitationEmail({
       to: email,
@@ -468,7 +468,7 @@ export async function createClientAdminInvite(req: Request, res: Response) {
     // Validate public URL configuration before performing DB or email delivery operations
     let publicOrigin = (env.appPublicUrl || '').trim().replace(/\/+$/, '');
     if (!publicOrigin && env.nodeEnv === 'development') {
-      publicOrigin = 'http://127.0.0.1:3002';
+      publicOrigin = 'http://127.0.0.1:3000';
     }
 
     const isProduction = env.nodeEnv === 'production';
@@ -1063,4 +1063,62 @@ export async function purgeAdminAccount(req: Request, res: Response) {
   }
 }
 
+export async function deleteStaffAccess(req: Request, res: Response) {
+  try {
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const { UserModel } = await import('../models/UserModel.js');
+    const existing = await UserModel.getByEmail(email);
+    if (existing && !['employee', 'account', 'accountant'].includes(existing.role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Only employee and accountant access can be deleted here.',
+      });
+    }
+
+    await InvitationModel.deleteByEmail(email);
+    await UserModel.deleteByEmail(email);
+
+    return res.json({
+      success: true,
+      deletedEmail: email,
+      message: 'User access and invitation history were deleted.',
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to delete staff access';
+    console.error('[Auth] deleteStaffAccess error:', message);
+    return res.status(500).json({ success: false, message: 'Server error deleting staff access.' });
+  }
+}
+
+export async function getInvitationsByRole(req: Request, res: Response) {
+  try {
+    const role = String(req.params.role ?? '').trim().toLowerCase();
+
+    if (!role || !['employee', 'accountant', 'client'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Valid role is required (employee, accountant, or client).' });
+    }
+
+    const invitations = await InvitationModel.getByRoleAndStatus(role, ['pending', 'active']);
+    const serialized = invitations.map((inv) => ({
+      token: inv.token,
+      email: inv.email,
+      name: inv.name,
+      role: inv.role,
+      status: inv.status ?? 'pending',
+      createdAt: inv.created_at,
+      expiresAt: inv.expires_at,
+      used: inv.used,
+    }));
+
+    return res.json({ success: true, data: serialized });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to fetch invitations';
+    console.error('[Auth] getInvitationsByRole error:', message);
+    return res.status(500).json({ success: false, message });
+  }
+}
 
