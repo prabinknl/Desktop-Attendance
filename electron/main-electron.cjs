@@ -731,6 +731,10 @@ ipcMain.handle('desktop:get-local-api-origin', () => getLocalApiOrigin());
 
 /** @type {boolean} */
 let updateDownloadedPromptOpen = false;
+/** @type {boolean} */
+let autoUpdaterSetup = false;
+/** @type {boolean} */
+let launchUpdateCheckStarted = false;
 
 function setupAutoUpdater() {
   // Never run updater wiring in unpackaged/dev sessions.
@@ -738,6 +742,8 @@ function setupAutoUpdater() {
     appendStartupLog('[AutoUpdater] Skipping setup (app is not packaged)');
     return;
   }
+  if (autoUpdaterSetup) return;
+  autoUpdaterSetup = true;
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -856,6 +862,8 @@ function checkAutoUpdateOnLaunch() {
     appendStartupLog('[AutoUpdater] Skipping auto update check (not packaged / development)');
     return;
   }
+  if (launchUpdateCheckStarted) return;
+  launchUpdateCheckStarted = true;
   try {
     appendStartupLog(
       `[AutoUpdater] Checking GitHub Releases (current version ${app.getVersion()})...`,

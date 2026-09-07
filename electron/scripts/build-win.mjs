@@ -14,6 +14,12 @@ const root = path.resolve(__dirname, '../..');
 
 const args = process.argv.slice(2);
 const dirMode = args.includes('--dir');
+const publishIdx = args.indexOf('--publish');
+let publishMode = 'never';
+if (publishIdx !== -1) {
+  const next = args[publishIdx + 1];
+  publishMode = next && !next.startsWith('-') ? next : 'always';
+}
 
 const preferredOut = path.join(root, 'release');
 const fallbackOut = path.join('C:', 'temp', 'AttendanceDesktop-release');
@@ -32,7 +38,7 @@ function canWrite(dir) {
 
 function tryKillStaleProcesses() {
   if (process.platform !== 'win32') return;
-  for (const image of ['Attendance Desktop.exe', 'Attendance.exe']) {
+  for (const image of ['Attendance Desktop.exe', 'Attendance App.exe', 'Attendance.exe']) {
     try {
       spawnSync('taskkill', ['/F', '/IM', image], { stdio: 'ignore' });
     } catch {
@@ -80,6 +86,7 @@ console.log(`[electron:build-win] output -> ${outDir}`);
 // electron-updater latest.yml continues to reference the versioned installer.
 const builderArgs = ['--win', '--x64', `--config.directories.output=${outDir}`];
 if (dirMode) builderArgs.unshift('--dir');
+else builderArgs.push(`--publish=${publishMode}`);
 
 // Run electron-builder via node + cli.js so paths with spaces work on Windows
 // (npx.cmd + shell:true splits "App Dev\\Attendance desktop\\release";

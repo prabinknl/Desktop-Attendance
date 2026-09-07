@@ -1,7 +1,7 @@
 {
   "name": "attendence",
   "private": true,
-  "version": "1.0.11",
+  "version": "1.0.12",
   "type": "module",
   "main": "server/dist/index.js",
   "scripts": {
@@ -24,10 +24,13 @@
     "preview": "vite preview",
     "electron:start": "electron electron/main.cjs",
     "electron:dev": "concurrently -k -n server,vite,electron -c blue,green,magenta \"npm run dev:server\" \"npm run dev:client\" \"wait-on http://127.0.0.1:3000 http://127.0.0.1:3002/api/health && electron electron/main.cjs\"",
-    "electron:pack": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs --dir",
-    "electron:build": "npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs && node electron/scripts/build-win.mjs && node scripts/create-stable-installer.cjs",
-    "dist": "npm run build:icon && npm run electron:build",
-    "dist:dir": "npm run electron:pack"
+    "build:desktop": "npm run build:icon && npm run build:server && npm run build:electron-ui && node electron/scripts/prepare-server-resources.mjs",
+    "electron:pack": "npm run build:desktop && node electron/scripts/build-win.mjs --dir",
+    "electron:build": "npm run build:desktop && node electron/scripts/build-win.mjs",
+    "build:installer": "npm run electron:build",
+    "dist": "npm run electron:build",
+    "dist:dir": "npm run electron:pack",
+    "publish": "npm run build:desktop && node electron/scripts/build-win.mjs --publish always"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
@@ -157,10 +160,11 @@
       ],
       "icon": "build/icon.ico",
       "artifactName": "Attendance.Desktop.Setup.${version}.${ext}",
-      "executableName": "Attendance Desktop"
+      "executableName": "Attendance Desktop",
+      "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
       "perMachine": false,
       "allowElevation": false,
       "allowToChangeInstallationDirectory": false,
@@ -169,7 +173,11 @@
       "shortcutName": "Attendance Desktop",
       "uninstallDisplayName": "Attendance Desktop",
       "runAfterFinish": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "unicode": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     },
     "asar": true,
     "afterPack": "electron/scripts/after-pack.cjs",
