@@ -1,5 +1,4 @@
 import axios, { AxiosError } from 'axios';
-import { PRODUCTION_API_BASE_URL } from '../lib/productionApi';
 
 function isHostedFrontendOrigin(origin: string): boolean {
   try {
@@ -57,8 +56,8 @@ function normalizeHttpApiBase(raw: string): string {
 
 /**
  * Local web dev goes through the Vite proxy on a relative path; the hosted
- * website uses same-origin `/api`. Packaged Electron must use the public
- * Hostinger API even if preload still exposes relative `/api`.
+ * website uses its configured API or same-origin `/api`. Electron uses the
+ * backend selected by preload, including a relative path to its local server.
  */
 function resolveApiBaseUrl(): string {
   const envBaseUrl =
@@ -76,20 +75,12 @@ function resolveApiBaseUrl(): string {
     }
   }
 
-  const chosen =
-    (desktopUrl.startsWith('http') ? desktopUrl : '') ||
-    (configured.startsWith('http') ? configured : '') ||
-    desktopUrl ||
-    configured ||
-    '/api';
-
-  if (!chosen || chosen === '/api') {
-    const electronProd =
-      typeof import.meta !== 'undefined' &&
-      import.meta.env?.VITE_IS_ELECTRON === 'true' &&
-      Boolean(import.meta.env?.PROD);
-    return electronProd ? PRODUCTION_API_BASE_URL : '/api';
-  }
+  const isElectron =
+    import.meta.env?.VITE_IS_ELECTRON === 'true' ||
+    (typeof window !== 'undefined' && window.attendanceDesktop?.isElectron);
+  // Runtime desktop settings take precedence over hosted build settings.
+  // Relative /api also follows the actual loopback port chosen at startup.
+  const chosen = desktopUrl || (isElectron ? '/api' : configured) || '/api';
 
   if (chosen.startsWith('http')) return normalizeHttpApiBase(chosen);
   return chosen;

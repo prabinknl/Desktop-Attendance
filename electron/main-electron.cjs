@@ -23,8 +23,6 @@ const HEALTH_INTERVAL_MS = 400;
 
 /** Optional override — when unset, desktop still starts local Express (LAN devices / UI). */
 const API_TARGET_OVERRIDE = (process.env.ELECTRON_API_TARGET || '').replace(/\/$/, '');
-/** Public Hostinger API used by the published website. Not a secret. */
-const PRODUCTION_API_BASE_URL = 'https://desktop-attendance.appnep.com/api';
 
 let mainWindow = null;
 /** @type {import('child_process').ChildProcess | null} */
@@ -250,6 +248,7 @@ function loadDesktopEnv() {
         if (
           key === 'PORT' ||
           key === 'HOST' ||
+          key === 'NODE_ENV' ||
           key === 'ELECTRON_DESKTOP' ||
           key === 'ATTENDANCE_DATA_DIR'
         ) {
@@ -725,7 +724,7 @@ function createWindow(startUrl) {
 }
 
 ipcMain.handle('desktop:get-api-base-url', () => {
-  return isDev ? '/api' : PRODUCTION_API_BASE_URL;
+  return '/api';
 });
 
 ipcMain.handle('desktop:get-local-api-origin', () => getLocalApiOrigin());
@@ -904,7 +903,7 @@ async function bootstrap() {
     const startUrl = await resolveStartUrl();
     appendStartupLog(`[Electron] UI start URL: ${startUrl}`);
     appendStartupLog(
-      `[Electron] Renderer API base: ${isDev ? '/api' : PRODUCTION_API_BASE_URL}`,
+      '[Electron] Renderer API base: /api (same origin as UI)',
     );
     createWindow(startUrl);
     checkAutoUpdateOnLaunch();

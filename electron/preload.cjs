@@ -12,8 +12,6 @@
  */
 const { contextBridge, ipcRenderer } = require('electron');
 
-const isPackaged = __dirname.includes('app.asar');
-
 contextBridge.exposeInMainWorld(
   'attendanceDesktop',
   Object.freeze({
