@@ -132,13 +132,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
         run: |
+          # Fail loudly if electron-builder (or a race) created more than one
+          # release for this tag — that previously caused HTTP 422 on undraft.
+          DUP_COUNT="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            --jq "[.[] | select(.tag_name == \"${GITHUB_REF_NAME}\")] | length")"
+          if [ "${DUP_COUNT}" -gt 1 ]; then
+            echo "::error::Found ${DUP_COUNT} GitHub releases for tag ${GITHUB_REF_NAME}."
+            echo "::error::Delete the orphan duplicate release, then re-run this job."
+            gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+              --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | {id, draft, assets:[.assets[].name]}"
+            exit 1
+          fi
+
           # electron-builder may already publish a non-draft release when
           # releaseType is "release". Only undraft when still draft so this
           # step stays idempotent (avoids HTTP 422 on already-published tags).
           IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --json isDraft -q .isDraft 2>/dev/null || echo true)"
           if [ "$IS_DRAFT" = "true" ]; then
             gh release edit "${GITHUB_REF_NAME}" --draft=false
-            echo "Published ${GITHUB_REF_NAME} — electron-updater can now see latest.yml"
+            echo "Published ${GITHUB_REF_NAME} - electron-updater can now see latest.yml"
           else
-            echo "${GITHUB_REF_NAME} is already published — electron-updater can see latest.yml"
+            echo "${GITHUB_REF_NAME} is already published - electron-updater can see latest.yml"
           fi

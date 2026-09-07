@@ -711,7 +711,7 @@ function createWindow(startUrl) {
   mainWindow.loadURL(startUrl).catch((err) => {
     console.error('[Electron] Failed to load UI:', err);
     dialog.showErrorBox(
-      'Attendance ΓÇö startup failure',
+      'Attendance - startup failure',
       isDev
         ? `Could not open the development URL:\n${startUrl}\n\nIs Vite running? (${err.message})`
         : `Could not load the desktop UI.\n\n${err.message}`,
@@ -756,7 +756,7 @@ function setupAutoUpdater() {
   });
 
   const sendStatus = (status, data = {}) => {
-    // Log status keys only ΓÇö never tokens, passwords, or full error stacks with secrets.
+    // Log status keys only - never tokens, passwords, or full error stacks with secrets.
     const safe = { ...data };
     if (typeof safe.error === 'string') {
       safe.error = safe.error.replace(/(gh[pousr]_|github_pat_|token)[^\s]+/gi, '[redacted]');
@@ -845,7 +845,7 @@ async function promptInstallUpdate(version) {
       });
     } else {
       appendStartupLog(
-        '[AutoUpdater] User chose Later ΓÇö update will install on quit when possible',
+        '[AutoUpdater] User chose Later - update will install on quit when possible',
       );
     }
   } catch (err) {
@@ -920,7 +920,7 @@ async function bootstrap() {
     appendStartupLog(`[Electron] Startup failed: ${err instanceof Error ? err.message : String(err)}`);
     if (!err.message?.includes('Missing production build')) {
       dialog.showErrorBox(
-        'Attendance ΓÇö startup failure',
+        'Attendance - startup failure',
         err instanceof Error ? err.message : String(err),
       );
     }
