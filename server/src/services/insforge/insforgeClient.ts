@@ -1,3 +1,4 @@
+/** OBSOLETE after Hostinger MySQL migration is verified — kept as temporary fallback. */
 import { env } from '../../config/env.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

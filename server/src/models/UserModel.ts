@@ -1,5 +1,7 @@
 import { query } from '../db/pool.js';
+import { isMysql } from '../db/dialect.js';
 import { isMemoryMode, memoryStore, type MemoryUserRecord } from '../db/memoryStore.js';
+import { hashPassword, verifyPassword } from '../services/auth/passwordHash.js';
 
 export interface UserRow {
   id: string;
@@ -121,11 +123,14 @@ export const UserModel = {
       try {
         const res = await query<UserRow>(
           `SELECT * FROM app_users
-           WHERE (LOWER(email) = $1 OR LOWER(TRIM(name)) = $1) AND password = $2
+           WHERE (LOWER(email) = $1 OR LOWER(TRIM(name)) = $1)
            LIMIT 1`,
-          [key, password],
+          [key],
         );
-        return res.rows[0] ? toSafeUser(rowToAppUser(res.rows[0])) : null;
+        const row = res.rows[0];
+        if (!row) return null;
+        const ok = await verifyPassword(password, row.password);
+        return ok ? toSafeUser(rowToAppUser(row)) : null;
       } catch (err) {
         console.warn('[UserModel] verifyCredentials error, falling back to memory store:', err instanceof Error ? err.message : err);
       }
@@ -134,9 +139,11 @@ export const UserModel = {
     const found = memoryStore.getUsers().find((u) => {
       const emailMatch = u.email.trim().toLowerCase() === key;
       const nameMatch = u.name.trim().toLowerCase() === key;
-      return (emailMatch || nameMatch) && u.password === password;
+      return emailMatch || nameMatch;
     });
-    return found ? toSafeUser(memoryToAppUser(found)) : null;
+    if (!found) return null;
+    const ok = await verifyPassword(password, found.password);
+    return ok ? toSafeUser(memoryToAppUser(found)) : null;
   },
 
   async getByEmail(email: string) {
@@ -190,13 +197,14 @@ export const UserModel = {
     const accessExpiresAt = user.accessExpiresAt ?? user.access_expires_at ?? undefined;
     const status = user.status ?? 'active';
     const emailVerified = user.emailVerified ?? user.email_verified ?? true;
+    const passwordHash = await hashPassword(user.password);
 
     const memoryPayload: MemoryUserRecord = {
       id: user.id,
       name: user.name,
       email: emailLower,
       role: user.role,
-      password: user.password,
+      password: passwordHash,
       avatar: user.avatar,
       phone: user.phone,
       timezone: user.timezone,
@@ -212,8 +220,61 @@ export const UserModel = {
       updatedAt: now,
     };
 
+    const params = [
+      user.id,
+      user.name,
+      emailLower,
+      user.role,
+      passwordHash,
+      user.avatar ?? null,
+      user.phone ?? null,
+      user.timezone ?? null,
+      user.employeeId ?? null,
+      user.departmentId ?? null,
+      clientId ?? null,
+      planType ?? null,
+      accessExpiresAt ?? null,
+      status,
+      emailVerified,
+      now,
+    ];
+
     if (!isMemoryMode()) {
       try {
+        if (isMysql()) {
+          await query(
+            `INSERT INTO app_users (
+              id, name, email, role, password, avatar, phone, timezone, employee_id, department_id,
+              client_id, plan_type, access_expires_at, status, email_verified, created_at, updated_at
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+              $11, $12, $13, $14, $15, $16, $16
+            )
+            ON DUPLICATE KEY UPDATE
+              name = VALUES(name),
+              role = VALUES(role),
+              password = VALUES(password),
+              avatar = COALESCE(VALUES(avatar), app_users.avatar),
+              phone = COALESCE(VALUES(phone), app_users.phone),
+              timezone = COALESCE(VALUES(timezone), app_users.timezone),
+              employee_id = COALESCE(VALUES(employee_id), app_users.employee_id),
+              department_id = COALESCE(VALUES(department_id), app_users.department_id),
+              client_id = COALESCE(VALUES(client_id), app_users.client_id),
+              plan_type = COALESCE(VALUES(plan_type), app_users.plan_type),
+              access_expires_at = COALESCE(VALUES(access_expires_at), app_users.access_expires_at),
+              status = VALUES(status),
+              email_verified = VALUES(email_verified),
+              updated_at = VALUES(updated_at)`,
+            params,
+          );
+          const res = await query<UserRow>(
+            'SELECT * FROM app_users WHERE LOWER(email) = $1 LIMIT 1',
+            [emailLower],
+          );
+          memoryStore.upsertUser(memoryPayload);
+          return res.rows[0] ? rowToAppUser(res.rows[0]) : null;
+        }
+
         const res = await query<UserRow>(
           `INSERT INTO app_users (
             id, name, email, role, password, avatar, phone, timezone, employee_id, department_id,
@@ -239,24 +300,7 @@ export const UserModel = {
             email_verified = EXCLUDED.email_verified,
             updated_at = EXCLUDED.updated_at
           RETURNING *`,
-          [
-            user.id,
-            user.name,
-            emailLower,
-            user.role,
-            user.password,
-            user.avatar ?? null,
-            user.phone ?? null,
-            user.timezone ?? null,
-            user.employeeId ?? null,
-            user.departmentId ?? null,
-            clientId ?? null,
-            planType ?? null,
-            accessExpiresAt ?? null,
-            status,
-            emailVerified,
-            now,
-          ],
+          params,
         );
 
         // Keep memory mirror in sync for resilience if DB later drops.

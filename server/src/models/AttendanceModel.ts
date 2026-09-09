@@ -1,9 +1,11 @@
 /**
- * AttendanceModel — server-side PostgreSQL CRUD for the `attendance` table.
+ * AttendanceModel — server-side CRUD for the `attendance` table.
  * The app_id column stores the client-generated ID (e.g. 'att-xxxx') for lookups.
  * The UUID `id` column is the true DB primary key.
  */
+import { randomUUID } from 'node:crypto';
 import { query } from '../db/pool.js';
+import { isMysql } from '../db/dialect.js';
 
 export interface AttendanceRow {
   id: string;           // UUID PK
@@ -68,6 +70,13 @@ function rowToAppRecord(row: AttendanceRow) {
   };
 }
 
+function idMatchSql(paramIndex: number): string {
+  // MySQL has no `id::text`; CAST keeps UUID/CHAR comparisons working.
+  return isMysql()
+    ? `CAST(id AS CHAR) = $${paramIndex}`
+    : `id::text = $${paramIndex}`;
+}
+
 export const AttendanceModel = {
   /** Fetch all attendance rows, ordered newest first */
   async getAll() {
@@ -109,6 +118,102 @@ export const AttendanceModel = {
     source?: string;
   }) {
     const now = new Date().toISOString();
+    const params = [
+      record.appId ?? null,
+      record.employeeId,
+      record.departmentId ?? null,
+      record.date,
+      record.shiftId ?? null,
+      record.checkIn ?? null,
+      record.checkOut ?? null,
+      record.manualCheckIn ?? null,
+      record.manualCheckOut ?? null,
+      record.checkInEdited ?? false,
+      record.checkOutEdited ?? false,
+      record.checkInEditedBy ?? null,
+      record.checkOutEditedBy ?? null,
+      record.checkInEditedAt ?? null,
+      record.checkOutEditedAt ?? null,
+      record.breakMinutes ?? 0,
+      record.workingHours ?? 0,
+      record.overtime ?? 0,
+      record.lateMinutes ?? 0,
+      record.status ?? 'present',
+      record.location ?? null,
+      record.remarks ?? null,
+      record.manualOverride ?? false,
+      record.source ?? null,
+      record.createdBy ?? 'app',
+      now,
+    ];
+
+    if (isMysql()) {
+      const id = randomUUID();
+      await query(
+        `INSERT INTO attendance (
+          id, app_id, employee_id, department_id, date, shift_id,
+          check_in, check_out, manual_check_in, manual_check_out,
+          check_in_edited, check_out_edited, check_in_edited_by, check_out_edited_by, check_in_edited_at, check_out_edited_at,
+          break_minutes, working_hours, overtime, late_minutes, status, location, remarks,
+          manual_override, source, created_by, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6,
+          $7, $8, $9, $10,
+          $11, $12, $13, $14, $15, $16,
+          $17, $18, $19, $20, $21, $22, $23,
+          $24, $25, $26, $27, $27
+        )
+        ON DUPLICATE KEY UPDATE
+          app_id              = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, COALESCE(VALUES(app_id), attendance.app_id), attendance.app_id),
+          department_id       = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, COALESCE(VALUES(department_id), attendance.department_id), attendance.department_id),
+          shift_id            = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, COALESCE(VALUES(shift_id), attendance.shift_id), attendance.shift_id),
+          check_in            = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, VALUES(check_in), attendance.check_in),
+          check_out           = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, VALUES(check_out), attendance.check_out),
+          manual_check_in     = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1,
+                                IF(VALUES(manual_override) = 1, VALUES(manual_check_in), COALESCE(VALUES(manual_check_in), attendance.manual_check_in)),
+                                attendance.manual_check_in),
+          manual_check_out    = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1,
+                                IF(VALUES(manual_override) = 1, VALUES(manual_check_out), COALESCE(VALUES(manual_check_out), attendance.manual_check_out)),
+                                attendance.manual_check_out),
+          check_in_edited     = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1,
+                                IF(VALUES(manual_override) = 1, VALUES(check_in_edited), IF(VALUES(check_in_edited) = 1, 1, attendance.check_in_edited)),
+                                attendance.check_in_edited),
+          check_out_edited    = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1,
+                                IF(VALUES(manual_override) = 1, VALUES(check_out_edited), IF(VALUES(check_out_edited) = 1, 1, attendance.check_out_edited)),
+                                attendance.check_out_edited),
+          check_in_edited_by  = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1,
+                                IF(VALUES(manual_override) = 1, VALUES(check_in_edited_by), COALESCE(VALUES(check_in_edited_by), attendance.check_in_edited_by)),
+                                attendance.check_in_edited_by),
+          check_out_edited_by = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1,
+                                IF(VALUES(manual_override) = 1, VALUES(check_out_edited_by), COALESCE(VALUES(check_out_edited_by), attendance.check_out_edited_by)),
+                                attendance.check_out_edited_by),
+          check_in_edited_at  = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1,
+                                IF(VALUES(manual_override) = 1, VALUES(check_in_edited_at), COALESCE(VALUES(check_in_edited_at), attendance.check_in_edited_at)),
+                                attendance.check_in_edited_at),
+          check_out_edited_at = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1,
+                                IF(VALUES(manual_override) = 1, VALUES(check_out_edited_at), COALESCE(VALUES(check_out_edited_at), attendance.check_out_edited_at)),
+                                attendance.check_out_edited_at),
+          break_minutes       = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, VALUES(break_minutes), attendance.break_minutes),
+          working_hours       = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, VALUES(working_hours), attendance.working_hours),
+          overtime            = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, VALUES(overtime), attendance.overtime),
+          late_minutes        = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, VALUES(late_minutes), attendance.late_minutes),
+          status              = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, VALUES(status), attendance.status),
+          location            = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, COALESCE(VALUES(location), attendance.location), attendance.location),
+          remarks             = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, COALESCE(VALUES(remarks), attendance.remarks), attendance.remarks),
+          manual_override     = IF(VALUES(manual_override) = 1, 1, attendance.manual_override),
+          source              = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, COALESCE(VALUES(source), attendance.source), attendance.source),
+          created_by          = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, COALESCE(VALUES(created_by), attendance.created_by), attendance.created_by),
+          updated_at          = IF(attendance.manual_override = 0 OR VALUES(manual_override) = 1, VALUES(updated_at), attendance.updated_at)`,
+        [id, ...params],
+      );
+
+      const existing = await query<AttendanceRow>(
+        `SELECT * FROM attendance WHERE employee_id = $1 AND date = $2`,
+        [record.employeeId, record.date],
+      );
+      return existing.rows[0] ? rowToAppRecord(existing.rows[0]) : null;
+    }
+
     const res = await query<AttendanceRow>(
       `INSERT INTO attendance (
         app_id, employee_id, department_id, date, shift_id,
@@ -174,34 +279,7 @@ export const AttendanceModel = {
         updated_at          = EXCLUDED.updated_at
       WHERE attendance.manual_override = false OR EXCLUDED.manual_override = true
       RETURNING *`,
-      [
-        record.appId ?? null,
-        record.employeeId,
-        record.departmentId ?? null,
-        record.date,
-        record.shiftId ?? null,
-        record.checkIn ?? null,
-        record.checkOut ?? null,
-        record.manualCheckIn ?? null,
-        record.manualCheckOut ?? null,
-        record.checkInEdited ?? false,
-        record.checkOutEdited ?? false,
-        record.checkInEditedBy ?? null,
-        record.checkOutEditedBy ?? null,
-        record.checkInEditedAt ?? null,
-        record.checkOutEditedAt ?? null,
-        record.breakMinutes ?? 0,
-        record.workingHours ?? 0,
-        record.overtime ?? 0,
-        record.lateMinutes ?? 0,
-        record.status ?? 'present',
-        record.location ?? null,
-        record.remarks ?? null,
-        record.manualOverride ?? false,
-        record.source ?? null,
-        record.createdBy ?? 'app',
-        now,
-      ]
+      params,
     );
     if (!res.rows[0]) {
       // Conflict but no update (manualOverride guard) — fetch existing
@@ -277,9 +355,23 @@ export const AttendanceModel = {
 
     // Match by app_id first, then by UUID
     vals.push(appId);
+    const match = `app_id = $${idx} OR ${idMatchSql(idx)}`;
+
+    if (isMysql()) {
+      await query(
+        `UPDATE attendance SET ${sets.join(', ')} WHERE ${match}`,
+        vals,
+      );
+      const res = await query<AttendanceRow>(
+        `SELECT * FROM attendance WHERE app_id = $1 OR ${idMatchSql(1)}`,
+        [appId],
+      );
+      return res.rows[0] ? rowToAppRecord(res.rows[0]) : null;
+    }
+
     const res = await query<AttendanceRow>(
       `UPDATE attendance SET ${sets.join(', ')}
-       WHERE app_id = $${idx} OR id::text = $${idx}
+       WHERE ${match}
        RETURNING *`,
       vals
     );
@@ -289,7 +381,7 @@ export const AttendanceModel = {
   /** Delete by app_id or db id */
   async deleteById(appId: string) {
     await query(
-      `DELETE FROM attendance WHERE app_id = $1 OR id::text = $1`,
+      `DELETE FROM attendance WHERE app_id = $1 OR ${idMatchSql(1)}`,
       [appId]
     );
   },

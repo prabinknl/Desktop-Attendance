@@ -175,6 +175,7 @@ export const authApi = {
       };
     }
 
+    // OBSOLETE InsForge fallback — only used when Hostinger API returned no body.
     return deliverClientAdminInviteEmail(input);
   },
 
@@ -308,7 +309,7 @@ export const authApi = {
         return data;
       }
     } catch {
-      /* Hostinger unreachable — optional InsForge OTP verification remains available. */
+      /* Hostinger unreachable — OBSOLETE InsForge OTP verification may still run if enabled. */
     }
 
     return verifyClientAdminInviteCode(input);

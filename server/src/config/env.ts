@@ -47,6 +47,23 @@ function getAppPublicUrl(): string {
   return 'https://desktop-attendance.appnep.com';
 }
 
+function hasMysqlDiscreteConfig(): boolean {
+  return Boolean(
+    (process.env.DB_HOST ?? '').trim() &&
+      (process.env.DB_NAME ?? '').trim() &&
+      (process.env.DB_USER ?? '').trim(),
+  );
+}
+
+function resolveDatabaseUrl(): string {
+  const fromEnv = (process.env.DATABASE_URL ?? '').trim();
+  if (fromEnv) return fromEnv;
+  // When MySQL discrete config is present, do not force a Postgres default.
+  if (hasMysqlDiscreteConfig()) return '';
+  if (/^mysql(\+[^:]*)?:\/\//i.test(fromEnv) || /^mariadb:\/\//i.test(fromEnv)) return fromEnv;
+  return 'postgresql://postgres:password@localhost:5432/attendance_db';
+}
+
 export const env = {
   /**
    * Hostinger injects PORT. Local/Electron keep 3002 so Vite can use 3000.
@@ -64,8 +81,14 @@ export const env = {
   host: (process.env.HOST ?? '0.0.0.0').trim() || '0.0.0.0',
   corsOrigins: parseCorsOrigins(),
   nodeEnv: process.env.NODE_ENV ?? 'development',
-  databaseUrl:
-    process.env.DATABASE_URL ?? 'postgresql://postgres:password@localhost:5432/attendance_db',
+  databaseUrl: resolveDatabaseUrl(),
+  dbHost: (process.env.DB_HOST ?? '').trim(),
+  dbPort: parseInt(process.env.DB_PORT || '3306', 10) || 3306,
+  dbName: (process.env.DB_NAME ?? '').trim(),
+  dbUser: (process.env.DB_USER ?? '').trim(),
+  dbPassword: process.env.DB_PASSWORD ?? '',
+  /** Optional JWT secret for future auth hardening — not required today. */
+  jwtSecret: (process.env.JWT_SECRET ?? '').trim(),
   encryptionKey: process.env.ENCRYPTION_KEY ?? '',
   /**
    * Mock mode is disabled. Real Hikvision ISAPI is always used.
@@ -102,6 +125,7 @@ export const env = {
   smtpUser: (process.env.SMTP_USER ?? '').trim(),
   smtpPass: process.env.SMTP_PASS ?? '',
   smtpFrom: (process.env.SMTP_FROM ?? '').trim(),
+  /** Legacy / optional InsForge BaaS (migration fallback). */
   insforgeBaseUrl: (process.env.INSFORGE_BASE_URL ?? '').trim(),
   insforgeApiKey: (process.env.INSFORGE_API_KEY ?? '').trim(),
   smsProvider: (process.env.SMS_PROVIDER ?? '').trim().toLowerCase(),
@@ -123,12 +147,28 @@ export function logStartupEnvironment(): void {
   const smtpReady = Boolean(env.smtpHost && env.smtpUser && env.smtpPass);
   const insforgeReady = Boolean(env.insforgeBaseUrl && env.insforgeApiKey);
   const databaseSet = Boolean((process.env.DATABASE_URL ?? '').trim());
+  const mysqlConfigured =
+    hasMysqlDiscreteConfig() ||
+    /^(mysql(\+[^:]*)?|mariadb):\/\//i.test(env.databaseUrl || '');
+
+  const driverOverride = (process.env.DB_DRIVER ?? '').trim().toLowerCase();
+  let dbDriverLabel: 'mysql' | 'postgres' = 'postgres';
+  if (driverOverride === 'mysql' || driverOverride === 'mariadb') dbDriverLabel = 'mysql';
+  else if (driverOverride === 'postgres' || driverOverride === 'postgresql' || driverOverride === 'pg') {
+    dbDriverLabel = 'postgres';
+  } else if (mysqlConfigured) {
+    dbDriverLabel = 'mysql';
+  } else if (/^postgres(ql)?:\/\//i.test(env.databaseUrl || process.env.DATABASE_URL || '')) {
+    dbDriverLabel = 'postgres';
+  }
 
   console.log('[Server] Configuration:', {
     nodeEnv: env.nodeEnv,
     port: env.port,
     host: env.host,
     appPublicUrl: env.appPublicUrl,
+    dbDriver: dbDriverLabel,
+    mysqlConfigured,
     smtpConfigured: smtpReady,
     smtpHost: env.smtpHost || '(not set)',
     smtpPort: env.smtpPort,
@@ -147,13 +187,15 @@ export function logStartupEnvironment(): void {
       '[Server] SMTP configuration missing. Set SMTP_HOST, SMTP_USER, and SMTP_PASS for invitation emails.',
     );
   }
-  if (!insforgeReady) {
+  if (dbDriverLabel === 'postgres' && !insforgeReady) {
     console.warn(
-      '[Server] InsForge is not fully configured. Set INSFORGE_BASE_URL and INSFORGE_API_KEY for database/auth/storage.',
+      '[Server] InsForge is optional/legacy during MySQL migration. Set INSFORGE_BASE_URL and INSFORGE_API_KEY only if you still need the Postgres/InsForge fallback.',
     );
   }
-  if (!databaseSet) {
-    console.warn('[Server] DATABASE_URL is not set. Persistent storage will fall back if PostgreSQL is unreachable.');
+  if (!mysqlConfigured && !databaseSet) {
+    console.warn(
+      '[Server] No database configured. Set DB_HOST/DB_NAME/DB_USER (MySQL) or DATABASE_URL (legacy Postgres).',
+    );
   }
   if (/localhost|127\.0\.0\.1/i.test(env.appPublicUrl)) {
     console.warn(

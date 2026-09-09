@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { isMysql } from '../db/dialect.js';
 import { isMemoryMode, memoryStore, type InvitationRecord } from '../db/memoryStore.js';
 import { toIsoTimestamp } from '../services/auth/invitationService.js';
 
@@ -22,66 +23,107 @@ export const InvitationModel = {
     if (isMemoryMode()) return;
 
     try {
-      await query(
-        `INSERT INTO app_invitations (
-          token, email, name, role, created_at, expires_at, used,
-          id, client_id, phone, company_name, plan_type, duration_days,
-          access_start_at, access_expires_at, token_hash, sms_code_hash,
-          sms_expires_at, sms_attempts, sms_last_sent_at, status, created_by, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7,
-          $8, $9, $10, $11, $12, $13,
-          $14, $15, $16, $17,
-          $18, $19, $20, $21, $22, $23
-        )
-        ON CONFLICT (token) DO UPDATE SET
-          email = EXCLUDED.email,
-          name = EXCLUDED.name,
-          role = EXCLUDED.role,
-          created_at = EXCLUDED.created_at,
-          expires_at = EXCLUDED.expires_at,
-          used = EXCLUDED.used,
-          client_id = EXCLUDED.client_id,
-          phone = EXCLUDED.phone,
-          company_name = EXCLUDED.company_name,
-          plan_type = EXCLUDED.plan_type,
-          duration_days = EXCLUDED.duration_days,
-          access_start_at = EXCLUDED.access_start_at,
-          access_expires_at = EXCLUDED.access_expires_at,
-          token_hash = EXCLUDED.token_hash,
-          sms_code_hash = EXCLUDED.sms_code_hash,
-          sms_expires_at = EXCLUDED.sms_expires_at,
-          sms_attempts = EXCLUDED.sms_attempts,
-          sms_last_sent_at = EXCLUDED.sms_last_sent_at,
-          status = EXCLUDED.status,
-          created_by = EXCLUDED.created_by,
-          updated_at = EXCLUDED.updated_at`,
-        [
-          inv.token,
-          inv.email.toLowerCase(),
-          inv.name ?? null,
-          inv.role,
-          inv.created_at,
-          inv.expires_at,
-          inv.used,
-          inv.id ?? null,
-          inv.client_id ?? null,
-          inv.phone ?? null,
-          inv.company_name ?? null,
-          inv.plan_type ?? 'free',
-          inv.duration_days ?? null,
-          inv.access_start_at ?? null,
-          inv.access_expires_at ?? null,
-          inv.token_hash ?? null,
-          inv.sms_code_hash ?? null,
-          inv.sms_expires_at ?? null,
-          inv.sms_attempts ?? 0,
-          inv.sms_last_sent_at ?? null,
-          inv.status ?? 'pending',
-          inv.created_by ?? null,
-          inv.updated_at ?? inv.created_at,
-        ],
-      );
+      const params = [
+        inv.token,
+        inv.email.toLowerCase(),
+        inv.name ?? null,
+        inv.role,
+        inv.created_at,
+        inv.expires_at,
+        inv.used,
+        inv.id ?? null,
+        inv.client_id ?? null,
+        inv.phone ?? null,
+        inv.company_name ?? null,
+        inv.plan_type ?? 'free',
+        inv.duration_days ?? null,
+        inv.access_start_at ?? null,
+        inv.access_expires_at ?? null,
+        inv.token_hash ?? null,
+        inv.sms_code_hash ?? null,
+        inv.sms_expires_at ?? null,
+        inv.sms_attempts ?? 0,
+        inv.sms_last_sent_at ?? null,
+        inv.status ?? 'pending',
+        inv.created_by ?? null,
+        inv.updated_at ?? inv.created_at,
+      ];
+
+      if (isMysql()) {
+        await query(
+          `INSERT INTO app_invitations (
+            token, email, name, role, created_at, expires_at, used,
+            id, client_id, phone, company_name, plan_type, duration_days,
+            access_start_at, access_expires_at, token_hash, sms_code_hash,
+            sms_expires_at, sms_attempts, sms_last_sent_at, status, created_by, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11, $12, $13,
+            $14, $15, $16, $17,
+            $18, $19, $20, $21, $22, $23
+          )
+          ON DUPLICATE KEY UPDATE
+            email = VALUES(email),
+            name = VALUES(name),
+            role = VALUES(role),
+            created_at = VALUES(created_at),
+            expires_at = VALUES(expires_at),
+            used = VALUES(used),
+            client_id = VALUES(client_id),
+            phone = VALUES(phone),
+            company_name = VALUES(company_name),
+            plan_type = VALUES(plan_type),
+            duration_days = VALUES(duration_days),
+            access_start_at = VALUES(access_start_at),
+            access_expires_at = VALUES(access_expires_at),
+            token_hash = VALUES(token_hash),
+            sms_code_hash = VALUES(sms_code_hash),
+            sms_expires_at = VALUES(sms_expires_at),
+            sms_attempts = VALUES(sms_attempts),
+            sms_last_sent_at = VALUES(sms_last_sent_at),
+            status = VALUES(status),
+            created_by = VALUES(created_by),
+            updated_at = VALUES(updated_at)`,
+          params,
+        );
+      } else {
+        await query(
+          `INSERT INTO app_invitations (
+            token, email, name, role, created_at, expires_at, used,
+            id, client_id, phone, company_name, plan_type, duration_days,
+            access_start_at, access_expires_at, token_hash, sms_code_hash,
+            sms_expires_at, sms_attempts, sms_last_sent_at, status, created_by, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11, $12, $13,
+            $14, $15, $16, $17,
+            $18, $19, $20, $21, $22, $23
+          )
+          ON CONFLICT (token) DO UPDATE SET
+            email = EXCLUDED.email,
+            name = EXCLUDED.name,
+            role = EXCLUDED.role,
+            created_at = EXCLUDED.created_at,
+            expires_at = EXCLUDED.expires_at,
+            used = EXCLUDED.used,
+            client_id = EXCLUDED.client_id,
+            phone = EXCLUDED.phone,
+            company_name = EXCLUDED.company_name,
+            plan_type = EXCLUDED.plan_type,
+            duration_days = EXCLUDED.duration_days,
+            access_start_at = EXCLUDED.access_start_at,
+            access_expires_at = EXCLUDED.access_expires_at,
+            token_hash = EXCLUDED.token_hash,
+            sms_code_hash = EXCLUDED.sms_code_hash,
+            sms_expires_at = EXCLUDED.sms_expires_at,
+            sms_attempts = EXCLUDED.sms_attempts,
+            sms_last_sent_at = EXCLUDED.sms_last_sent_at,
+            status = EXCLUDED.status,
+            created_by = EXCLUDED.created_by,
+            updated_at = EXCLUDED.updated_at`,
+          params,
+        );
+      }
     } catch (err) {
       console.warn('[InvitationModel] DB save error, falling back to memory store:', err instanceof Error ? err.message : err);
     }

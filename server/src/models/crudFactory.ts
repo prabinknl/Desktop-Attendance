@@ -6,6 +6,7 @@
  * repeating the same INSERT ... ON CONFLICT for each table.
  */
 import { query } from '../db/pool.js';
+import { isMysql, ph } from '../db/dialect.js';
 
 export interface ColumnSpec {
   /** Postgres column name. */
@@ -84,8 +85,21 @@ export function createCrudModel(opts: {
         : record;
 
       const values = columns.map((spec) => toColumnValue(spec, source));
-      const placeholders = columns.map((_, i) => `$${i + 1}`);
+      const placeholders = columns.map((_, i) => ph(i + 1));
       const updatable = columns.filter((spec) => spec.col !== 'id' && spec.col !== 'created_at');
+      const idValue = toColumnValue(columns.find((c) => c.col === 'id')!, source);
+
+      if (isMysql()) {
+        await query(
+          `INSERT INTO ${table} (${columns.map((c) => c.col).join(', ')})
+           VALUES (${placeholders.join(', ')})
+           ON DUPLICATE KEY UPDATE
+             ${updatable.map((c) => `${c.col} = VALUES(${c.col})`).join(', ')}`,
+          values,
+        );
+        const res = await query<Row>(`SELECT * FROM ${table} WHERE id = ${ph(1)}`, [idValue]);
+        return res.rows[0] ? rowToApp(res.rows[0]) : null;
+      }
 
       const res = await query<Row>(
         `INSERT INTO ${table} (${columns.map((c) => c.col).join(', ')})
@@ -111,13 +125,22 @@ export function createCrudModel(opts: {
         }
       }
       if (targets.length === 0) {
-        const existing = await query<Row>(`SELECT * FROM ${table} WHERE id = $1`, [id]);
+        const existing = await query<Row>(`SELECT * FROM ${table} WHERE id = ${ph(1)}`, [id]);
         return existing.rows[0] ? rowToApp(existing.rows[0]) : null;
       }
 
-      const sets = targets.map((spec, i) => `${spec.col} = $${i + 1}`);
+      const sets = targets.map((spec, i) => `${spec.col} = ${ph(i + 1)}`);
       const values = targets.map((spec) => toColumnValue(spec, patch));
       values.push(id);
+
+      if (isMysql()) {
+        await query(
+          `UPDATE ${table} SET ${sets.join(', ')} WHERE id = ${ph(values.length)}`,
+          values,
+        );
+        const res = await query<Row>(`SELECT * FROM ${table} WHERE id = ${ph(1)}`, [id]);
+        return res.rows[0] ? rowToApp(res.rows[0]) : null;
+      }
 
       const res = await query<Row>(
         `UPDATE ${table} SET ${sets.join(', ')} WHERE id = $${values.length} RETURNING *`,
@@ -127,7 +150,7 @@ export function createCrudModel(opts: {
     },
 
     async deleteById(id: string) {
-      await query(`DELETE FROM ${table} WHERE id = $1`, [id]);
+      await query(`DELETE FROM ${table} WHERE id = ${ph(1)}`, [id]);
     },
 
     async bulkUpsert(records: AppObject[]) {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   getActiveDeviceRecord,
   updateDeviceMeta,
@@ -6,6 +7,7 @@ import {
 } from '../../models/DeviceModel.js';
 import { isMemoryMode, memoryStore } from '../../db/memoryStore.js';
 import { query } from '../../db/pool.js';
+import { isMysql } from '../../db/dialect.js';
 import { logDeviceAction } from './deviceLogger.js';
 import { isDeviceUnreachableError } from './HikvisionService.js';
 import { resolveConnectionMode } from '../connector/devicePresence.js';
@@ -71,30 +73,46 @@ export async function persistEvent(
       return isNew ? 'inserted' : 'duplicate';
     }
 
-    const insertResult = await query(
-      `INSERT INTO device_attendance_logs
-        (device_id, external_id, employee_id, employee_name, check_type, event_time,
-         raw_data, source, auth_method, card_number, raw_event_code, event_type)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       ON CONFLICT (device_id, external_id) DO NOTHING
-       RETURNING id`,
-      [
-        deviceId,
-        event.externalId,
-        event.employeeId,
-        event.employeeName,
-        event.checkType,
-        event.eventTime.toISOString(),
-        event.rawData ? JSON.stringify(event.rawData) : null,
-        event.source ?? 'hikvision-device',
-        event.authMethod ?? null,
-        event.cardNumber ?? null,
-        event.rawEventCode ?? null,
-        event.eventType ?? null,
-      ],
-    );
+    const logParams = [
+      deviceId,
+      event.externalId,
+      event.employeeId,
+      event.employeeName,
+      event.checkType,
+      event.eventTime.toISOString(),
+      event.rawData ? JSON.stringify(event.rawData) : null,
+      event.source ?? 'hikvision-device',
+      event.authMethod ?? null,
+      event.cardNumber ?? null,
+      event.rawEventCode ?? null,
+      event.eventType ?? null,
+    ];
 
-    if (insertResult.rowCount === 0) return 'duplicate';
+    if (isMysql()) {
+      const logId = randomUUID();
+      const insertResult = await query(
+        `INSERT INTO device_attendance_logs
+          (id, device_id, external_id, employee_id, employee_name, check_type, event_time,
+           raw_data, source, auth_method, card_number, raw_event_code, event_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON DUPLICATE KEY UPDATE id = id`,
+        [logId, ...logParams],
+      );
+      // MySQL: affectedRows 1 = insert; 0 = duplicate with no-op update.
+      if (insertResult.rowCount === 0) return 'duplicate';
+    } else {
+      const insertResult = await query(
+        `INSERT INTO device_attendance_logs
+          (device_id, external_id, employee_id, employee_name, check_type, event_time,
+           raw_data, source, auth_method, card_number, raw_event_code, event_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         ON CONFLICT (device_id, external_id) DO NOTHING
+         RETURNING id`,
+        logParams,
+      );
+
+      if (insertResult.rowCount === 0) return 'duplicate';
+    }
 
     await applyAttendanceRule(deviceId, event);
 
@@ -121,6 +139,19 @@ async function applyAttendanceRule(deviceId: string, event: DeviceAttendanceEven
   const timeStr = localTimeStr(event.eventTime);
 
   if (event.checkType === 'check_in') {
+    if (isMysql()) {
+      await query(
+        `INSERT INTO attendance (id, employee_id, date, check_in, status, source_device_id, location, source)
+         VALUES ($1, $2, $3, $4, 'present', $5, 'Device Sync', 'hikvision-device')
+         ON DUPLICATE KEY UPDATE
+           check_in = COALESCE(attendance.check_in, VALUES(check_in)),
+           source = 'hikvision-device',
+           source_device_id = VALUES(source_device_id),
+           updated_at = NOW()`,
+        [randomUUID(), event.employeeId, dateStr, timeStr, deviceId],
+      );
+      return;
+    }
     await query(
       `INSERT INTO attendance (employee_id, date, check_in, status, source_device_id, location, source)
        VALUES ($1, $2, $3, 'present', $4, 'Device Sync', 'hikvision-device')
@@ -135,6 +166,19 @@ async function applyAttendanceRule(deviceId: string, event: DeviceAttendanceEven
   }
 
   if (event.checkType === 'check_out') {
+    if (isMysql()) {
+      await query(
+        `INSERT INTO attendance (id, employee_id, date, check_out, status, source_device_id, location, source)
+         VALUES ($1, $2, $3, $4, 'present', $5, 'Device Sync', 'hikvision-device')
+         ON DUPLICATE KEY UPDATE
+           check_out = VALUES(check_out),
+           source = 'hikvision-device',
+           source_device_id = VALUES(source_device_id),
+           updated_at = NOW()`,
+        [randomUUID(), event.employeeId, dateStr, timeStr, deviceId],
+      );
+      return;
+    }
     await query(
       `INSERT INTO attendance (employee_id, date, check_out, status, source_device_id, location, source)
        VALUES ($1, $2, $3, 'present', $4, 'Device Sync', 'hikvision-device')
@@ -155,15 +199,39 @@ async function applyAttendanceRule(deviceId: string, event: DeviceAttendanceEven
   );
 
   if (!existing.rows[0]?.check_in) {
+    if (isMysql()) {
+      await query(
+        `INSERT INTO attendance (id, employee_id, date, check_in, status, source_device_id, location, source, remarks)
+         VALUES ($1, $2, $3, $4, 'present', $5, 'Device Sync', 'hikvision-device', $6)
+         ON DUPLICATE KEY UPDATE
+           check_in = COALESCE(attendance.check_in, VALUES(check_in)),
+           source = 'hikvision-device',
+           source_device_id = VALUES(source_device_id),
+           updated_at = NOW()`,
+        [randomUUID(), event.employeeId, dateStr, timeStr, deviceId, null],
+      );
+    } else {
+      await query(
+        `INSERT INTO attendance (employee_id, date, check_in, status, source_device_id, location, source, remarks)
+         VALUES ($1, $2, $3, 'present', $4, 'Device Sync', 'hikvision-device', $5)
+         ON CONFLICT (employee_id, date) DO UPDATE SET
+           check_in = COALESCE(attendance.check_in, EXCLUDED.check_in),
+           source = 'hikvision-device',
+           source_device_id = EXCLUDED.source_device_id,
+           updated_at = NOW()`,
+        [event.employeeId, dateStr, timeStr, deviceId, null],
+      );
+    }
+  } else if (isMysql()) {
     await query(
-      `INSERT INTO attendance (employee_id, date, check_in, status, source_device_id, location, source, remarks)
-       VALUES ($1, $2, $3, 'present', $4, 'Device Sync', 'hikvision-device', $5)
-       ON CONFLICT (employee_id, date) DO UPDATE SET
-         check_in = COALESCE(attendance.check_in, EXCLUDED.check_in),
+      `INSERT INTO attendance (id, employee_id, date, check_out, status, source_device_id, location, source, remarks)
+       VALUES ($1, $2, $3, $4, 'present', $5, 'Device Sync', 'hikvision-device', $6)
+       ON DUPLICATE KEY UPDATE
+         check_out = VALUES(check_out),
          source = 'hikvision-device',
-         source_device_id = EXCLUDED.source_device_id,
+         source_device_id = VALUES(source_device_id),
          updated_at = NOW()`,
-      [event.employeeId, dateStr, timeStr, deviceId, null],
+      [randomUUID(), event.employeeId, dateStr, timeStr, deviceId, null],
     );
   } else {
     await query(

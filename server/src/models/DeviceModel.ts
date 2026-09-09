@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { query } from '../db/pool.js';
+import { isMysql } from '../db/dialect.js';
 import {
   memoryStore,
   createMemoryRecord,
@@ -58,7 +60,7 @@ function cacheLocalDevice(record: DeviceRecord | null | undefined): void {
 }
 
 /**
- * InsForge HTTP still works when the Postgres TCP pool is down.
+ * OBSOLETE / migration fallback — InsForge HTTP when the primary DB pool is down.
  * Used so auto-reconnect can recover saved machine credentials.
  */
 async function loadDeviceFromInsForge(): Promise<DeviceRecord | null> {
@@ -171,12 +173,12 @@ export async function saveDevice(payload: DeviceConnectPayload): Promise<DeviceP
 
   try {
     if (existing) {
-      const result = await query<DeviceRecord>(
+      await query(
         `UPDATE devices SET
           name = $1, brand = $2, model = $3, ip_address = $4, port = $5,
           username = $6, password_encrypted = $7, location = $8, description = $9,
           connection_mode = $10, updated_at = NOW()
-         WHERE id = $11 RETURNING *`,
+         WHERE id = $11`,
         [
           payload.name, payload.brand, payload.model ?? null, payload.ipAddress, payload.port,
           username, encrypted, payload.location ?? null, payload.description ?? null,
@@ -184,6 +186,24 @@ export async function saveDevice(payload: DeviceConnectPayload): Promise<DeviceP
           existing.id,
         ],
       );
+      const result = await query<DeviceRecord>('SELECT * FROM devices WHERE id = $1', [existing.id]);
+      cacheLocalDevice(result.rows[0]);
+      return toPublic(result.rows[0]);
+    }
+
+    const newId = isMysql() ? randomUUID() : null;
+    if (isMysql()) {
+      await query(
+        `INSERT INTO devices (id, name, brand, model, ip_address, port, username, password_encrypted, location, description, connection_mode)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          newId,
+          payload.name, payload.brand, payload.model ?? null, payload.ipAddress, payload.port,
+          username, encrypted, payload.location ?? null, payload.description ?? null,
+          connectionMode,
+        ],
+      );
+      const result = await query<DeviceRecord>('SELECT * FROM devices WHERE id = $1', [newId]);
       cacheLocalDevice(result.rows[0]);
       return toPublic(result.rows[0]);
     }
@@ -228,11 +248,12 @@ export async function updateSyncSettings(
     return memoryStore.getDevicePublic()!;
   }
   try {
-    const result = await query<DeviceRecord>(
+    await query(
       `UPDATE devices SET auto_sync_enabled = $1, sync_interval_seconds = $2, updated_at = NOW()
-       WHERE id = $3 RETURNING *`,
+       WHERE id = $3`,
       [autoSyncEnabled, syncIntervalSeconds, id],
     );
+    const result = await query<DeviceRecord>('SELECT * FROM devices WHERE id = $1', [id]);
     cacheLocalDevice(result.rows[0]);
     return toPublic(result.rows[0]);
   } catch {
@@ -439,10 +460,11 @@ export async function regenerateConnectorToken(): Promise<{ token: string; devic
     return { token, device: pub };
   }
 
-  const result = await query<DeviceRecord>(
-    `UPDATE devices SET connector_token_hash = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+  await query(
+    `UPDATE devices SET connector_token_hash = $1, updated_at = NOW() WHERE id = $2`,
     [hash, device.id],
   );
+  const result = await query<DeviceRecord>('SELECT * FROM devices WHERE id = $1', [device.id]);
   return { token, device: toPublic(result.rows[0]) };
 }
 
@@ -453,10 +475,11 @@ export async function updateConnectionMode(id: string, mode: ConnectionMode): Pr
     if (!pub) throw new Error('No device configured');
     return pub;
   }
-  const result = await query<DeviceRecord>(
-    `UPDATE devices SET connection_mode = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+  await query(
+    `UPDATE devices SET connection_mode = $1, updated_at = NOW() WHERE id = $2`,
     [mode, id],
   );
+  const result = await query<DeviceRecord>('SELECT * FROM devices WHERE id = $1', [id]);
   return toPublic(result.rows[0]);
 }
 
@@ -505,7 +528,7 @@ export async function updateGatewayHeartbeat(payload: GatewayHeartbeatPayload): 
     return { pendingCommand: pending };
   }
 
-  const result = await query<DeviceRecord>(
+  await query(
     `UPDATE devices SET
       status = $1,
       gateway_status = $2,
@@ -519,7 +542,7 @@ export async function updateGatewayHeartbeat(payload: GatewayHeartbeatPayload): 
       mac_address = COALESCE($7, mac_address),
       device_time = COALESCE($8, device_time),
       updated_at = NOW()
-     WHERE id = $9 RETURNING pending_command`,
+     WHERE id = $9`,
     [
       newStatus,
       payload.gatewayStatus,
@@ -533,13 +556,21 @@ export async function updateGatewayHeartbeat(payload: GatewayHeartbeatPayload): 
     ],
   );
 
-  const pending = result.rows[0]?.pending_command ?? null;
+  const result = await query<DeviceRecord>('SELECT pending_command FROM devices WHERE id = $1', [device.id]);
+  let pending = result.rows[0]?.pending_command ?? null;
+  if (typeof pending === 'string') {
+    try {
+      pending = JSON.parse(pending) as Record<string, unknown>;
+    } catch {
+      /* keep raw */
+    }
+  }
   if (pending) {
     // Clear pending command so it is not issued twice
     await query('UPDATE devices SET pending_command = NULL WHERE id = $1', [device.id]);
   }
 
-  return { pendingCommand: pending };
+  return { pendingCommand: pending as Record<string, unknown> | null };
 }
 
 export async function setPendingCommand(command: { id: string; type: 'test' | 'sync'; createdAt: number }): Promise<void> {

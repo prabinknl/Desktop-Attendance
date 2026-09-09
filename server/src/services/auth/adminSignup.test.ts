@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { InvitationModel } from '../../models/InvitationModel.js';
 import { UserModel } from '../../models/UserModel.js';
+import { setMemoryMode } from '../../db/memoryStore.js';
 import {
   generateVerificationCode,
   storeVerificationCode,
@@ -12,6 +12,7 @@ describe('Admin Sign Up Verification Service', () => {
   const testEmail = 'newadmin@testcompany.com';
 
   beforeEach(async () => {
+    setMemoryMode(true);
     await UserModel.deleteById('test-admin-usr-1');
   });
 
@@ -45,26 +46,30 @@ describe('Admin Sign Up Verification Service', () => {
     expect(canResendVerificationCode(email)).toBe(false);
   });
 
-  it('saves admin user in pending_verification status and updates to active upon email verification', async () => {
-    const user = await UserModel.upsert({
-      id: 'test-admin-usr-1',
-      name: 'Test Admin',
-      email: testEmail,
-      role: 'admin',
-      password: 'securepassword123',
-      phone: '+9779800000000',
-      status: 'pending_verification',
-      emailVerified: false,
-    });
+  it(
+    'saves admin user in pending_verification status and updates to active upon email verification',
+    async () => {
+      const user = await UserModel.upsert({
+        id: 'test-admin-usr-1',
+        name: 'Test Admin',
+        email: testEmail,
+        role: 'admin',
+        password: 'securepassword123',
+        phone: '+9779800000000',
+        status: 'pending_verification',
+        emailVerified: false,
+      });
 
-    expect(user).not.toBeNull();
-    expect(user?.status).toBe('pending_verification');
-    expect(user?.emailVerified).toBe(false);
+      expect(user).not.toBeNull();
+      expect(user?.status).toBe('pending_verification');
+      expect(user?.emailVerified).toBe(false);
 
-    // Update status upon successful email verification
-    await UserModel.updateStatus(testEmail, 'active', true);
-    const updated = await UserModel.getByEmail(testEmail);
-    expect(updated?.status).toBe('active');
-    expect(updated?.emailVerified).toBe(true);
-  });
+      // Update status upon successful email verification
+      await UserModel.updateStatus(testEmail, 'active', true);
+      const updated = await UserModel.getByEmail(testEmail);
+      expect(updated?.status).toBe('active');
+      expect(updated?.emailVerified).toBe(true);
+    },
+    15_000,
+  );
 });

@@ -1,6 +1,9 @@
-import { getInsforgeBrowserClient, isInsforgeBrowserConfigured } from './insforgeClient';
+import { getInsforgeBrowserClient, useInsforgeOtp } from './insforgeClient';
 
 const TABLE = 'client_admin_invitations';
+
+const BACKEND_ONLY_MESSAGE =
+  'Use the Hostinger backend API for invitations. InsForge OTP is disabled unless VITE_USE_INSFORGE_OTP=true.';
 
 export interface ClientAdminInviteInput {
   email: string;
@@ -68,7 +71,7 @@ function otpErrorMessage(error: unknown): string {
 }
 
 async function persistInvitation(input: ClientAdminInviteInput) {
-  if (!isInsforgeBrowserConfigured()) return null;
+  if (!useInsforgeOtp()) return null;
 
   const client = getInsforgeBrowserClient();
   const email = normalizeEmail(input.email);
@@ -115,14 +118,15 @@ async function persistInvitation(input: ClientAdminInviteInput) {
   return row;
 }
 
+/** OBSOLETE primary path — authApi should deliver invites via Hostinger SMTP/API. */
 export async function deliverClientAdminInviteEmail(
   input: ClientAdminInviteInput,
 ): Promise<ClientAdminInviteDeliveryResult> {
-  if (!isInsforgeBrowserConfigured()) {
+  if (!useInsforgeOtp()) {
     return {
       success: false,
       emailSent: false,
-      message: 'Email service is not configured, so the 6-digit code could not be sent.',
+      message: BACKEND_ONLY_MESSAGE,
     };
   }
 
@@ -159,8 +163,8 @@ export async function verifyClientAdminInviteCode(input: {
   if (!phone) {
     return { success: false, message: 'Enter the mobile number registered with this invitation.' };
   }
-  if (!isInsforgeBrowserConfigured()) {
-    return { success: false, message: 'Invitation verification service is not configured.' };
+  if (!useInsforgeOtp()) {
+    return { success: false, message: BACKEND_ONLY_MESSAGE };
   }
 
   const client = getInsforgeBrowserClient();
@@ -221,7 +225,7 @@ export async function verifyClientAdminInviteCode(input: {
 }
 
 export async function markClientAdminInviteAccepted(email: string) {
-  if (!isInsforgeBrowserConfigured()) return;
+  if (!useInsforgeOtp()) return;
   const client = getInsforgeBrowserClient();
   const { error } = await client.database
     .from(TABLE)

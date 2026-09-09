@@ -4,9 +4,11 @@ interface ImportMetaEnv {
   /** API origin for hosted builds, e.g. https://desktop-attendance.appnep.com/api.
    *  Desktop and local web use /api on the local backend or Vite proxy. Public URL only — not a secret. */
   readonly VITE_API_BASE_URL?: string;
-  /** InsForge backend URL for hosted owner OTP (auth emails). */
+  /** Set true to use legacy InsForge browser OTP during migration. Default: off (Hostinger API). */
+  readonly VITE_USE_INSFORGE_OTP?: string;
+  /** Legacy InsForge backend URL for hosted owner OTP (auth emails). */
   readonly VITE_INSFORGE_URL?: string;
-  /** InsForge anon key for hosted owner OTP. */
+  /** Legacy InsForge anon key for hosted owner OTP. */
   readonly VITE_INSFORGE_ANON_KEY?: string;
   /** Set at Electron UI build time (`vite.config.electron.ts`). */
   readonly VITE_IS_ELECTRON?: string;

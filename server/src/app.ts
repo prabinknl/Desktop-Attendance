@@ -8,6 +8,7 @@ import authRoutes from './routes/authRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
 import coreRoutes from './routes/coreRoutes.js';
 import { env } from './config/env.js';
+import { checkDatabaseConnection, getPoolDriver } from './db/pool.js';
 import { getInsForgeStatus } from './services/insforge/insforgeClient.js';
 
 import { authorizeAccountantPermissions } from './middleware/authMiddleware.js';
@@ -71,6 +72,13 @@ app.get('/api', async (_req, res) => {
 });
 
 app.get('/api/health', async (_req, res) => {
+  let database: 'connected' | 'disconnected' = 'disconnected';
+  try {
+    database = (await checkDatabaseConnection()) ? 'connected' : 'disconnected';
+  } catch {
+    database = 'disconnected';
+  }
+
   let insforge: { enabled: boolean; connected: boolean; message: string } = {
     enabled: false,
     connected: false,
@@ -90,9 +98,12 @@ app.get('/api/health', async (_req, res) => {
     ok: true,
     service: 'attendance-backend',
     status: 'ok',
+    database,
+    dbDriver: getPoolDriver(),
     timestamp: new Date().toISOString(),
     // The frontend hides device settings when the API cannot reach the LAN
     deviceSyncEnabled: env.deviceSyncEnabled,
+    // Legacy InsForge probe — kept during Hostinger MySQL migration.
     insforge,
   });
 });

@@ -189,7 +189,7 @@ function ensureDesktopServerEnv() {
     parsed.ENCRYPTION_KEY = generateEncryptionKey();
   }
   parsed.DEVICE_SYNC_ENABLED = 'true';
-  if (!parsed.DATABASE_URL) {
+  if (!parsed.DATABASE_URL && !parsed.DB_HOST) {
     parsed.USE_MEMORY_STORE = 'true';
   }
 
@@ -201,6 +201,12 @@ function ensureDesktopServerEnv() {
     `DEVICE_SYNC_ENABLED=${parsed.DEVICE_SYNC_ENABLED}`,
     `ENCRYPTION_KEY=${parsed.ENCRYPTION_KEY}`,
   ];
+  if (parsed.DB_HOST) lines.push(`DB_HOST=${parsed.DB_HOST}`);
+  if (parsed.DB_PORT) lines.push(`DB_PORT=${parsed.DB_PORT}`);
+  if (parsed.DB_NAME) lines.push(`DB_NAME=${parsed.DB_NAME}`);
+  if (parsed.DB_USER) lines.push(`DB_USER=${parsed.DB_USER}`);
+  if (parsed.DB_PASSWORD) lines.push(`DB_PASSWORD=${parsed.DB_PASSWORD}`);
+  if (parsed.DB_DRIVER) lines.push(`DB_DRIVER=${parsed.DB_DRIVER}`);
   if (parsed.DATABASE_URL) lines.push(`DATABASE_URL=${parsed.DATABASE_URL}`);
   if (parsed.USE_MEMORY_STORE) lines.push(`USE_MEMORY_STORE=${parsed.USE_MEMORY_STORE}`);
   if (parsed.INSFORGE_BASE_URL) lines.push(`INSFORGE_BASE_URL=${parsed.INSFORGE_BASE_URL}`);
