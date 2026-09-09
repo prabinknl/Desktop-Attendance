@@ -55,6 +55,12 @@ export function toMysqlPlaceholders(
   sql: string,
   params: unknown[] = [],
 ): { sql: string; params: unknown[] } {
+  // Some callers (e.g. crudFactory) build SQL with ph(), which already emits
+  // literal '?' for MySQL. Only rewrite when $N placeholders are actually
+  // present — otherwise this would zero out params for already-correct SQL.
+  if (!/\$\d+/.test(sql)) {
+    return { sql, params };
+  }
   const expanded: unknown[] = [];
   const converted = sql.replace(/\$(\d+)/g, (_match, n: string) => {
     const idx = Number(n) - 1;
