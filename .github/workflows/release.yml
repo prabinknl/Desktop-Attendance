@@ -68,6 +68,35 @@ jobs:
       - name: Stage server resources for packaging
         run: node electron/scripts/prepare-server-resources.mjs
 
+      - name: Ensure GitHub Release exists for this tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          # electron-builder uploads the installer, blockmap, and latest.yml as
+          # separate requests, each of which finds-or-creates the release for
+          # this tag when --publish always runs. With no release yet, two of
+          # those requests have raced and each created their own release
+          # object, splitting the assets across two "vX.Y.Z" releases (seen on
+          # v1.0.13 — GitHub allowed two releases with the same tag_name).
+          # Creating the release synchronously here, before electron-builder
+          # starts, means every later find-or-create call finds the one
+          # release that already exists instead of racing to create it.
+          # Created as a draft so it never becomes GitHub's "latest" release
+          # while still empty — the "Publish GitHub Release" step below
+          # undrafts it once all assets are verified present. electron-builder
+          # reuses an existing release regardless of draft state; releaseType
+          # only affects what it does when it has to create one itself.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists — reusing it."
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --draft \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "Attendance Desktop ${GITHUB_REF_NAME}"
+            echo "Created draft release ${GITHUB_REF_NAME}."
+          fi
+
       - name: Build & Publish Windows Desktop Release
         shell: bash
         env:
