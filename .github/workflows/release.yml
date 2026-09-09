@@ -97,20 +97,19 @@ jobs:
             echo "Created draft release ${GITHUB_REF_NAME}."
           fi
 
-      - name: Build & Publish Windows Desktop Release
+      - name: Build Windows Desktop Release
         shell: bash
         env:
-          # electron-builder reads GH_TOKEN for GitHub Releases publishing.
-          # GITHUB_TOKEN is automatically provided by GitHub Actions (no setup needed).
-          # Optionally set a GH_TOKEN secret (PAT) in repo Settings → Secrets if you
-          # need extra permissions (e.g. cross-repo releases), but it is NOT required.
+          # Kept for parity with other release steps. Publishing is handled below
+          # by gh release upload to avoid electron-builder release creation races.
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
         run: |
-          # Use the local electron-builder CLI to avoid npx download race conditions.
+          # Build only. Uploads are done in a single gh call below so one release
+          # gets all assets and duplicate release creation races are avoided.
           node node_modules/electron-builder/cli.js \
             --win \
             --x64 \
-            --publish always
+            --publish never
 
       - name: Create stable installer filename
         shell: bash
@@ -122,12 +121,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
         run: |
           PKG_VERSION="$(node -p "require('./package.json').version")"
-          # electron-builder should already have uploaded the versioned installer
-          # and latest.yml. Re-upload the blockmap (v1.0.10 omitted it) and add
-          # the stable website filename. --clobber is safe if they already exist.
+          # Upload all updater + installer assets in one place to avoid split
+          # assets across duplicate releases created by parallel publish attempts.
           gh release upload "${GITHUB_REF_NAME}" \
             "release/Attendance-Desktop-Setup.exe" \
+            "release/Attendance.Desktop.Setup.${PKG_VERSION}.exe" \
             "release/Attendance.Desktop.Setup.${PKG_VERSION}.exe.blockmap" \
+            "release/latest.yml" \
             --clobber
 
       - name: Verify release assets exist
