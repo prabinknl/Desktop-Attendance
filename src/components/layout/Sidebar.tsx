@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -9,6 +9,7 @@ import {
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useDeviceSyncAvailable } from '../../hooks/useDeviceSyncAvailable';
+import { FALLBACK_APP_VERSION, resolveAppVersion } from '../../lib/appVersion';
 import { cn, getInitials } from '../../lib/utils';
 import AddClientModal from '../AddClientModal';
 
@@ -78,6 +79,17 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const navigate = useNavigate();
   const { available: deviceSyncAvailable, loading: deviceProbeLoading } = useDeviceSyncAvailable();
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState(FALLBACK_APP_VERSION);
+
+  useEffect(() => {
+    let cancelled = false;
+    resolveAppVersion().then((version) => {
+      if (!cancelled && version) setAppVersion(version);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const isOwner = hasRole('owner') || user?.role === 'owner';
   const isEmployee = hasRole('employee');
@@ -138,35 +150,47 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
                  border-r border-slate-200 dark:border-slate-800
                  overflow-hidden select-none"
     >
-      {/* ── Logo ─────────────────────────────────── */}
-      <div className="flex items-center h-16 px-4 border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
-        <div className="flex items-center gap-2 overflow-hidden min-w-0 flex-1">
-          {collapsed ? (
-            <img
-              src="/images/logo-emblem.png"
-              alt="PACE"
-              className="flex-shrink-0 w-9 h-9 object-contain"
-            />
-          ) : (
-            <img
-              src="/images/logo-with-name.png"
-              alt="PACE Consultant (P.) Ltd."
-              className="h-10 w-auto max-w-[160px] object-contain object-left"
-            />
-          )}
-        </div>
+      {/* ── Logo + installed version ───────────────── */}
+      <div className="flex flex-col border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
+        <div className="flex items-center h-16 px-4">
+          <div className="flex items-center gap-2 overflow-hidden min-w-0 flex-1">
+            {collapsed ? (
+              <img
+                src="/images/logo-emblem.png"
+                alt="PACE"
+                className="flex-shrink-0 w-9 h-9 object-contain"
+              />
+            ) : (
+              <img
+                src="/images/logo-with-name.png"
+                alt="PACE Consultant (P.) Ltd."
+                className="h-10 w-auto max-w-[160px] object-contain object-left"
+              />
+            )}
+          </div>
 
-        {/* Toggle button */}
-        <button
-          onClick={onToggle}
+          {/* Toggle button */}
+          <button
+            onClick={onToggle}
+            className={cn(
+              'ml-auto flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center',
+              'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300',
+              'hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors'
+            )}
+          >
+            {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+          </button>
+        </div>
+        <div
           className={cn(
-            'ml-auto flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center',
-            'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300',
-            'hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors'
+            'px-4 pb-3 text-[11px] leading-none font-medium tabular-nums',
+            'text-slate-400 dark:text-slate-500 select-text',
+            collapsed ? 'text-center' : 'text-left',
           )}
+          title={`Attendance Desktop Version ${appVersion}`}
         >
-          {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
-        </button>
+          Version {appVersion}
+        </div>
       </div>
 
       {/* ── Navigation ──────────────────────────── */}

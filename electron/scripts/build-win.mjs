@@ -1,7 +1,8 @@
 /**
  * Runs electron-builder. Prefers the project `release/` folder so installers
  * stay next to the repo. Falls back to %LOCALAPPDATA%\AttendanceDesktop\release
- * when OneDrive locks the project folder (EPERM/EBUSY on win-unpacked).
+ * (or C:\temp) when OneDrive locks the project folder (EPERM/EBUSY on win-unpacked).
+ * Always copies installer artifacts back into the project `release/` folder.
  */
 import path from 'path';
 import os from 'os';
@@ -22,7 +23,7 @@ if (publishIdx !== -1) {
 }
 
 const preferredOut = path.join(root, 'release');
-const fallbackOut = path.join('C:', 'temp', 'AttendanceDesktop-release');
+const fallbackOut = path.join(process.env.LOCALAPPDATA || 'C:\\temp', 'AttendanceDesktop', 'release');
 
 function canWrite(dir) {
   try {
@@ -63,20 +64,70 @@ function tryCleanWinUnpacked(dir) {
   return true;
 }
 
+function copyInstallerArtifacts(fromDir, toDir) {
+  fs.mkdirSync(toDir, { recursive: true });
+  const wanted = new Set([
+    'latest.yml',
+    'builder-debug.yml',
+    'builder-effective-config.yaml',
+  ]);
+  let copied = 0;
+  for (const item of fs.readdirSync(fromDir)) {
+    if (item === 'win-unpacked' || item === 'win-unpacked.tmp') continue;
+    const src = path.join(fromDir, item);
+    if (!fs.statSync(src).isFile()) continue;
+    const isInstaller =
+      /^Attendance[-.]Desktop[-.]Setup/i.test(item) ||
+      item.endsWith('.blockmap') ||
+      wanted.has(item) ||
+      item === 'Attendance-Desktop-Setup.exe';
+    if (!isInstaller) continue;
+    fs.copyFileSync(src, path.join(toDir, item));
+    copied += 1;
+  }
+  return copied;
+}
+
 tryKillStaleProcesses();
 
 const isOneDrive = /onedrive/i.test(root);
-let outDir = !isOneDrive && canWrite(preferredOut) ? preferredOut : fallbackOut;
+let outDir = preferredOut;
+
+if (!canWrite(preferredOut)) {
+  outDir = fallbackOut;
+  console.warn(
+    `[electron:build-win] Project release/ is not writable; using fallback: ${outDir}`,
+  );
+} else if (isOneDrive) {
+  // Prefer project release/ when writable so the folder is not left empty.
+  // Fall back only if win-unpacked cleanup fails (common OneDrive lock).
+  console.log(
+    '[electron:build-win] Project is under OneDrive; using release/ while writable.',
+  );
+}
+
 fs.mkdirSync(outDir, { recursive: true });
 
 if (!tryCleanWinUnpacked(outDir)) {
   tryKillStaleProcesses();
-  // Brief delay to allow OS file handles to release
   spawnSync('powershell.exe', ['-Command', 'Start-Sleep -Milliseconds 1000'], { stdio: 'ignore' });
   if (!tryCleanWinUnpacked(outDir)) {
-    outDir = path.join(os.tmpdir(), `AttendanceDesktop-build-${Date.now()}`);
-    fs.mkdirSync(outDir, { recursive: true });
-    console.warn(`[electron:build-win] Previous build folder was locked; using clean target: ${outDir}`);
+    if (outDir === preferredOut) {
+      outDir = fallbackOut;
+      fs.mkdirSync(outDir, { recursive: true });
+      console.warn(
+        `[electron:build-win] win-unpacked locked under OneDrive; using fallback: ${outDir}`,
+      );
+      if (!tryCleanWinUnpacked(outDir)) {
+        outDir = path.join(os.tmpdir(), `AttendanceDesktop-build-${Date.now()}`);
+        fs.mkdirSync(outDir, { recursive: true });
+        console.warn(`[electron:build-win] Using clean temp target: ${outDir}`);
+      }
+    } else {
+      outDir = path.join(os.tmpdir(), `AttendanceDesktop-build-${Date.now()}`);
+      fs.mkdirSync(outDir, { recursive: true });
+      console.warn(`[electron:build-win] Using clean temp target: ${outDir}`);
+    }
   }
 }
 
@@ -84,6 +135,8 @@ console.log(`[electron:build-win] output -> ${outDir}`);
 
 // Keep package.json artifactName (Attendance.Desktop.Setup.${version}.${ext}) so
 // electron-updater latest.yml continues to reference the versioned installer.
+// Desktop/Start Menu shortcut name includes version via nsis.shortcutName
+// ("Attendance Desktop v${version}" in package.json).
 const builderArgs = ['--win', '--x64', `--config.directories.output=${outDir}`];
 if (dirMode) builderArgs.unshift('--dir');
 else builderArgs.push(`--publish=${publishMode}`);
@@ -161,21 +214,18 @@ if (!dirMode) {
   }
 }
 
-// Copy built artifacts back to project release directory if outDir was fallback
+// Always mirror installer artifacts into the project release/ folder.
 if (outDir !== preferredOut) {
-  fs.mkdirSync(preferredOut, { recursive: true });
   try {
-    for (const item of fs.readdirSync(outDir)) {
-      if (item === 'win-unpacked' || item === 'win-unpacked.tmp') continue;
-      const src = path.join(outDir, item);
-      const dest = path.join(preferredOut, item);
-      if (fs.statSync(src).isFile()) {
-        fs.copyFileSync(src, dest);
-      }
-    }
-    console.log(`[electron:build-win] Copied installer artifacts to ${preferredOut}`);
+    const n = copyInstallerArtifacts(outDir, preferredOut);
+    console.log(
+      `[electron:build-win] Copied ${n} installer artifact(s) to ${preferredOut}`,
+    );
   } catch (err) {
-    console.warn(`[electron:build-win] Note: Could not copy installer to project release folder: ${err.message}`);
+    console.warn(
+      `[electron:build-win] Could not copy installer to project release folder: ${err.message}`,
+    );
+    console.warn(`[electron:build-win] Artifacts remain at: ${outDir}`);
   }
 }
 

@@ -913,6 +913,16 @@ async function bootstrap() {
   try {
     ensureLogsDir();
     setupAutoUpdater();
+    // Start the GitHub update check shortly after ready — do not wait for API boot.
+    setTimeout(() => {
+      try {
+        checkAutoUpdateOnLaunch();
+      } catch (err) {
+        appendStartupLog(
+          `[AutoUpdater deferred error] ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }, 1500);
     await ensureApiServer();
     const startUrl = await resolveStartUrl();
     appendStartupLog(`[Electron] UI start URL: ${startUrl}`);

@@ -1,5 +1,13 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+
+// Same package.json version electron-builder stamps into the installer, so the
+// version shown in the UI always matches the version that was released.
+const pkgVersion = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
+).version
 
 /**
  * Electron-only frontend build.
@@ -47,5 +55,6 @@ export default defineConfig({
   define: {
     'import.meta.env.VITE_API_BASE_URL': JSON.stringify('/api'),
     'import.meta.env.VITE_IS_ELECTRON': JSON.stringify('true'),
+    __APP_VERSION__: JSON.stringify(pkgVersion),
   },
 })

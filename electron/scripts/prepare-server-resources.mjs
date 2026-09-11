@@ -52,6 +52,19 @@ if (fs.existsSync(path.join(serverSrc, '.env.example'))) {
   fs.copyFileSync(path.join(serverSrc, '.env.example'), path.join(outDir, '.env.example'));
 }
 
+// MySQL schema must ship with the installer — migrate.ts reads it at runtime
+// to create tables on first connection to a fresh Hostinger database.
+const schemaSrc = path.join(root, 'database', 'hostinger-mysql-schema.sql');
+if (fs.existsSync(schemaSrc)) {
+  const schemaDestDir = path.join(outDir, 'database');
+  fs.mkdirSync(schemaDestDir, { recursive: true });
+  fs.copyFileSync(schemaSrc, path.join(schemaDestDir, 'hostinger-mysql-schema.sql'));
+  console.log(`[prepare-server-resources] Copied MySQL schema -> ${schemaDestDir}`);
+} else {
+  console.error(`[prepare-server-resources] FATAL: MySQL schema not found at ${schemaSrc}`);
+  process.exit(1);
+}
+
 // Packaged Electron MUST use dist-electron/ which is built with the correct
 // API URL configuration (relative /api for local backend, not production API).
 // dist/ is for the published website and uses different Vite config.

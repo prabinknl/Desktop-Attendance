@@ -1,9 +1,20 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+
+// Single source of truth for the app version: package.json, the same field
+// electron-builder and app.getVersion() read. Never duplicate it in the UI.
+const pkgVersion = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
+).version
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkgVersion),
+  },
   // Avoid scanning build artifacts (release/, dist-electron/) — OneDrive can leave
   // those HTML files unreadable and crash Vite's dependency optimizer.
   optimizeDeps: {

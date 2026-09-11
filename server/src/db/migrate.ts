@@ -8,6 +8,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function resolveMysqlSchemaPath(): string | null {
   const candidates = [
+    // Packaged Electron: resources/server/database/hostinger-mysql-schema.sql
+    // (__dirname is resources/server/dist/db at runtime).
+    path.resolve(__dirname, '../../database/hostinger-mysql-schema.sql'),
     path.resolve(__dirname, '../../../database/hostinger-mysql-schema.sql'),
     path.resolve(__dirname, '../../../../database/hostinger-mysql-schema.sql'),
     path.resolve(process.cwd(), 'database/hostinger-mysql-schema.sql'),

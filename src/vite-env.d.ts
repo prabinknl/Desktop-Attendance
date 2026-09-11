@@ -18,6 +18,9 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
+/** App version stamped from package.json at build time by both Vite configs. */
+declare const __APP_VERSION__: string;
+
 interface UpdateProgress {
   bytesPerSecond: number;
   percent: number;

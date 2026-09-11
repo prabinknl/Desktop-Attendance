@@ -22,6 +22,7 @@ import {
   type EmployeeOfficeOverride,
 } from '../../lib/appSettings';
 import type { Employee } from '../../types';
+import { FALLBACK_APP_VERSION, resolveAppVersion } from '../../lib/appVersion';
 import { cn, formatDate } from '../../lib/utils';
 import type { Holiday } from '../../types';
 
@@ -77,7 +78,7 @@ export default function SettingsPage() {
     setHolidays(list.sort((a, b) => a.date.localeCompare(b.date)));
   };
 
-  const [appVersion, setAppVersion] = useState<string>('1.0.0');
+  const [appVersion, setAppVersion] = useState(FALLBACK_APP_VERSION);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateStatusMsg, setUpdateStatusMsg] = useState<string | null>(null);
 
@@ -90,11 +91,13 @@ export default function SettingsPage() {
     setNotifications(saved.notifications);
     setEmployeeOfficeHours(saved.employeeOfficeHours);
 
-    if (window.attendanceDesktop?.getAppVersion) {
-      window.attendanceDesktop.getAppVersion().then((v) => {
-        if (v) setAppVersion(v);
-      });
-    }
+    let cancelled = false;
+    resolveAppVersion().then((version) => {
+      if (!cancelled && version) setAppVersion(version);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleCheckForUpdates = async () => {

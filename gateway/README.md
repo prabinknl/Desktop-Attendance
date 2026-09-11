@@ -24,8 +24,8 @@ It authenticates with the Hikvision machine via ISAPI Digest Auth, polls attenda
    HIKVISION_PASSWORD=your_device_web_password
 
    # Backend API Configuration
-   SERVER_URL=http://localhost:3001/api
-   GATEWAY_SECRET=attendence_local_gateway_secret_2026
+   SERVER_URL=https://desktop-attendance.appnep.com/api
+   CONNECTOR_TOKEN=copy_the_token_generated_in_Device_Settings
    ```
 
 4. Start:
@@ -58,8 +58,8 @@ It authenticates with the Hikvision machine via ISAPI Digest Auth, polls attenda
 | `HIKVISION_PORT` | No | `80` | Device port |
 | `HIKVISION_USERNAME` | Yes | `admin` | Device login username |
 | `HIKVISION_PASSWORD` | Yes | — | Device login password |
-| `SERVER_URL` | Yes | `http://localhost:3001/api` | Backend API URL |
-| `CONNECTOR_TOKEN` | Recommended | — | Per-device token from Device Settings |
-| `GATEWAY_SECRET` | No | — | Legacy shared secret |
+| `SERVER_URL` | Yes | `https://desktop-attendance.appnep.com/api` | Backend API URL; use `http://localhost:3001/api` only for local development |
+| `CONNECTOR_TOKEN` | Yes | — | Per-device token from Device Settings → Generate connector token |
+| `GATEWAY_SECRET` | No | — | Legacy shared secret for older deployments |
 | `SYNC_INTERVAL_SECONDS` | No | `30` | Polling interval |
 | `HEARTBEAT_INTERVAL_SECONDS` | No | `30` | Heartbeat interval |

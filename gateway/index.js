@@ -36,12 +36,21 @@ const config = {
   port: Number(process.env.HIKVISION_PORT || 80),
   username: process.env.HIKVISION_USERNAME || 'admin',
   password: process.env.HIKVISION_PASSWORD || '',
-  apiUrl: (process.env.SERVER_URL || 'http://localhost:3001/api').replace(/\/$/, ''),
+  apiUrl: (process.env.SERVER_URL || 'https://desktop-attendance.appnep.com/api').replace(/\/$/, ''),
   connectorToken:
-    process.env.CONNECTOR_TOKEN || process.env.GATEWAY_SECRET || 'default_gateway_secret',
+    process.env.CONNECTOR_TOKEN || process.env.GATEWAY_SECRET || '',
   syncIntervalMs: Number(process.env.SYNC_INTERVAL_SECONDS || 30) * 1000,
   heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_SECONDS || 30) * 1000,
 };
+
+if (!config.connectorToken) {
+  console.error('[Config] CONNECTOR_TOKEN is missing. Generate one in Device Settings before starting the connector.');
+  process.exit(1);
+}
+
+if (/^https?:\/\/localhost(?::|\/)/i.test(config.apiUrl)) {
+  console.warn('[Config] SERVER_URL points to localhost. Use the deployed HTTPS API for Cloud Connector Mode.');
+}
 
 console.log('====================================================');
 console.log(' Hikvision Windows Connector (Cloud Bridge)');
