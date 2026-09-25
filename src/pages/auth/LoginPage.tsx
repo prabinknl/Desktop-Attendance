@@ -12,13 +12,14 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { EmployeeAPI } from '../../data/store';
 import { deviceApi } from '../../api/deviceApi';
 import { authApi } from '../../api/authApi';
+import { describeSmtpFailure } from '../../api/apiErrors';
 import { sendOwnerVerificationCode as requestOwnerVerificationCode, verifyOwnerVerificationCode } from '../../lib/ownerOtp';
 import { markClientAdminInviteAccepted, saveInvitedClientAdminAccount } from '../../lib/clientAdminInvite';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { cn } from '../../lib/utils';
 import type { Employee } from '../../types';
 
-type AuthMode = 'login' | 'signup-admin' | 'signup-employee' | 'signup-accountant' | 'admin-credentials';
+type AuthMode = 'login' | 'signup-admin' | 'signup-employee' | 'signup-accountant' | 'signup-owner' | 'admin-credentials';
 type AdminStep = 'details' | 'verify';
 type PortalRole = 'admin' | 'owner' | 'accountant' | 'employee';
 type AuthAction = 'login' | 'signup';
@@ -64,10 +65,13 @@ const accountantSignupSchema = z.object({
   path: ['confirmPassword'],
 });
 
+const ownerSignupSchema = accountantSignupSchema;
+
 type LoginForm = z.infer<typeof loginSchema>;
 type AdminSignupForm = z.infer<typeof adminSignupSchema>;
 type EmployeeSignupForm = z.infer<typeof employeeSignupSchema>;
 type AccountantSignupForm = z.infer<typeof accountantSignupSchema>;
+type OwnerSignupForm = z.infer<typeof ownerSignupSchema>;
 
 const features = [
   { icon: Clock, title: 'Real-time Tracking', desc: 'Track attendance with precision timing' },
@@ -96,6 +100,7 @@ export default function LoginPage() {
     signupAdmin,
     signupEmployee,
     signupAccountant,
+    signupOwner,
     isEmployeeRegistered,
     getAuthUsers,
   } = useAuth();
@@ -119,6 +124,7 @@ export default function LoginPage() {
   const [otpSendError, setOtpSendError] = useState<string | null>(null);
   const [createdAdmin, setCreatedAdmin] = useState<{ name: string; email: string; password: string } | null>(null);
   const [createdAccountant, setCreatedAccountant] = useState<{ name: string; email: string; password: string } | null>(null);
+  const [createdOwner, setCreatedOwner] = useState<{ name: string; email: string; password: string } | null>(null);
 
   type AdminSignupWorkflowStep = 'verify-invite' | 'details' | 'email-verify';
   const [adminSignupWorkflowStep, setAdminSignupWorkflowStep] = useState<AdminSignupWorkflowStep>('verify-invite');
@@ -159,6 +165,10 @@ export default function LoginPage() {
   const accountantForm = useForm<AccountantSignupForm>({
     resolver: zodResolver(accountantSignupSchema),
   });
+  const ownerForm = useForm<OwnerSignupForm>({
+    resolver: zodResolver(ownerSignupSchema),
+    defaultValues: { name: '', email: '', password: '', confirmPassword: '' },
+  });
 
   const adminUserName = useMemo(() => {
     const admin = getAuthUsers().find((u) => u.role === 'admin');
@@ -173,7 +183,7 @@ export default function LoginPage() {
     if (selectedRole === 'admin' && mode === 'login') {
       loginForm.setValue('email', adminUserName || ALLOWED_ADMIN_EMAIL);
       loginForm.setValue('password', '');
-    } else if (mode === 'login' && selectedRole && selectedRole !== 'admin') {
+    } else if (mode === 'login' && selectedRole && selectedRole !== 'admin' && selectedRole !== 'owner') {
       loginForm.setValue('email', '');
       loginForm.setValue('password', '');
     }
@@ -247,6 +257,7 @@ export default function LoginPage() {
     setOwnerMode('intro');
     setMode('login');
     setAuthAction('login');
+    loginForm.reset({ email: '', password: '', rememberMe: false });
   };
 
   const selectRole = (role: PortalRole) => {
@@ -436,6 +447,7 @@ export default function LoginPage() {
 
     if (action === 'login') {
       setMode('login');
+      if (selectedRole === 'owner') setOwnerMode('intro');
       return;
     }
 
@@ -450,6 +462,13 @@ export default function LoginPage() {
       setSelectedEmployeeId(null);
       setEmployeeSearch('');
       employeeForm.reset({ email: '', password: '', confirmPassword: '' });
+      return;
+    }
+    if (selectedRole === 'owner') {
+      setMode('signup-owner');
+      setOwnerMode('intro');
+      setCreatedOwner(null);
+      ownerForm.reset({ name: '', email: '', password: '', confirmPassword: '' });
       return;
     }
     setMode('signup-accountant');
@@ -532,8 +551,9 @@ export default function LoginPage() {
       });
       if (!res.success || !res.emailSent) {
         const message =
+          describeSmtpFailure(res.message ?? '') ||
           res.message ||
-          'Could not send verification email. Set SMTP_USER and SMTP_PASS in server/.env, then resend.';
+          'Could not send verification email. The online server could not deliver it — try again in a moment.';
         setOtpSendError(message);
         toast('error', 'Email not sent', message);
         return;
@@ -545,7 +565,7 @@ export default function LoginPage() {
       const message =
         err instanceof Error
           ? err.message
-          : 'Could not send verification email. Check SMTP settings and try again.';
+          : 'Could not send verification email. Check this computer’s internet connection and try again.';
       setOtpSendError(message);
       toast('error', 'Could not send code', message);
     } finally {
@@ -710,7 +730,28 @@ export default function LoginPage() {
     }
   };
 
-  const credentialsAccount = createdAdmin ?? createdAccountant;
+  const onOwnerSignup = async (data: OwnerSignupForm) => {
+    setLoading(true);
+    const result = await signupOwner({
+      name: data.name,
+      email: data.email,
+      password: data.password,
+    });
+    setLoading(false);
+    if (result.success) {
+      setCreatedOwner({
+        name: data.name.trim(),
+        email: data.email.trim().toLowerCase(),
+        password: data.password,
+      });
+      setMode('admin-credentials');
+      toast('success', 'Owner account created', 'Save your login details below.');
+    } else {
+      toast('error', 'Sign up failed', result.error);
+    }
+  };
+
+  const credentialsAccount = createdAdmin ?? createdAccountant ?? createdOwner;
 
   const title =
     mode === 'signup-admin'
@@ -721,10 +762,13 @@ export default function LoginPage() {
           : 'Admin Sign Up — Email Verification'
       : mode === 'signup-employee' ? 'Create employee account'
         : mode === 'signup-accountant' ? 'Create accountant account'
-          : mode === 'admin-credentials' ? 'Account ready'
-            : selectedRole
-              ? `Welcome, ${portalRoles.find((r) => r.id === selectedRole)?.label ?? ''}`
-              : 'Welcome back 👋';
+          : mode === 'signup-owner' ? 'Create owner account'
+            : mode === 'admin-credentials' ? 'Account ready'
+              : selectedRole === 'owner'
+                ? ownerMode === 'code' ? 'Enter verification code' : 'Owner Sign In'
+                : selectedRole
+                  ? `Welcome, ${portalRoles.find((r) => r.id === selectedRole)?.label ?? ''}`
+                  : 'Welcome back 👋';
 
   const subtitle =
     mode === 'signup-admin'
@@ -733,16 +777,22 @@ export default function LoginPage() {
         : adminSignupWorkflowStep === 'details'
           ? 'Review invitation details and enter your full name and password.'
           : `Enter the 6-digit verification code sent to ${verifiedInvitation?.invitedEmail || 'your email'}.`
-      : (mode === 'signup-employee' || mode === 'signup-accountant')
-        ? 'Invitation link required from your Administrator.'
-        : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
-          : selectedRole === 'admin'
-            ? 'Sign in to your admin account to continue'
-            : selectedRole
-              ? authAction === 'login'
-                ? 'Sign in to your account to continue'
-                : 'Invitation required to create account'
-              : 'Choose your role to continue';
+      : mode === 'signup-owner'
+        ? 'Create an owner account, then sign in with your user name and password.'
+        : (mode === 'signup-employee' || mode === 'signup-accountant')
+          ? 'Invitation link required from your Administrator.'
+          : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
+            : selectedRole === 'admin'
+              ? 'Sign in to your admin account to continue'
+              : selectedRole === 'owner'
+                ? authAction === 'login'
+                  ? 'Log in with your owner account, or sign up if you do not have one yet.'
+                  : 'Create an owner account, then sign in with your user name and password.'
+                : selectedRole
+                  ? authAction === 'login'
+                    ? 'Sign in to your account to continue'
+                    : 'Invitation required to create account'
+                  : 'Choose your role to continue';
 
   return (
     <div className="min-h-screen flex bg-slate-50 dark:bg-slate-950">
@@ -870,10 +920,10 @@ export default function LoginPage() {
               </button>
             )}
             <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-3">
-              {selectedRole === 'owner' && ownerMode === 'intro' ? 'Owner Sign In' : title}
+              {title}
             </h2>
             <p className="text-slate-500 dark:text-slate-400">
-              {selectedRole === 'owner' && ownerMode === 'intro' ? 'Sign in with the fixed owner account.' : subtitle}
+              {subtitle}
             </p>
           </div>
 
@@ -900,67 +950,8 @@ export default function LoginPage() {
             </div>
           )}
 
-          {selectedRole === 'owner' && ownerMode === 'intro' && (
-            <div className="space-y-5">
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                Verification code will be sent to {formatEmailList(OWNER_SIGNIN_EMAILS)}.
-              </p>
-              <button
-                type="button"
-                onClick={sendOwnerVerificationCode}
-                className="btn-primary w-full py-2.5 text-base font-semibold"
-                disabled={loading}
-              >
-                {loading ? 'Sending...' : 'Send Verification Code'}
-              </button>
-            </div>
-          )}
-
-          {selectedRole === 'owner' && ownerMode === 'code' && (
-            <form
-              className="space-y-5"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void verifyOwnerCode();
-              }}
-            >
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Verification code</label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={ownerCode}
-                  onChange={(e) => setOwnerCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  placeholder="123456"
-                  className="input"
-                  autoFocus
-                />
-                <p className="text-xs text-slate-500 mt-1">Enter the 6-digit code from any of {formatEmailList(OWNER_SIGNIN_EMAILS)}.</p>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={loading || ownerCode.length !== 6}
-                  className="btn-primary flex-1 py-2.5 text-base font-semibold disabled:opacity-60"
-                >
-                  {loading ? 'Verifying...' : 'Verify Code'}
-                </button>
-                <button
-                  type="button"
-                  onClick={sendOwnerVerificationCode}
-                  disabled={loading || ownerResendSeconds > 0}
-                  className="btn-secondary px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
-                >
-                  {ownerResendSeconds > 0 ? `Resend (${ownerResendSeconds}s)` : 'Resend Code'}
-                </button>
-              </div>
-            </form>
-          )}
-
-          {/* Log in / Sign up — shown after a role is chosen */}
-          {selectedRole && selectedRole !== 'owner' && mode !== 'admin-credentials' && (
+          {/* Log in / Sign up — shown after a role is chosen, including Owner */}
+          {selectedRole && mode !== 'admin-credentials' && ownerMode !== 'code' && (
             <div className="mb-6">
               <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
                 <button
@@ -992,7 +983,7 @@ export default function LoginPage() {
           )}
 
           <AnimatePresence mode="wait">
-            {mode === 'login' && selectedRole && selectedRole !== 'owner' && (
+            {mode === 'login' && selectedRole && !(selectedRole === 'owner' && ownerMode === 'code') && (
               <motion.form
                 key="login"
                 initial={{ opacity: 0, x: 12 }}
@@ -1071,6 +1062,154 @@ export default function LoginPage() {
                       <ArrowRight size={16} />
                     </span>
                   )}
+                </button>
+
+                {selectedRole === 'owner' && (
+                  <div className="pt-2 space-y-3">
+                    <p className="text-center text-xs text-slate-400">or sign in with a verification code</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      A code will be sent to {formatEmailList(OWNER_SIGNIN_EMAILS)}.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={sendOwnerVerificationCode}
+                      className="btn-secondary w-full py-2.5 text-sm font-semibold"
+                      disabled={loading}
+                    >
+                      {loading ? 'Sending...' : 'Send Verification Code'}
+                    </button>
+                  </div>
+                )}
+              </motion.form>
+            )}
+
+            {selectedRole === 'owner' && ownerMode === 'code' && mode === 'login' && (
+              <motion.form
+                key="owner-code"
+                className="space-y-5"
+                initial={{ opacity: 0, x: 12 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -12 }}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void verifyOwnerCode();
+                }}
+              >
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Verification code</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={ownerCode}
+                    onChange={(e) => setOwnerCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="123456"
+                    className="input"
+                    autoFocus
+                  />
+                  <p className="text-xs text-slate-500 mt-1">Enter the 6-digit code from any of {formatEmailList(OWNER_SIGNIN_EMAILS)}.</p>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={loading || ownerCode.length !== 6}
+                    className="btn-primary flex-1 py-2.5 text-base font-semibold disabled:opacity-60"
+                  >
+                    {loading ? 'Verifying...' : 'Verify Code'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={sendOwnerVerificationCode}
+                    disabled={loading || ownerResendSeconds > 0}
+                    className="btn-secondary px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                  >
+                    {ownerResendSeconds > 0 ? `Resend (${ownerResendSeconds}s)` : 'Resend Code'}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOwnerMode('intro')}
+                  className="text-sm text-slate-500 hover:text-slate-800"
+                >
+                  Use user name and password instead
+                </button>
+              </motion.form>
+            )}
+
+            {mode === 'signup-owner' && (
+              <motion.form
+                key="signup-owner"
+                initial={{ opacity: 0, x: 12 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -12 }}
+                onSubmit={ownerForm.handleSubmit(onOwnerSignup)}
+                className="space-y-5"
+              >
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Full name</label>
+                  <input
+                    {...ownerForm.register('name')}
+                    type="text"
+                    placeholder="Your name"
+                    className={cn('input', ownerForm.formState.errors.name && 'border-rose-400')}
+                    autoFocus
+                  />
+                  {ownerForm.formState.errors.name && (
+                    <p className="text-xs text-rose-500 mt-1">{ownerForm.formState.errors.name.message}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Email</label>
+                  <input
+                    {...ownerForm.register('email')}
+                    type="email"
+                    placeholder="you@company.com"
+                    autoComplete="email"
+                    className={cn('input', ownerForm.formState.errors.email && 'border-rose-400')}
+                  />
+                  {ownerForm.formState.errors.email && (
+                    <p className="text-xs text-rose-500 mt-1">{ownerForm.formState.errors.email.message}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Password</label>
+                  <div className="relative">
+                    <input
+                      {...ownerForm.register('password')}
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="••••••••"
+                      autoComplete="new-password"
+                      className={cn('input pr-10', ownerForm.formState.errors.password && 'border-rose-400')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                  {ownerForm.formState.errors.password && (
+                    <p className="text-xs text-rose-500 mt-1">{ownerForm.formState.errors.password.message}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Confirm password</label>
+                  <input
+                    {...ownerForm.register('confirmPassword')}
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    autoComplete="new-password"
+                    className={cn('input', ownerForm.formState.errors.confirmPassword && 'border-rose-400')}
+                  />
+                  {ownerForm.formState.errors.confirmPassword && (
+                    <p className="text-xs text-rose-500 mt-1">{ownerForm.formState.errors.confirmPassword.message}</p>
+                  )}
+                </div>
+                <button type="submit" disabled={loading} className="btn-primary w-full py-2.5 text-base font-semibold disabled:opacity-60">
+                  {loading ? 'Creating account...' : 'Create owner account'}
                 </button>
               </motion.form>
             )}
@@ -1353,6 +1492,7 @@ export default function LoginPage() {
                     setMode('login');
                     setCreatedAdmin(null);
                     setCreatedAccountant(null);
+                    setCreatedOwner(null);
                     toast('info', 'Ready to sign in', 'Enter your password to continue.');
                   }}
                 >

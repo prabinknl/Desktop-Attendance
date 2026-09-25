@@ -1,4 +1,6 @@
-import apiClient from './client';
+// Auth, invitations and verification codes require the hosted backend: only it
+// holds the SMTP credentials and the shared database. See ./cloudClient.
+import cloudClient from './cloudClient';
 import type { Invitation } from '../contexts/InvitationContext';
 import {
   logInviteClientDebug,
@@ -28,19 +30,27 @@ interface VerifyCodeResponse {
 /** Accounts as returned by the API — always without the password field. */
 type CloudUser = Omit<import('../types').User, 'password'>;
 
+/** Server refused this login. Do not fall back to a local copy of the account. */
+export class LoginRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LoginRejectedError';
+  }
+}
+
 export const authApi = {
   sendAdminCode: async (input: { name: string; email?: string; emails?: string[] }) => {
-    const { data } = await apiClient.post<SendCodeResponse>('/auth/admin/send-code', input);
+    const { data } = await cloudClient.post<SendCodeResponse>('/auth/admin/send-code', input);
     return data;
   },
 
   verifyAdminCode: async (input: { email: string; code: string }) => {
-    const { data } = await apiClient.post<VerifyCodeResponse>('/auth/admin/verify-code', input);
+    const { data } = await cloudClient.post<VerifyCodeResponse>('/auth/admin/verify-code', input);
     return data;
   },
 
   sendInviteEmail: async (input: { email: string; name?: string; role: string; inviteLink?: string; token?: string; code?: string }) => {
-    const { data } = await apiClient.post<{ success: boolean; message?: string; emailSent?: boolean; inviteLink?: string; code?: string }>(
+    const { data } = await cloudClient.post<{ success: boolean; message?: string; emailSent?: boolean; inviteLink?: string; code?: string }>(
       '/auth/admin/send-invite',
       input,
       { validateStatus: (status) => status < 500 || status === 503 }
@@ -59,7 +69,7 @@ export const authApi = {
     }
 
     try {
-      const { data, status } = await apiClient.get<{
+      const { data, status } = await cloudClient.get<{
         success: boolean;
         code?: string;
         message?: string;
@@ -116,7 +126,7 @@ export const authApi = {
 
   markInvitationUsed: async (token: string) => {
     try {
-      await apiClient.post(`/auth/invitations/${token}/use`);
+      await cloudClient.post(`/auth/invitations/${token}/use`);
     } catch {
       /* ignore offline errors */
     }
@@ -125,7 +135,7 @@ export const authApi = {
   /** Account list without passwords — the server never returns credentials. */
   getCloudUsers: async () => {
     try {
-      const { data } = await apiClient.get<{ success: boolean; data?: CloudUser[] }>('/auth/users');
+      const { data } = await cloudClient.get<{ success: boolean; data?: CloudUser[] }>('/auth/users');
       return data.data ?? [];
     } catch {
       return [];
@@ -134,15 +144,19 @@ export const authApi = {
 
   /**
    * Verify credentials server-side. Returns the account on success, null when
-   * rejected, and throws when the server cannot be reached so the caller can
-   * fall back to the offline account cache.
+   * the credentials are unknown, and throws LoginRejectedError when the server
+   * refuses the account (disabled company or unverified email). Network
+   * failures still throw so the caller can fall back to the offline cache.
    */
   login: async (identifier: string, password: string) => {
-    const { data } = await apiClient.post<{ success: boolean; data?: CloudUser }>(
+    const { data, status } = await cloudClient.post<{ success: boolean; data?: CloudUser; message?: string }>(
       '/auth/login',
       { identifier, password },
-      { validateStatus: (status) => status === 200 || status === 401 },
+      { validateStatus: (code) => code === 200 || code === 401 || code === 403 },
     );
+    if (status === 403) {
+      throw new LoginRejectedError(data.message || 'Login failed');
+    }
     return data.success ? data.data ?? null : null;
   },
 
@@ -154,7 +168,7 @@ export const authApi = {
     durationDays: number;
   }) => {
     try {
-      const { data } = await apiClient.post<{
+      const { data } = await cloudClient.post<{
         success: boolean;
         emailSent?: boolean;
         smsSent?: boolean;
@@ -186,7 +200,7 @@ export const authApi = {
     }
 
     try {
-      const { data, status } = await apiClient.get<{
+      const { data, status } = await cloudClient.get<{
         success: boolean;
         code?: string;
         message?: string;
@@ -228,7 +242,7 @@ export const authApi = {
   },
 
   resendClientAdminSms: async (token: string) => {
-    const { data } = await apiClient.post<{
+    const { data } = await cloudClient.post<{
       success: boolean;
       smsSent?: boolean;
       code?: string;
@@ -247,7 +261,7 @@ export const authApi = {
     password: string;
     smsCode: string;
   }) => {
-    const { data } = await apiClient.post<{
+    const { data } = await cloudClient.post<{
       success: boolean;
       code?: string;
       message?: string;
@@ -260,7 +274,7 @@ export const authApi = {
 
   syncCloudUser: async (user: import('../types').User) => {
     try {
-      const { data } = await apiClient.post<{ success: boolean; data?: import('../types').User }>('/auth/users/sync', user);
+      const { data } = await cloudClient.post<{ success: boolean; data?: import('../types').User }>('/auth/users/sync', user);
       return data.data ?? null;
     } catch {
       return null;
@@ -268,7 +282,7 @@ export const authApi = {
   },
 
   purgeAdminAccount: async (email: string) => {
-    const { data } = await apiClient.post<{
+    const { data } = await cloudClient.post<{
       success: boolean;
       purgedEmail?: string;
       message?: string;
@@ -279,7 +293,7 @@ export const authApi = {
   },
 
   deleteStaffAccess: async (email: string) => {
-    const { data } = await apiClient.post<{
+    const { data } = await cloudClient.post<{
       success: boolean;
       deletedEmail?: string;
       message?: string;
@@ -291,7 +305,7 @@ export const authApi = {
 
   verifyAdminSignupInvite: async (input: { invitationCode: string; phone: string }) => {
     try {
-      const { data } = await apiClient.post<{
+      const { data } = await cloudClient.post<{
         success: boolean;
         message?: string;
         invitation?: {
@@ -316,7 +330,7 @@ export const authApi = {
   },
 
   submitAdminSignup: async (input: { invitationToken: string; name: string; password: string; phone: string }) => {
-    const { data } = await apiClient.post<{
+    const { data } = await cloudClient.post<{
       success: boolean;
       message?: string;
       emailSent?: boolean;
@@ -329,7 +343,7 @@ export const authApi = {
   },
 
   verifyAdminSignupEmail: async (input: { email: string; code: string; invitationToken?: string }) => {
-    const { data } = await apiClient.post<{
+    const { data } = await cloudClient.post<{
       success: boolean;
       message?: string;
     }>('/auth/admin-signup/verify-email', input, {
@@ -339,7 +353,7 @@ export const authApi = {
   },
 
   resendAdminSignupEmail: async (input: { email: string; invitationToken?: string }) => {
-    const { data } = await apiClient.post<{
+    const { data } = await cloudClient.post<{
       success: boolean;
       message?: string;
       emailSent?: boolean;
@@ -352,7 +366,7 @@ export const authApi = {
 
   getInvitationsByRole: async (role: string) => {
     try {
-      const { data } = await apiClient.get<{
+      const { data } = await cloudClient.get<{
         success: boolean;
         data?: Array<{
           token: string;

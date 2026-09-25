@@ -18,6 +18,7 @@ import type {
   AttendanceStatus, LeaveStatus, PunchRequestStatus,
 } from '../types';
 import { generateId } from '../lib/utils';
+import { buildHolidayMap, resolveDayOff } from '../lib/holidays';
 import { cloudAttendanceApi } from '../api/attendanceApi';
 import {
   cloudDepartmentApi, cloudEmployeeApi, cloudHolidayApi,
@@ -36,15 +37,24 @@ const HOLIDAY_STORAGE_KEY = 'holiday-store-v1';
 
 type StoreListener = () => void;
 const attendanceListeners = new Set<StoreListener>();
+const holidayListeners = new Set<StoreListener>();
 
-function notifyAttendanceListeners() {
-  attendanceListeners.forEach((fn) => {
+function notifyListeners(listeners: Set<StoreListener>) {
+  listeners.forEach((fn) => {
     try {
       fn();
     } catch {
       /* ignore listener errors */
     }
   });
+}
+
+function notifyAttendanceListeners() {
+  notifyListeners(attendanceListeners);
+}
+
+function notifyHolidayListeners() {
+  notifyListeners(holidayListeners);
 }
 
 function loadAttendanceStore(): Attendance[] {
@@ -241,6 +251,7 @@ function persistShiftStore() {
 
 function persistHolidayStore() {
   persistCollection(HOLIDAY_STORAGE_KEY, holidayStore);
+  notifyHolidayListeners();
 }
 
 /**
@@ -278,6 +289,7 @@ export async function hydratePersistedStores() {
   if (collections[3].status === 'fulfilled') employeeStore = collections[3].value;
   if (collections[4].status === 'fulfilled') leaveStore = collections[4].value;
   if (collections[5].status === 'fulfilled') punchRequestStore = collections[5].value;
+  notifyHolidayListeners();
 
   if (collections.every((c) => c.status === 'rejected')) {
     console.info('[Store] Cloud sync unavailable — using local data');
@@ -325,6 +337,14 @@ export function subscribeAttendance(listener: StoreListener): () => void {
   attendanceListeners.add(listener);
   return () => {
     attendanceListeners.delete(listener);
+  };
+}
+
+/** Subscribe to holiday changes (Settings → Holidays → live report update). */
+export function subscribeHolidays(listener: StoreListener): () => void {
+  holidayListeners.add(listener);
+  return () => {
+    holidayListeners.delete(listener);
   };
 }
 
@@ -1057,7 +1077,11 @@ export const DashboardAPI = {
     const present = todayAtt.filter(a => a.status === 'present').length;
     const late = todayAtt.filter(a => a.status === 'late').length;
     const onLeave = todayAtt.filter(a => a.status === 'on_leave').length;
-    const absent = active.length - todayAtt.filter(a => a.status !== 'absent').length;
+    // Weekly off / public holiday (Settings → Holidays): nobody is absent.
+    const dayOff = resolveDayOff(d, buildHolidayMap(holidayStore));
+    const absent = dayOff.isDayOff
+      ? 0
+      : active.length - todayAtt.filter(a => a.status !== 'absent').length;
     const totalEmployees = active.length + uniquePendingEmails.size;
 
     return {
@@ -1069,6 +1093,8 @@ export const DashboardAPI = {
       attendancePercentage: active.length
         ? Math.round(((present + late + onLeave) / active.length) * 100)
         : 0,
+      nonWorkingDay: dayOff.isDayOff,
+      dayOffLabel: dayOff.isDayOff ? dayOff.remark : '',
     };
   },
 

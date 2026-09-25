@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { UserModel } from '../../models/UserModel.js';
 import { setMemoryMode } from '../../db/memoryStore.js';
+import { COMPANY_DISABLED_MESSAGE, companyDisabledMessage } from '../../../../src/lib/companyAccess.ts';
 import {
   generateVerificationCode,
   storeVerificationCode,
@@ -69,6 +70,16 @@ describe('Admin Sign Up Verification Service', () => {
       const updated = await UserModel.getByEmail(testEmail);
       expect(updated?.status).toBe('active');
       expect(updated?.emailVerified).toBe(true);
+
+      const signedIn = await UserModel.verifyCredentials('Test Admin', 'securepassword123');
+      expect(signedIn?.status).toBe('active');
+      expect(companyDisabledMessage({ ...signedIn!, email: testEmail }, [])).toBeNull();
+
+      await UserModel.updateStatus(testEmail, 'deleted', true);
+      const disabled = await UserModel.verifyCredentials(testEmail, 'securepassword123');
+      expect(disabled?.status).toBe('deleted');
+      expect(companyDisabledMessage({ ...disabled!, email: testEmail }, [])).toBe(COMPANY_DISABLED_MESSAGE);
+      await UserModel.deleteById('test-admin-usr-1');
     },
     15_000,
   );

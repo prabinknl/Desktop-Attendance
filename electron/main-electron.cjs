@@ -24,6 +24,40 @@ const HEALTH_INTERVAL_MS = 400;
 /** Optional override — when unset, desktop still starts local Express (LAN devices / UI). */
 const API_TARGET_OVERRIDE = (process.env.ELECTRON_API_TARGET || '').replace(/\/$/, '');
 
+/**
+ * Hosted backend for auth, invitations and verification codes. The local
+ * Express server ships without mail credentials on purpose, so those requests
+ * go to Hostinger where SMTP_* lives in the process environment.
+ */
+const DEFAULT_CLOUD_API_BASE_URL = 'https://desktop-attendance.appnep.com/api';
+
+function getCloudApiBaseUrl() {
+  const override = (process.env.ELECTRON_CLOUD_API_TARGET || '').trim();
+  if (!override) return DEFAULT_CLOUD_API_BASE_URL;
+  try {
+    const url = new URL(override);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return DEFAULT_CLOUD_API_BASE_URL;
+    const base = override.replace(/\/+$/, '');
+    return /\/api$/.test(base) ? base : `${base}/api`;
+  } catch {
+    return DEFAULT_CLOUD_API_BASE_URL;
+  }
+}
+
+/**
+ * Mail secrets must never reach the bundled local server: it does not send
+ * mail, and anything it inherits could end up in its log file. Stripped even
+ * on the developer machine so packaged behaviour matches what customers run.
+ */
+const SERVER_SECRET_DENYLIST = [
+  'SMTP_HOST',
+  'SMTP_PORT',
+  'SMTP_SECURE',
+  'SMTP_USER',
+  'SMTP_PASS',
+  'SMTP_FROM',
+];
+
 let mainWindow = null;
 /** @type {import('child_process').ChildProcess | null} */
 let apiProcess = null;
@@ -279,6 +313,22 @@ function loadDesktopEnv() {
     env.ENCRYPTION_KEY = generateEncryptionKey();
     appendStartupLog('[Electron] Generated ephemeral ENCRYPTION_KEY (server.env was incomplete)');
   }
+
+  // The local server handles LAN devices only; email goes through the hosted
+  // API. Drop any inherited mail credentials so they cannot be used or logged.
+  const stripped = [];
+  for (const key of SERVER_SECRET_DENYLIST) {
+    if (env[key] !== undefined) {
+      delete env[key];
+      stripped.push(key);
+    }
+  }
+  if (stripped.length > 0) {
+    // Names only — values are never written to the log.
+    appendStartupLog(`[Electron] Withheld mail credentials from local API: ${stripped.join(', ')}`);
+  }
+  env.LOCAL_DESKTOP_API = '1';
+
   return env;
 }
 
@@ -734,6 +784,8 @@ ipcMain.handle('desktop:get-api-base-url', () => {
 });
 
 ipcMain.handle('desktop:get-local-api-origin', () => getLocalApiOrigin());
+
+ipcMain.handle('desktop:get-cloud-api-base-url', () => getCloudApiBaseUrl());
 
 /** @type {boolean} */
 let updateDownloadedPromptOpen = false;

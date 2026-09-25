@@ -119,31 +119,35 @@ export const UserModel = {
     const key = identifier.trim().toLowerCase();
     if (!key) return null;
 
+    const matchesKey = (email: string, name: string) =>
+      email.trim().toLowerCase() === key || name.trim().toLowerCase() === key;
+
+    /** Password identifies the account. A deleted row must not hide an active one that shares a display name. */
+    const pickMatch = async <T extends { password: string; status?: string | null }>(rows: T[]) => {
+      const matched: T[] = [];
+      for (const row of rows) {
+        if (await verifyPassword(password, row.password)) matched.push(row);
+      }
+      return matched.find((row) => row.status !== 'deleted') ?? matched[0] ?? null;
+    };
+
     if (!isMemoryMode()) {
       try {
         const res = await query<UserRow>(
           `SELECT * FROM app_users
-           WHERE (LOWER(email) = $1 OR LOWER(TRIM(name)) = $1)
-           LIMIT 1`,
+           WHERE (LOWER(email) = $1 OR LOWER(TRIM(name)) = $1)`,
           [key],
         );
-        const row = res.rows[0];
-        if (!row) return null;
-        const ok = await verifyPassword(password, row.password);
-        return ok ? toSafeUser(rowToAppUser(row)) : null;
+        const row = await pickMatch(res.rows);
+        return row ? toSafeUser(rowToAppUser(row)) : null;
       } catch (err) {
         console.warn('[UserModel] verifyCredentials error, falling back to memory store:', err instanceof Error ? err.message : err);
       }
     }
 
-    const found = memoryStore.getUsers().find((u) => {
-      const emailMatch = u.email.trim().toLowerCase() === key;
-      const nameMatch = u.name.trim().toLowerCase() === key;
-      return emailMatch || nameMatch;
-    });
-    if (!found) return null;
-    const ok = await verifyPassword(password, found.password);
-    return ok ? toSafeUser(memoryToAppUser(found)) : null;
+    const candidates = memoryStore.getUsers().filter((u) => matchesKey(u.email, u.name));
+    const found = await pickMatch(candidates);
+    return found ? toSafeUser(memoryToAppUser(found)) : null;
   },
 
   async getByEmail(email: string) {

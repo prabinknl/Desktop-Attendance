@@ -203,3 +203,78 @@ export function logStartupEnvironment(): void {
     );
   }
 }
+
+/** True for the bundled local API inside the desktop app, which never sends mail. */
+export function isDesktopLocalApi(): boolean {
+  return (
+    (process.env.ELECTRON_DESKTOP ?? '').trim() === '1' ||
+    (process.env.LOCAL_DESKTOP_API ?? '').trim() === '1'
+  );
+}
+
+/**
+ * Variables the hosted deployment must supply. Mail delivery and the shared
+ * database both live on the server; the desktop app has neither and is exempt.
+ */
+const REQUIRED_HOSTED_ENV = [
+  'SMTP_HOST',
+  'SMTP_PORT',
+  'SMTP_USER',
+  'SMTP_PASS',
+  'SMTP_FROM',
+  'APP_PUBLIC_URL',
+] as const;
+
+export interface EnvValidationResult {
+  ok: boolean;
+  missing: string[];
+  skipped: boolean;
+}
+
+/**
+ * Checks required configuration at boot. Only variable *names* are ever
+ * printed — values are never logged, so a startup transcript is safe to share.
+ *
+ * Set STRICT_ENV_VALIDATION=true to make a misconfigured deploy fail fast
+ * instead of starting and failing later on the first email.
+ */
+export function validateStartupEnvironment(): EnvValidationResult {
+  if (env.nodeEnv !== 'production' || isDesktopLocalApi()) {
+    return { ok: true, missing: [], skipped: true };
+  }
+
+  const missing: string[] = REQUIRED_HOSTED_ENV.filter(
+    (key) => !(process.env[key] ?? '').toString().trim(),
+  );
+
+  // SMTP_SECURE is optional: it is inferred from SMTP_PORT when unset.
+  if (!(process.env.SMTP_SECURE ?? '').trim()) {
+    console.log(
+      `[Server] SMTP_SECURE not set — inferring ${env.smtpSecure} from SMTP_PORT ${env.smtpPort}.`,
+    );
+  }
+
+  const databaseConfigured =
+    hasMysqlDiscreteConfig() || Boolean((process.env.DATABASE_URL ?? '').trim());
+  if (!databaseConfigured) {
+    missing.push('DB_HOST/DB_NAME/DB_USER (or DATABASE_URL)');
+  }
+
+  if (missing.length === 0) {
+    console.log('[Server] Environment validation passed for all required variables.');
+    return { ok: true, missing: [], skipped: false };
+  }
+
+  console.error(
+    `[Server] Environment validation FAILED. Missing required variables: ${missing.join(', ')}. ` +
+      'Set them in the hosting environment (Hostinger → Node.js app → Environment variables), ' +
+      'never as VITE_* variables. Values are intentionally not logged.',
+  );
+
+  if ((process.env.STRICT_ENV_VALIDATION ?? '').trim().toLowerCase() === 'true') {
+    console.error('[Server] STRICT_ENV_VALIDATION=true — refusing to start.');
+    process.exit(1);
+  }
+
+  return { ok: false, missing, skipped: false };
+}

@@ -264,9 +264,21 @@ export function saveInvitedClientAdminAccount(input: {
 
   try {
     const raw = localStorage.getItem(AUTH_USERS_KEY);
-    const users = raw ? (JSON.parse(raw) as Array<{ email?: string }>) : [];
+    const users = raw ? (JSON.parse(raw) as Array<{ email?: string; status?: string }>) : [];
     const next = users.filter((user) => (user.email || '').toLowerCase() !== email);
     localStorage.setItem(AUTH_USERS_KEY, JSON.stringify([...next, created]));
+
+    const deletedKey = 'ams_deleted_clients';
+    const deletedRaw = localStorage.getItem(deletedKey);
+    if (deletedRaw) {
+      const archived = JSON.parse(deletedRaw) as Array<{ email?: string }>;
+      if (Array.isArray(archived)) {
+        localStorage.setItem(
+          deletedKey,
+          JSON.stringify(archived.filter((user) => (user.email || '').toLowerCase() !== email)),
+        );
+      }
+    }
   } catch (err) {
     console.warn('[ClientAdminInvite] Could not save local admin account:', err);
   }

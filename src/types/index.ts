@@ -230,6 +230,10 @@ export interface DashboardStats {
   lateToday: number;
   onLeaveToday: number;
   attendancePercentage: number;
+  /** Weekly off or a public holiday from Settings → Holidays. */
+  nonWorkingDay: boolean;
+  /** Holiday name or "Weekly off" when nonWorkingDay is true. */
+  dayOffLabel: string;
 }
 
 // ─── Report Types ─────────────────────────────────────────────────────────────

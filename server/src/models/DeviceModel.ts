@@ -528,26 +528,30 @@ export async function updateGatewayHeartbeat(payload: GatewayHeartbeatPayload): 
     return { pendingCommand: pending };
   }
 
+  // Compare a number, not the status string. On Hostinger MySQL the bound
+  // string and the SQL literal use different collations, so
+  // `status = 'online'` throws and the heartbeat never lands.
   await query(
     `UPDATE devices SET
       status = $1,
       gateway_status = $2,
       gateway_last_heartbeat = NOW(),
       gateway_error = $3,
-      last_connection_success = COALESCE($4, last_connection_success),
-      last_device_auth_at = CASE WHEN $1 = 'online' THEN NOW() ELSE last_device_auth_at END,
-      last_connector_error = $5,
+      last_connection_success = IF($4 IS NULL, last_connection_success, $4),
+      last_device_auth_at = IF($5 = 1, NOW(), last_device_auth_at),
+      last_connector_error = $6,
       connector_missed_heartbeats = 0,
-      model = COALESCE($6, model),
-      mac_address = COALESCE($7, mac_address),
-      device_time = COALESCE($8, device_time),
+      model = $7,
+      mac_address = $8,
+      device_time = IF($9 IS NULL, device_time, $9),
       updated_at = NOW()
-     WHERE id = $9`,
+     WHERE id = $10`,
     [
       newStatus,
       payload.gatewayStatus,
       connectorError,
       lastConn ?? null,
+      isOnline ? 1 : 0,
       connectorError,
       model ?? null,
       macAddress ?? null,

@@ -12,6 +12,9 @@ interface ImportMetaEnv {
   readonly VITE_INSFORGE_ANON_KEY?: string;
   /** Set at Electron UI build time (`vite.config.electron.ts`). */
   readonly VITE_IS_ELECTRON?: string;
+  /** Public hosted API used for auth/email endpoints, e.g. https://desktop-attendance.appnep.com/api.
+   *  Public URL only — SMTP_* and other server secrets must never be exposed as VITE_* variables. */
+  readonly VITE_CLOUD_API_BASE_URL?: string;
 }
 
 interface ImportMeta {
@@ -49,7 +52,10 @@ interface UpdateStatusPayload {
 interface AttendanceDesktopBridge {
   readonly isElectron?: boolean;
   readonly apiBaseUrl?: string;
+  /** Hosted API for auth/email endpoints. Public URL only — never a credential. */
+  readonly cloudApiBaseUrl?: string;
   getApiBaseUrl?: () => Promise<string>;
+  getCloudApiBaseUrl?: () => Promise<string>;
   readonly platform?: string;
   getAppVersion?: () => Promise<string>;
   checkForUpdates?: () => Promise<{

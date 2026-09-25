@@ -1,4 +1,5 @@
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
+import { createApiErrorReporter } from './apiErrors';
 
 function isHostedFrontendOrigin(origin: string): boolean {
   try {
@@ -98,44 +99,6 @@ const apiClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-const SENSITIVE_QUERY = /token|password|secret|authorization|smtp|otp|code/i;
-
-function sanitizeApiUrl(raw: string): string {
-  try {
-    const url = new URL(raw, typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1');
-    for (const key of [...url.searchParams.keys()]) {
-      if (SENSITIVE_QUERY.test(key)) url.searchParams.set(key, '[redacted]');
-    }
-    return `${url.origin}${url.pathname}${url.search}`;
-  } catch {
-    return raw.split('?')[0] || raw;
-  }
-}
-
-function getRequestUrl(error: AxiosError): string {
-  const cfg = error.config;
-  if (!cfg) return API_BASE_URL || '(unknown url)';
-  try {
-    return sanitizeApiUrl(axios.getUri(cfg));
-  } catch {
-    const base = String(cfg.baseURL || API_BASE_URL || '');
-    const path = String(cfg.url || '');
-    return sanitizeApiUrl(`${base.replace(/\/$/, '')}/${path.replace(/^\//, '')}`);
-  }
-}
-
-function logFailedApiRequest(error: unknown): void {
-  if (!axios.isAxiosError(error)) {
-    console.error('[API] Request failed:', error instanceof Error ? error.message : error);
-    return;
-  }
-  const method = String(error.config?.method || 'GET').toUpperCase();
-  const url = getRequestUrl(error);
-  const status = error.response?.status ?? 'NO_RESPONSE';
-  const code = error.code || 'ERR';
-  console.error(`[API] ${method} ${url} → HTTP ${status} (${code}): ${getReadableApiError(error)}`);
-}
-
 apiClient.interceptors.request.use((config) => {
   try {
     if (typeof localStorage !== 'undefined') {
@@ -156,92 +119,16 @@ const isLocalHost =
   typeof window !== 'undefined' &&
   /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
 
-const UNREACHABLE_MESSAGE =
-  API_BASE_URL.startsWith('http') || !isLocalHost
-    ? 'Backend server is not reachable.'
-    : 'Backend server is not reachable. Start the API with npm run dev:server (port 3001).';
+const { getReadableApiError, logFailedApiRequest } = createApiErrorReporter({
+  baseUrl: API_BASE_URL,
+  label: 'local backend',
+  unreachableHint:
+    isLocalHost && !API_BASE_URL.startsWith('http')
+      ? 'Start the API with npm run dev:server (port 3002).'
+      : undefined,
+});
 
-export function getReadableApiError(error: unknown): string {
-  if (axios.isAxiosError(error)) {
-    const ax = error as AxiosError<unknown>;
-    const requestUrl = getRequestUrl(ax);
-    if (!ax.response) {
-      if (ax.code === 'ECONNABORTED') {
-        return `Request timed out waiting for the backend (${requestUrl}).`;
-      }
-      if (ax.code === 'ERR_NETWORK' || ax.message === 'Network Error') {
-        return isLocalHost && !API_BASE_URL.startsWith('http')
-          ? `Network error — ${requestUrl} is not reachable. Start the API with npm run dev:server (port 3002).`
-          : `Network error — ${requestUrl} is unreachable (no HTTP response).`;
-      }
-      return `${UNREACHABLE_MESSAGE} (${requestUrl})`;
-    }
-
-    const resData: unknown = ax.response.data;
-    let serverMessage = '';
-    let serverSuccess: boolean | undefined;
-
-    if (typeof resData === 'string') {
-      const trimmed = resData.trim();
-      if (!trimmed.startsWith('<')) {
-        serverMessage = trimmed;
-      }
-    } else if (typeof resData === 'object' && resData !== null) {
-      const obj = resData as Record<string, unknown>;
-      if (typeof obj.message === 'string') {
-        serverMessage = obj.message;
-      } else if (typeof obj.error === 'string') {
-        serverMessage = obj.error;
-      }
-      if (typeof obj.success === 'boolean') {
-        serverSuccess = obj.success;
-      }
-    }
-
-    const status = ax.response.status;
-    if (status === 404) {
-      return serverMessage || `API route was not found (HTTP 404): ${requestUrl}`;
-    }
-    if (status === 401) {
-      return serverMessage || 'Authentication failed. Please verify your credentials.';
-    }
-    if (status === 403) {
-      return serverMessage || 'Access denied. You do not have permission for this request.';
-    }
-    if (status === 400) {
-      return serverMessage || 'Invalid request parameters.';
-    }
-    if (status === 405) {
-      return serverMessage || `API rejected this request method (HTTP 405): ${requestUrl}`;
-    }
-    if (status === 502 || status === 503 || status === 504) {
-      if (serverMessage && serverSuccess === false) {
-        return serverMessage;
-      }
-      return `Backend service or device is temporarily unavailable (HTTP ${status}): ${requestUrl}`;
-    }
-    if (status >= 500) {
-      if (/database|ECONNREFUSED|postgres/i.test(serverMessage)) {
-        return 'Unable to connect to the database.';
-      }
-      if (/device|isapi|timeout|unreachable/i.test(serverMessage)) {
-        return serverMessage || 'Attendance device is unreachable or offline.';
-      }
-      if (!serverMessage || typeof resData !== 'object') {
-        return `${UNREACHABLE_MESSAGE} (HTTP ${status}: ${requestUrl})`;
-      }
-      return serverMessage || `Server error while processing the request (HTTP ${status}).`;
-    }
-    return serverMessage || (typeof ax.message === 'string' ? ax.message : '') || `An unexpected API error occurred (HTTP ${status}).`;
-  }
-  if (error instanceof Error) {
-    return error.message && typeof error.message === 'string' && error.message !== '[object Object]'
-      ? error.message
-      : 'An unexpected error occurred';
-  }
-  if (typeof error === 'string') return error;
-  return 'An unexpected error occurred';
-}
+export { getReadableApiError };
 
 apiClient.interceptors.response.use(
   (response) => response,

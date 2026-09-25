@@ -67,7 +67,8 @@ export function downloadAttendancePdf(
   };
 
   const getOtLt = (record: Attendance) => {
-    if (String(record.id).startsWith('gap-row-') && record.status === 'holiday') return 0;
+    // Weekly off / holiday rows owe no hours
+    if (record.status === 'holiday') return 0;
     const emp = maps.employees[record.employeeId];
     const aliases = [emp?.id, emp?.employeeId].filter((id): id is string => Boolean(id));
     if (isApprovedLeaveDay(maps.leaves || [], record.employeeId, record.date, aliases)) {
@@ -87,6 +88,7 @@ export function downloadAttendancePdf(
 
   const body = records.map((r) => {
     const schedule = getSchedule(r);
+    const dayHours = r.status === 'holiday' ? 0 : schedule.dayHours;
     const otLt = getOtLt(r);
     const effIn = r.manualCheckIn || r.checkIn;
     const effOut = r.manualCheckOut || r.checkOut;
@@ -99,7 +101,7 @@ export function downloadAttendancePdf(
       isManualTime(r, 'in') && formattedIn !== '—' ? `${formattedIn}*` : formattedIn,
       isManualTime(r, 'out') && formattedOut !== '—' ? `${formattedOut}*` : formattedOut,
       formatHoursMinutes(r.workingHours || 0),
-      formatHoursMinutes(schedule.dayHours),
+      formatHoursMinutes(dayHours),
       formatOtLt(otLt),
       attendanceStatusLabel[r.status] ?? r.status,
       displayRemark(r),

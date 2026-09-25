@@ -13,9 +13,10 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import { authApi } from '../../api/authApi';
-import { DashboardAPI, LeaveAPI, AttendanceAPI, EmployeeAPI } from '../../data/store';
-import { mockHolidays } from '../../data/mockData';
-import type { DashboardStats, Employee, User } from '../../types';
+import {
+  DashboardAPI, LeaveAPI, AttendanceAPI, EmployeeAPI, HolidayAPI, subscribeHolidays,
+} from '../../data/store';
+import type { DashboardStats, Employee, Holiday, User } from '../../types';
 import { useAuth } from '../../contexts/AuthContext';
 import { useInvitations } from '../../contexts/InvitationContext';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -305,7 +306,16 @@ export default function DashboardPage() {
   } | null>(null);
 
   const today = new Date().toISOString().split('T')[0];
-  const upcomingHolidays = mockHolidays.filter(h => h.date >= today).slice(0, 5);
+  const [upcomingHolidays, setUpcomingHolidays] = useState<Holiday[]>([]);
+
+  // Settings → Holidays is the source of truth, and updates live
+  useEffect(() => {
+    const loadHolidays = () => {
+      void HolidayAPI.getUpcoming(5).then(setUpcomingHolidays);
+    };
+    loadHolidays();
+    return subscribeHolidays(loadHolidays);
+  }, []);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -472,15 +482,22 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard title="Total Employees" value={stats!.totalEmployees} icon={Users} color="bg-primary-500" delay={0} />
         <StatCard title="Present Today" value={stats!.presentToday} icon={UserCheck} color="bg-emerald-500" sub="Including late" delay={0.05} />
-        <StatCard title="Absent" value={stats!.absentToday} icon={UserX} color="bg-rose-500" delay={0.1} />
+        <StatCard
+          title="Absent"
+          value={stats!.absentToday}
+          icon={UserX}
+          color="bg-rose-500"
+          sub={stats!.nonWorkingDay ? stats!.dayOffLabel : undefined}
+          delay={0.1}
+        />
         <StatCard title="Late Arrivals" value={stats!.lateToday} icon={Clock} color="bg-amber-500" delay={0.15} />
         <StatCard title="On Leave" value={stats!.onLeaveToday} icon={CalendarOff} color="bg-cyan-500" delay={0.2} />
         <StatCard
           title="Attendance Rate"
-          value={`${stats!.attendancePercentage}%`}
+          value={stats!.nonWorkingDay ? '—' : `${stats!.attendancePercentage}%`}
           icon={TrendingUp}
           color="bg-violet-500"
-          sub="Today"
+          sub={stats!.nonWorkingDay ? stats!.dayOffLabel : 'Today'}
           delay={0.25}
         />
       </div>
@@ -683,6 +700,11 @@ export default function DashboardPage() {
             Upcoming Holidays
           </h3>
           <div className="space-y-3">
+            {upcomingHolidays.length === 0 && (
+              <p className="text-xs text-slate-400">
+                No upcoming holidays. Add them under Settings → Holidays.
+              </p>
+            )}
             {upcomingHolidays.map(h => (
               <div key={h.id} className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-primary-50 dark:bg-primary-900/30 flex flex-col items-center justify-center flex-shrink-0">

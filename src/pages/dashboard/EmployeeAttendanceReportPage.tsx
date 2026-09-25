@@ -6,8 +6,11 @@ import {
   Download, RefreshCw,
 } from 'lucide-react';
 import { useLocation, useParams } from 'react-router-dom';
-import { AttendanceAPI, LeaveAPI, ShiftAPI, EmployeeAPI, subscribeAttendance } from '../../data/store';
-import type { Attendance, LeaveRequest, Shift, Employee } from '../../types';
+import {
+  AttendanceAPI, LeaveAPI, ShiftAPI, EmployeeAPI, HolidayAPI,
+  subscribeAttendance, subscribeHolidays,
+} from '../../data/store';
+import type { Attendance, LeaveRequest, Shift, Employee, Holiday } from '../../types';
 import {
   cn, formatDate, formatTime, attendanceStatusLabel, leaveStatusLabel,
   calcOtLtHours, formatOtLt, formatHoursMinutes, isApprovedLeaveDay,
@@ -24,12 +27,17 @@ import { getAppSettings, resolveEmployeeSchedule } from '../../lib/appSettings';
 import { importAttendanceFromDeviceLogs } from '../../lib/deviceAttendanceSync';
 import { loadDeviceLogsCache } from '../../lib/deviceLogsCache';
 import { punchCalendarDate } from '../../lib/punchTime';
+import { buildHolidayMap, resolveDayOff } from '../../lib/holidays';
 import { formatDateRangeBsPdf } from '../../lib/dateDisplay';
 import type { AttendanceLogEntry } from '../../types/device';
 
-/** Synthetic rows for dates with no punch/leave — do not count toward OT/LT. */
-function isGapAttendanceRow(record: Attendance): boolean {
-  return String(record.id).startsWith('gap-row-');
+/** Weekly off or holiday — no Dayhour is owed and no late deduction applies. */
+function isNonWorkingRow(record: Attendance): boolean {
+  return record.status === 'holiday';
+}
+
+function hasPunch(record: Attendance): boolean {
+  return Boolean(record.checkIn || record.checkOut || record.manualCheckIn || record.manualCheckOut);
 }
 
 function logLocalDate(iso: string): string {
@@ -77,6 +85,7 @@ export default function EmployeeAttendanceReportPage() {
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshingDaily, setRefreshingDaily] = useState(false);
 
@@ -88,11 +97,12 @@ export default function EmployeeAttendanceReportPage() {
       return [];
     }
     if (!opts?.quiet) setLoading(true);
-    const [emps, , leaveList, shiftList] = await Promise.all([
+    const [emps, , leaveList, shiftList, holidayList] = await Promise.all([
       EmployeeAPI.getAll(),
       AttendanceAPI.getAll(),
       LeaveAPI.getAll(),
       ShiftAPI.getAll(),
+      HolidayAPI.getAll(),
     ]);
     // Remove stale duplicate days left by older sync/import bugs
     await AttendanceAPI.purgeDuplicateDays();
@@ -115,6 +125,7 @@ export default function EmployeeAttendanceReportPage() {
     setAttendance(att);
     setLeaves(empLeaves);
     setShifts(shiftList);
+    setHolidays(holidayList);
     setLoading(false);
     return att;
   };
@@ -232,6 +243,13 @@ export default function EmployeeAttendanceReportPage() {
     });
   }, [employeeId]);
 
+  // Live-update when Admin edits Settings → Holidays
+  useEffect(() => {
+    return subscribeHolidays(() => {
+      void HolidayAPI.getAll().then(setHolidays);
+    });
+  }, []);
+
   // Reload when returning to this tab/window
   useEffect(() => {
     const reload = () => {
@@ -250,8 +268,14 @@ export default function EmployeeAttendanceReportPage() {
     [shifts]
   );
 
+  // Settings → Holidays, applied to every day in the range
+  const holidayMap = useMemo(() => buildHolidayMap(holidays), [holidays]);
+
   const rangedAttendance = useMemo(
     () => {
+      // Company office days are the source of truth (Sunday is an office day)
+      const workingDays = getAppSettings().officeHours.workingDays;
+
       // One row per calendar day — pick the most complete punch record
       const score = (a: Attendance) => {
         let s = 0;
@@ -337,8 +361,6 @@ export default function EmployeeAttendanceReportPage() {
 
       // Fill every calendar day in range (including Sat weekly off & Sun office days)
       if (dateFrom && dateTo && dateFrom <= dateTo) {
-        // Company office days are the source of truth (Sunday is an office day)
-        const workingDays = getAppSettings().officeHours.workingDays;
         const cur = new Date(`${dateFrom}T12:00:00`);
         const end = new Date(`${dateTo}T12:00:00`);
         while (cur <= end) {
@@ -347,7 +369,8 @@ export default function EmployeeAttendanceReportPage() {
           const d = String(cur.getDate()).padStart(2, '0');
           const date = `${y}-${m}-${d}`;
           if (!byDate.has(date)) {
-            const isWorking = workingDays.includes(cur.getDay());
+            // Weekly off + Settings → Holidays decide whether the day is owed
+            const dayOff = resolveDayOff(date, holidayMap, workingDays);
             byDate.set(date, {
               id: `gap-row-${date}`,
               employeeId: employee?.id || '',
@@ -358,9 +381,9 @@ export default function EmployeeAttendanceReportPage() {
               overtime: 0,
               lateMinutes: 0,
               breakMinutes: 0,
-              status: isWorking ? 'absent' : 'holiday',
+              status: dayOff.isDayOff ? 'holiday' : 'absent',
               location: '',
-              remarks: isWorking ? '' : 'Weekly off',
+              remarks: dayOff.remark,
               createdBy: 'system',
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
@@ -370,12 +393,34 @@ export default function EmployeeAttendanceReportPage() {
         }
       }
 
+      // Apply the holiday calendar to saved rows too, so a holiday added later
+      // clears an "Absent" that was already stored for that day.
+      for (const [date, row] of byDate) {
+        const holiday = holidayMap.get(date);
+        if (!holiday) continue;
+        const dayOff = resolveDayOff(date, holidayMap, workingDays);
+        // Never overwrite leave or a day the employee actually worked
+        if (row.status === 'on_leave' || hasPunch(row)) continue;
+        if (dayOff.isDayOff) {
+          byDate.set(date, {
+            ...row,
+            status: 'holiday',
+            workingHours: 0,
+            overtime: 0,
+            lateMinutes: 0,
+            remarks: dayOff.remark,
+          });
+        } else if (!row.remarks) {
+          byDate.set(date, { ...row, remarks: dayOff.remark });
+        }
+      }
+
       return Array.from(byDate.values()).sort((a, b) => {
         const cmp = a.date.localeCompare(b.date);
         return dateSortDir === 'asc' ? cmp : -cmp;
       });
     },
-    [attendance, leaves, dateFrom, dateTo, employee, dateSortDir]
+    [attendance, leaves, dateFrom, dateTo, employee, dateSortDir, holidayMap]
   );
 
   const getSchedule = (record: Attendance) => {
@@ -388,8 +433,8 @@ export default function EmployeeAttendanceReportPage() {
   };
 
   const getOtLt = (record: Attendance) => {
-    // Weekly-off placeholder rows — no OT/LT
-    if (isGapAttendanceRow(record) && record.status === 'holiday') return 0;
+    // Weekly off / holiday rows — no OT/LT
+    if (isNonWorkingRow(record)) return 0;
     const aliases = [employee?.id, employee?.employeeId].filter(
       (id): id is string => Boolean(id),
     );
@@ -418,6 +463,7 @@ export default function EmployeeAttendanceReportPage() {
     let lateDays = 0;
     let halfDays = 0;
     let wfhDays = 0;
+    let holidayDays = 0;
 
     for (const a of rangedAttendance) {
       const otLt = getOtLt(a);
@@ -432,6 +478,8 @@ export default function EmployeeAttendanceReportPage() {
       }
       if (a.status === 'half_day') halfDays += 1;
       if (a.status === 'work_from_home') wfhDays += 1;
+      // Company holidays from Settings (weekly offs are not counted here)
+      if (a.status === 'holiday' && holidayMap.has(a.date)) holidayDays += 1;
     }
 
     const rangedLeaves = leaves.filter(
@@ -466,6 +514,7 @@ export default function EmployeeAttendanceReportPage() {
       lateDays,
       halfDays,
       wfhDays,
+      holidayDays,
       approvedLeaveDays,
       approvedLeaves,
       rangedLeaves,
@@ -473,7 +522,7 @@ export default function EmployeeAttendanceReportPage() {
       records: rangedAttendance.length,
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rangedAttendance, leaves, dateFrom, dateTo, shiftMap, employee]);
+  }, [rangedAttendance, leaves, dateFrom, dateTo, shiftMap, employee, holidayMap]);
 
   const monthLabel = (() => {
     try {
@@ -638,7 +687,13 @@ export default function EmployeeAttendanceReportPage() {
           className="grid grid-cols-2 lg:grid-cols-4 gap-3"
         >
           <SummaryCard title="Present days" value={summary.presentDays} icon={CalendarDays} color="bg-emerald-500" />
-          <SummaryCard title="Absent days" value={summary.absentDays} icon={UserX} color="bg-rose-500" />
+          <SummaryCard
+            title="Absent days"
+            value={summary.absentDays}
+            icon={UserX}
+            color="bg-rose-500"
+            sub={summary.holidayDays > 0 ? `${summary.holidayDays} holiday(s) excluded` : undefined}
+          />
           <SummaryCard title="Late days" value={summary.lateDays} icon={AlertTriangle} color="bg-amber-500" />
           <SummaryCard
             title="Approved leave"
@@ -849,8 +904,7 @@ export default function EmployeeAttendanceReportPage() {
               ) : (
                 rangedAttendance.map(a => {
                   const schedule = getSchedule(a);
-                  const dayHours =
-                    isGapAttendanceRow(a) && a.status === 'holiday' ? 0 : schedule.dayHours;
+                  const dayHours = isNonWorkingRow(a) ? 0 : schedule.dayHours;
                   const otLt = getOtLt(a);
                   const eff = getEffectiveAttendanceTimes(a);
                   const displayedRemark =

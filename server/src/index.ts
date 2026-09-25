@@ -1,5 +1,5 @@
 import app from './app.js';
-import { env, logStartupEnvironment } from './config/env.js';
+import { env, logStartupEnvironment, validateStartupEnvironment } from './config/env.js';
 import { runMigrations } from './db/migrate.js';
 import { getPoolDriver } from './db/pool.js';
 import { isExplicitMemoryStore, isMemoryMode, setMemoryMode } from './models/DeviceModel.js';
@@ -100,6 +100,8 @@ async function start() {
       console.log(`[Server] API listening on http://${env.host}:${env.port}`);
       console.log(`[Server] Database driver: ${dbLabel()}`);
       logStartupEnvironment();
+      // Names only — never values. Exits here when STRICT_ENV_VALIDATION=true.
+      validateStartupEnvironment();
       resolve();
     });
     server.once('error', reject);

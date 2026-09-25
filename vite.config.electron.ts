@@ -15,10 +15,16 @@ const pkgVersion = JSON.parse(
  * without changing the hosted web Vite config.
  *
  * IMPORTANT: Packaged Electron starts a local backend on localhost:3002 with
- * device sync enabled. The frontend must call this local backend (/api),
- * not the production Hostinger API. Runtime (preload.cjs) determines if it's
- * packaged or dev mode.
+ * device sync enabled. Device, attendance and core-data calls use the relative
+ * /api path so they reach that local backend and the office LAN device.
+ *
+ * Auth, invitations and verification codes are the exception — they need SMTP
+ * and the shared database, which only the hosted Hostinger backend has, so
+ * they use VITE_CLOUD_API_BASE_URL (see src/api/cloudClient.ts).
  */
+const CLOUD_API_BASE_URL =
+  process.env.ELECTRON_CLOUD_API_TARGET?.trim() || 'https://desktop-attendance.appnep.com/api'
+
 export default defineConfig({
   plugins: [react()],
   base: './',
@@ -55,6 +61,10 @@ export default defineConfig({
   define: {
     'import.meta.env.VITE_API_BASE_URL': JSON.stringify('/api'),
     'import.meta.env.VITE_IS_ELECTRON': JSON.stringify('true'),
+    // Auth, invitations and verification codes need SMTP and the shared
+    // database, which only the hosted backend has. Public URL only — SMTP_*
+    // and DB_* must never appear as VITE_* variables.
+    'import.meta.env.VITE_CLOUD_API_BASE_URL': JSON.stringify(CLOUD_API_BASE_URL),
     __APP_VERSION__: JSON.stringify(pkgVersion),
   },
 })
