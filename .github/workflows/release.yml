@@ -12,9 +12,10 @@ name: Build & Release Attendance Desktop
 #      Attendance-Desktop-Setup.exe (stable website download URL).
 #      The release is published (not left as a draft) so electron-updater can see it.
 #
-# Tag MUST be v{package.json version}, e.g. package 1.0.4 → tag v1.0.4
-# Tags like v.1.o.4 or V1.0.4 or V.1.0.4 are INVALID — use lowercase v + strict semver.
-# electron-updater requires valid semver in latest.yml to detect updates correctly.
+# Releases must use lowercase v + strict semver tags (for example, v1.0.4).
+# CI syncs package.json to the pushed tag before building so Electron/Vite stamp
+# the release assets with the tagged version even if package.json was bumped ahead.
+# Tags like v.1.o.4 or V1.0.4 or V.1.0.4 are INVALID.
 
 on:
   push:
@@ -42,22 +43,23 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Verify tag matches package.json version
+      - name: Sync package.json version from tag
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME}"
-          PKG_VERSION="$(node -p "require('./package.json').version")"
-          EXPECTED="v${PKG_VERSION}"
-          if [ "$TAG" != "$EXPECTED" ]; then
-            echo "::error::Git tag '$TAG' does not match package.json version '$EXPECTED'."
-            echo "::error::Steps to fix:"
-            echo "::error::  1. Bump version in package.json to match your intended version"
-            echo "::error::  2. Commit and push to main"
-            echo "::error::  3. Re-tag: git tag ${EXPECTED} && git push origin ${EXPECTED}"
-            echo "::error::  4. Delete the wrong tag if needed: git push origin --delete ${TAG}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Git tag '$TAG' is invalid. Use lowercase v + strict semver (for example, v1.0.16)."
             exit 1
           fi
-          echo "✅ Tag ${TAG} matches package.json version ${PKG_VERSION}"
+          TAG_VERSION="${TAG#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::warning::package.json version '${PKG_VERSION}' does not match pushed tag '${TAG}'. Syncing package.json for this release build."
+            npm version "${TAG_VERSION}" --no-git-tag-version --allow-same-version
+          else
+            echo "package.json version already matches ${TAG}."
+          fi
+          echo "✅ Using release version ${TAG_VERSION}"
 
       - name: Build server (TypeScript → JavaScript)
         run: npm run build:server
