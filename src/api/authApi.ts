@@ -160,6 +160,30 @@ export const authApi = {
     return data.success ? data.data ?? null : null;
   },
 
+  /** Whether first-Owner setup is still open. Null when the server cannot be reached. */
+  getOwnerBootstrapStatus: async () => {
+    try {
+      const { data } = await cloudClient.get<{
+        success: boolean;
+        ownerExists?: boolean;
+        setupCodeRequired?: boolean;
+      }>('/auth/owner/bootstrap');
+      if (!data.success || typeof data.ownerExists !== 'boolean') return null;
+      return { ownerExists: data.ownerExists, setupCodeRequired: Boolean(data.setupCodeRequired) };
+    } catch {
+      return null;
+    }
+  },
+
+  bootstrapOwner: async (input: { name: string; email: string; password: string; setupCode?: string }) => {
+    const { data } = await cloudClient.post<{ success: boolean; code?: string; message?: string; data?: CloudUser }>(
+      '/auth/owner/bootstrap',
+      input,
+      { validateStatus: (s) => s === 201 || s === 400 || s === 403 || s === 409 || s === 503 },
+    );
+    return data;
+  },
+
   createClientAdminInvite: async (input: {
     email: string;
     phone: string;

@@ -19,9 +19,15 @@ import {
   purgeAdminAccount,
   deleteStaffAccess,
   getInvitationsByRole,
+  getOwnerBootstrapStatus,
+  bootstrapOwner,
 } from '../controllers/authController.js';
 
 const router = Router();
+
+// First-Owner setup; refuses once any Owner exists
+router.get('/owner/bootstrap', getOwnerBootstrapStatus);
+router.post('/owner/bootstrap', bootstrapOwner);
 
 router.post('/admin/send-code', sendAdminCode);
 router.post('/admin/verify-code', verifyAdminCode);

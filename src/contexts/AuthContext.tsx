@@ -1,32 +1,33 @@
 import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 import type { User, UserRole } from '../types';
-import { mockUsers } from '../data/mockData';
 import { hydratePersistedStores } from '../data/store';
 import { deviceApi } from '../api/deviceApi';
 import { authApi, LoginRejectedError } from '../api/authApi';
-import { companyDisabledMessage, localLoginDecision, resolveAccountStatus } from '../lib/companyAccess';
+import { companyDisabledMessage, INVALID_LOGIN_MESSAGE, localLoginDecision, resolveAccountStatus } from '../lib/companyAccess';
 import { logClientActivity, ensureSampleClientActivities } from '../lib/clientActivity';
-
-/** Only this email may register as admin (one admin account total). */
-export const ALLOWED_ADMIN_EMAIL = 'appnep@pacenp.com';
-export const OWNER_EMAIL = 'appnep@pacenp.com';
-export const OWNER_SIGNIN_EMAILS = ['noreply@appnep.com', OWNER_EMAIL, 'bpkhanal.app@gmail.com'];
-
-export function formatEmailList(emails: string[]): string {
-  if (emails.length <= 1) return emails[0] || '';
-  if (emails.length === 2) return `${emails[0]} and ${emails[1]}`;
-  return `${emails.slice(0, -1).join(', ')} and ${emails[emails.length - 1]}`;
-}
 
 const USERS_KEY = 'ams_auth_users';
 const SESSION_KEY = 'ams_user';
 const DELETED_CLIENTS_KEY = 'ams_deleted_clients';
 
+/** Changing this key makes every installation drop its cached accounts and session once. */
+const AUTH_RESET_KEY = 'ams_auth_reset_2026_09_26';
+const AUTH_STORAGE_KEYS = [USERS_KEY, SESSION_KEY, DELETED_CLIENTS_KEY, 'ams_real_owner', 'ams_invitations'];
+
+function resetAuthStorageOnce() {
+  try {
+    if (localStorage.getItem(AUTH_RESET_KEY)) return;
+    AUTH_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+    localStorage.setItem(AUTH_RESET_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   login: (emailOrName: string, password?: string) => Promise<{ success: boolean; error?: string }>;
-  loginOwner: () => Promise<{ success: boolean; error?: string }>;
   signupAdmin: (input: {
     name: string;
     email: string;
@@ -49,7 +50,8 @@ interface AuthContextType {
     name: string;
     email: string;
     password: string;
-  }) => Promise<{ success: boolean; error?: string }>;
+    setupCode?: string;
+  }) => Promise<{ success: boolean; error?: string; ownerExists?: boolean }>;
   logout: () => void;
   updateProfile: (patch: Partial<Pick<User, 'name' | 'email' | 'phone' | 'timezone' | 'avatar'>>) => void;
   changePassword: (current: string, next: string) => { success: boolean; error?: string };
@@ -72,77 +74,6 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 const ADMIN_BOY_AVATAR =
   'https://api.dicebear.com/9.x/avataaars/svg?seed=AdminKhan&top=shortFlat&facialHairProbability=100&facialHair=beardMedium';
-
-function ensureOwnerUser(users: User[]): User[] {
-  const ownerEmail = OWNER_EMAIL.toLowerCase();
-  const ownerExists = users.some((u) => u.email.toLowerCase() === ownerEmail && u.role === 'owner');
-
-  let nextUsers = users;
-  if (!ownerExists) {
-    nextUsers = [
-      ...users.filter((u) => u.email.toLowerCase() !== ownerEmail || u.role !== 'owner'),
-      {
-        id: 'u-owner-1',
-        name: 'Owner',
-        email: OWNER_EMAIL,
-        role: 'owner',
-        password: 'owner-session',
-        phone: '',
-        timezone: 'Asia/Kathmandu',
-        avatar: ADMIN_BOY_AVATAR,
-      },
-    ];
-  }
-
-  // Seed sample client admin accounts if none exist. Never revive emails
-  // the owner already moved to the Deleted tab.
-  const deletedEmails = new Set(loadDeletedClients().map((u) => u.email.toLowerCase()));
-  const hasClients = nextUsers.some(
-    (u) => u.role === 'client' && u.status !== 'deleted' && !deletedEmails.has(u.email.toLowerCase()),
-  );
-  if (!hasClients) {
-    const sampleClients: User[] = [
-      {
-        id: 'u-client-1',
-        name: 'Acme Software Solutions',
-        companyName: 'Acme Software Solutions',
-        email: 'admin@acmesoft.com',
-        role: 'client' as UserRole,
-        password: 'client123',
-        planType: 'free' as const,
-        freeDays: 30,
-        avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=acmesoft',
-      },
-      {
-        id: 'u-client-2',
-        name: 'Globex Global Systems',
-        companyName: 'Globex Global Systems',
-        email: 'contact@globex.com',
-        role: 'client' as UserRole,
-        password: 'client123',
-        planType: 'paid' as const,
-        freeDays: 0,
-        avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=globex',
-      },
-      {
-        id: 'u-client-3',
-        name: 'Apex Digital Agency',
-        companyName: 'Apex Digital Agency',
-        email: 'hello@apexdigital.com',
-        role: 'client' as UserRole,
-        password: 'client123',
-        planType: 'free' as const,
-        freeDays: 14,
-        avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=apex',
-      },
-    ].filter((sample) => !deletedEmails.has(sample.email.toLowerCase()));
-    if (sampleClients.length > 0) {
-      nextUsers = [...nextUsers, ...sampleClients];
-    }
-  }
-
-  return nextUsers;
-}
 
 function migrateStoredUser(raw: User): User {
   let user = raw;
@@ -193,50 +124,17 @@ function loadAuthUsers(): User[] {
           }
           return u;
         });
-        const ensured = ensureOwnerUser(migrated);
-        if (changed || ensured.length !== migrated.length) {
-          localStorage.setItem(USERS_KEY, JSON.stringify(ensured));
+        if (changed) {
+          localStorage.setItem(USERS_KEY, JSON.stringify(migrated));
         }
-        return ensured;
+        return migrated;
       }
     }
   } catch {
     /* fall through */
   }
-  // Seed without admin/employee — those roles must sign up via portal buttons
-  const seeded = mockUsers.filter((u) => u.role !== 'admin' && u.role !== 'employee');
-  const ensured = ensureOwnerUser(seeded);
-  localStorage.setItem(USERS_KEY, JSON.stringify(ensured));
-  return ensured;
-}
-
-/** One-time: if an old demo session exists but auth users were reset, keep that account. */
-function ensureSessionUserInStore() {
-  try {
-    const sessionRaw = localStorage.getItem(SESSION_KEY);
-    if (!sessionRaw) return;
-    const session = JSON.parse(sessionRaw) as User;
-    // Clear legacy admin sessions that are not the allowed email
-    if (
-      session.role === 'admin'
-      && session.email.toLowerCase() !== ALLOWED_ADMIN_EMAIL.toLowerCase()
-    ) {
-      localStorage.removeItem(SESSION_KEY);
-      return;
-    }
-    const users = loadAuthUsers();
-    if (users.some((u) => u.id === session.id || u.email.toLowerCase() === session.email.toLowerCase())) {
-      return;
-    }
-    const fromMock = mockUsers.find(
-      (u) => u.id === session.id || u.email.toLowerCase() === session.email.toLowerCase(),
-    );
-    if (fromMock && !(fromMock.role === 'admin' && fromMock.email.toLowerCase() !== ALLOWED_ADMIN_EMAIL.toLowerCase())) {
-      saveAuthUsers([...users, fromMock]);
-    }
-  } catch {
-    /* ignore */
-  }
+  // No seeded accounts: every account comes from the server or a signup.
+  return [];
 }
 
 function saveAuthUsers(users: User[]) {
@@ -395,7 +293,7 @@ const permissions: Record<UserRole, string[]> = {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(() => {
-    ensureSessionUserInStore();
+    resetAuthStorageOnce();
     const stored = localStorage.getItem(SESSION_KEY);
     if (!stored) return null;
     try {
@@ -425,9 +323,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const getDeletedClients = useCallback(() => loadDeletedClients(), []);
 
   const hasAdminAccount = useCallback(() => {
-    return loadAuthUsers().some(
-      (u) => u.role === 'admin' && u.email.toLowerCase() === ALLOWED_ADMIN_EMAIL.toLowerCase(),
-    );
+    return loadAuthUsers().some((u) => u.role === 'admin');
   }, []);
 
   const isEmployeeRegistered = useCallback((employeeId: string) => {
@@ -443,9 +339,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const directory = [...allUsers, ...archived];
 
     let found: User | undefined;
+    let serverAnswered = false;
 
     try {
       const verified = await authApi.login(identifier, password);
+      serverAnswered = true;
       if (verified) {
         const disabled = companyDisabledMessage(verified, directory);
         if (disabled) return { success: false, error: disabled };
@@ -462,6 +360,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     if (!found) {
+      // The server is authoritative when reachable; cached copies only cover offline use.
+      if (serverAnswered) return { success: false, error: INVALID_LOGIN_MESSAGE };
       const decision = localLoginDecision(identifier, password, allUsers, archived);
       if (!decision.allowed) return { success: false, error: decision.error };
       found = allUsers.find((u) => u.id === decision.account.id) ?? (decision.account as User);
@@ -529,28 +429,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { success: true };
   }, [bumpAuthUsers]);
 
-  const loginOwner = useCallback(async () => {
-    const users = loadAuthUsers();
-    const owner = ensureOwnerUser(users).find((u) => OWNER_SIGNIN_EMAILS.includes(u.email.toLowerCase()) && u.role === 'owner');
-    if (!owner) {
-      return { success: false, error: 'Owner account not available.' };
-    }
-
-    const safe = persistSession({ ...owner, role: 'owner' as UserRole });
-    // Keep registered client admins intact — owner sign-in must not rewrite
-    // an admin row that happens to use an owner-notification email.
-    saveAuthUsers(ensureOwnerUser(users));
-    setUser(safe);
-    bumpAuthUsers();
-    hydratePersistedStores();
-    deviceApi.reconnect().then((result) => {
-      if (result.connected) {
-        console.info('[Auth] Attendance machine reconnected automatically');
-      }
-    });
-    return { success: true };
-  }, [bumpAuthUsers]);
-
   const signupAdmin = useCallback(async (input: {
     name: string;
     email: string;
@@ -562,13 +440,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const email = input.email.trim().toLowerCase();
-    const allowed = ALLOWED_ADMIN_EMAIL.toLowerCase();
-    if (email !== allowed) {
-      return {
-        success: false,
-        error: `Verification uses ${ALLOWED_ADMIN_EMAIL} only.`,
-      };
-    }
 
     const users = loadAuthUsers();
     releaseDeletedClientEmail(email);
@@ -576,7 +447,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const created: User = {
       id: `u-admin-${Date.now()}`,
       name: input.name.trim() || 'Admin',
-      email: ALLOWED_ADMIN_EMAIL,
+      email,
       role: 'admin',
       password: input.password,
       phone: '',
@@ -687,48 +558,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { success: true };
   }, []);
 
+  /** First-Owner setup only. The server refuses once any Owner exists. */
   const signupOwner = useCallback(async (input: {
     name: string;
     email: string;
     password: string;
+    setupCode?: string;
   }) => {
-    const email = input.email.trim().toLowerCase();
-    const name = input.name.trim();
-    const users = loadAuthUsers();
-    const matches = users.filter((u) => u.email.toLowerCase() === email);
-    const existingOwner = matches.find((u) => u.role === 'owner');
-    const existingOther = matches.find((u) => u.role !== 'owner');
-
-    if (existingOther && !existingOwner) {
-      return { success: false, error: 'This email is already registered. Log in with that account instead.' };
-    }
-
-    if (existingOwner) {
-      const updatedUser: User = {
-        ...existingOwner,
-        name: name || existingOwner.name,
+    try {
+      const res = await authApi.bootstrapOwner({
+        name: input.name.trim(),
+        email: input.email.trim().toLowerCase(),
         password: input.password,
-        role: 'owner',
-      };
-      saveAuthUsers(users.map((u) => (u.id === existingOwner.id ? updatedUser : u)));
-      authApi.syncCloudUser(updatedUser);
+        setupCode: input.setupCode?.trim() || undefined,
+      });
+      if (!res.success) {
+        return {
+          success: false,
+          error: res.message || 'Could not create the Owner account.',
+          ownerExists: res.code === 'owner_exists',
+        };
+      }
+      await hydrateCloudAuthUsers();
+      bumpAuthUsers();
       return { success: true };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Could not reach the server.' };
     }
-
-    const created: User = {
-      id: `u-owner-${Date.now()}`,
-      name: name || 'Owner',
-      email,
-      role: 'owner',
-      password: input.password,
-      phone: '',
-      timezone: 'Asia/Kathmandu',
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name || email)}`,
-    };
-    saveAuthUsers([...users, created]);
-    authApi.syncCloudUser(created);
-    return { success: true };
-  }, []);
+  }, [bumpAuthUsers]);
 
   const logout = useCallback(() => {
     setUser(null);
@@ -994,16 +851,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRealOwnerUser(null);
       }
     } else {
-      loginOwner();
+      setUser(null);
+      localStorage.removeItem(SESSION_KEY);
     }
-  }, [loginOwner]);
+  }, []);
 
   return (
     <AuthContext.Provider value={{
       user,
       isAuthenticated: !!user,
       login,
-      loginOwner,
       signupAdmin,
       signupEmployee,
       signupAccountant,

@@ -9,14 +9,77 @@ import {
   sendInvitationEmail,
 } from '../services/auth/adminVerification.js';
 import { purgeAdminAccountByEmail } from '../services/auth/purgeAdminAccount.js';
+import { OwnerProtectedError } from '../models/UserModel.js';
+import { timingSafeEqual } from 'crypto';
 
 const ALLOWED_ADMIN_EMAIL = env.adminSignupEmail;
-const OWNER_SIGNIN_EMAILS = ['noreply@appnep.com', 'appnep@pacenp.com', 'bpkhanal.app@gmail.com'];
 
-function formatEmailList(emails: string[]): string {
-  if (emails.length <= 1) return emails[0] || '';
-  if (emails.length === 2) return `${emails[0]} and ${emails[1]}`;
-  return `${emails.slice(0, -1).join(', ')} and ${emails[emails.length - 1]}`;
+export async function getOwnerBootstrapStatus(_req: Request, res: Response) {
+  try {
+    const { UserModel } = await import('../models/UserModel.js');
+    const ownerExists = await UserModel.ownerExists();
+    return res.json({
+      success: true,
+      ownerExists,
+      setupCodeRequired: !ownerExists && Boolean(env.ownerSetupCode),
+    });
+  } catch (err) {
+    console.error('[Auth] owner bootstrap status failed:', err instanceof Error ? err.message : err);
+    return res.status(503).json({ success: false, message: 'Account database is unavailable. Try again shortly.' });
+  }
+}
+
+function setupCodeMatches(provided: string): boolean {
+  const expected = Buffer.from(env.ownerSetupCode);
+  const actual = Buffer.from(provided);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+/** First-Owner registration. Works only while no Owner exists. */
+export async function bootstrapOwner(req: Request, res: Response) {
+  try {
+    const name = String(req.body?.name ?? '').trim();
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const password = String(req.body?.password ?? '');
+    const setupCode = String(req.body?.setupCode ?? '').trim();
+
+    if (name.length < 2) {
+      return res.status(400).json({ success: false, message: 'Full name is required.' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, message: 'A valid email address is required.' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
+    }
+    if (env.ownerSetupCode && !setupCodeMatches(setupCode)) {
+      return res.status(403).json({ success: false, code: 'invalid_setup_code', message: 'Invalid Owner setup code.' });
+    }
+
+    const { UserModel } = await import('../models/UserModel.js');
+    const created = await UserModel.createFirstOwner({
+      id: `u-owner-${Date.now()}`,
+      name,
+      email,
+      password,
+      timezone: 'Asia/Kathmandu',
+    });
+    if (!created) {
+      return res.status(409).json({
+        success: false,
+        code: 'owner_exists',
+        message: 'An Owner account already exists. Sign in instead.',
+      });
+    }
+    console.log('[Auth] First Owner account created.');
+    return res.status(201).json({ success: true, data: created });
+  } catch (err) {
+    if (err instanceof OwnerProtectedError) {
+      return res.status(409).json({ success: false, message: err.message });
+    }
+    console.error('[Auth] bootstrapOwner failed:', err instanceof Error ? err.message : err);
+    return res.status(503).json({ success: false, message: 'Could not create the Owner account. Try again shortly.' });
+  }
 }
 
 export async function sendAdminCode(req: Request, res: Response) {
@@ -33,15 +96,18 @@ export async function sendAdminCode(req: Request, res: Response) {
       return res.status(400).json({ success: false, message: 'Email is required.' });
     }
 
-    const isOwnerRequest = emails.length > 0;
-    const allowedEmails = isOwnerRequest ? OWNER_SIGNIN_EMAILS : [ALLOWED_ADMIN_EMAIL.toLowerCase()];
+    if (emails.length > 0) {
+      return res.status(410).json({
+        success: false,
+        emailSent: false,
+        message: 'Owner verification-code sign in is no longer available. Sign in with the Owner user name and password.',
+      });
+    }
 
-    if (!recipientEmails.every((recipient) => allowedEmails.includes(recipient))) {
+    if (!ALLOWED_ADMIN_EMAIL || !recipientEmails.every((recipient) => recipient === ALLOWED_ADMIN_EMAIL)) {
       return res.status(400).json({
         success: false,
-        message: isOwnerRequest
-          ? `Owner sign in supports ${formatEmailList(OWNER_SIGNIN_EMAILS)}.`
-          : `Only ${ALLOWED_ADMIN_EMAIL} can register as admin.`,
+        message: 'Admin accounts are created by Owner invitation.',
       });
     }
 
@@ -100,10 +166,10 @@ export async function verifyAdminCode(req: Request, res: Response) {
     if (!email || !code) {
       return res.status(400).json({ success: false, message: 'Email and code are required.' });
     }
-    if (email !== ALLOWED_ADMIN_EMAIL.toLowerCase() && !OWNER_SIGNIN_EMAILS.includes(email)) {
+    if (!ALLOWED_ADMIN_EMAIL || email !== ALLOWED_ADMIN_EMAIL) {
       return res.status(400).json({
         success: false,
-        message: `Only ${ALLOWED_ADMIN_EMAIL} or the owner sign in emails can verify codes.`,
+        message: 'Admin accounts are created by Owner invitation.',
       });
     }
 
@@ -401,6 +467,9 @@ export async function syncUser(req: Request, res: Response) {
     });
     return res.json({ success: true, data: saved });
   } catch (err) {
+    if (err instanceof OwnerProtectedError) {
+      return res.status(403).json({ success: false, message: err.message });
+    }
     console.error('[Auth] syncUser error:', err);
     return res.status(500).json({ success: false, message: 'Failed to sync user' });
   }

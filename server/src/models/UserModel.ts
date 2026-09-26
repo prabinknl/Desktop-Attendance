@@ -1,7 +1,17 @@
 import { query } from '../db/pool.js';
 import { isMysql } from '../db/dialect.js';
-import { isMemoryMode, memoryStore, type MemoryUserRecord } from '../db/memoryStore.js';
+import { isExplicitMemoryStore, isMemoryMode, memoryStore, type MemoryUserRecord } from '../db/memoryStore.js';
 import { hashPassword, verifyPassword } from '../services/auth/passwordHash.js';
+
+/** Raised when a write would create an Owner outside first-owner setup, or overwrite an Owner. */
+export class OwnerProtectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'OwnerProtectedError';
+  }
+}
+
+let ownerBootstrapQueue: Promise<unknown> = Promise.resolve();
 
 export interface UserRow {
   id: string;
@@ -170,6 +180,65 @@ export const UserModel = {
     return cached ? memoryToAppUser(cached) : null;
   },
 
+  /** Throws when the database cannot answer, so callers never mistake an outage for "no Owner yet". */
+  async ownerExists(): Promise<boolean> {
+    if (isExplicitMemoryStore()) {
+      return memoryStore.getUsers().some((u) => u.role === 'owner');
+    }
+    if (isMemoryMode()) {
+      throw new Error('Database unavailable');
+    }
+    const res = await query<{ n: number | string }>(`SELECT COUNT(*) AS n FROM app_users WHERE role = 'owner'`);
+    return Number(res.rows[0]?.n ?? 0) > 0;
+  },
+
+  /**
+   * Create the first Owner. The insert is conditional on no Owner row existing,
+   * so concurrent requests cannot both succeed. Returns null once an Owner exists.
+   */
+  async createFirstOwner(input: { id: string; name: string; email: string; password: string; timezone?: string }) {
+    const run = async () => {
+      const emailLower = input.email.trim().toLowerCase();
+      if (await this.ownerExists()) return null;
+      if (await this.getByEmail(emailLower)) {
+        throw new OwnerProtectedError('This email is already registered to another account.');
+      }
+      const passwordHash = await hashPassword(input.password);
+      const record: MemoryUserRecord = {
+        id: input.id,
+        name: input.name,
+        email: emailLower,
+        role: 'owner',
+        password: passwordHash,
+        timezone: input.timezone,
+        status: 'active',
+        emailVerified: true,
+      };
+
+      if (isExplicitMemoryStore()) {
+        return toSafeUser(memoryToAppUser(memoryStore.upsertUser(record)));
+      }
+
+      const insertSql = isMysql()
+        ? `INSERT INTO app_users (id, name, email, role, password, timezone, status, email_verified)
+           SELECT $1, $2, $3, 'owner', $4, $5, 'active', TRUE FROM DUAL
+           WHERE NOT EXISTS (SELECT 1 FROM app_users WHERE role = 'owner')`
+        : `INSERT INTO app_users (id, name, email, role, password, timezone, status, email_verified)
+           SELECT $1::text, $2::text, $3::text, 'owner', $4::text, $5::text, 'active', TRUE
+           WHERE NOT EXISTS (SELECT 1 FROM app_users WHERE role = 'owner')`;
+      const inserted = await query(insertSql, [input.id, input.name, emailLower, passwordHash, input.timezone ?? null]);
+      if (inserted.rowCount === 0) return null;
+
+      memoryStore.upsertUser(record);
+      const res = await query<UserRow>('SELECT * FROM app_users WHERE LOWER(email) = $1 LIMIT 1', [emailLower]);
+      return res.rows[0] ? toSafeUser(rowToAppUser(res.rows[0])) : null;
+    };
+
+    const result = ownerBootstrapQueue.then(run, run);
+    ownerBootstrapQueue = result.catch(() => undefined);
+    return result;
+  },
+
   /** Upsert user account (insert or update on email conflict) */
   async upsert(user: {
     id: string;
@@ -195,6 +264,15 @@ export const UserModel = {
   }) {
     const now = new Date().toISOString();
     const emailLower = user.email.trim().toLowerCase();
+
+    const existing = await this.getByEmail(emailLower);
+    if (existing?.role === 'owner' && user.role !== 'owner') {
+      throw new OwnerProtectedError('This email belongs to the Owner account.');
+    }
+    if (user.role === 'owner' && existing?.role !== 'owner') {
+      throw new OwnerProtectedError('Owner accounts can only be created through first-owner setup.');
+    }
+
     const clientId = user.clientId ?? user.client_id ?? undefined;
     const planRaw = String(user.planType ?? user.plan_type ?? '').toLowerCase();
     const planType = planRaw === 'paid' ? 'paid' : planRaw === 'free' ? 'free' : undefined;

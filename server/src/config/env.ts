@@ -110,7 +110,12 @@ export const env = {
   gatewaySecret: (process.env.GATEWAY_SECRET ?? '').trim(),
   /** Expected connector heartbeat interval (seconds). */
   connectorHeartbeatSeconds: Math.max(15, parseInt(process.env.CONNECTOR_HEARTBEAT_SECONDS ?? '30', 10)),
-  adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? 'appnep@pacenp.com').trim().toLowerCase(),
+  adminSignupEmail: (process.env.ADMIN_SIGNUP_EMAIL ?? '').trim().toLowerCase(),
+  /**
+   * Optional secret required by first-Owner setup. When set, the very first
+   * Owner registration must supply it; the route closes once an Owner exists.
+   */
+  ownerSetupCode: (process.env.OWNER_SETUP_CODE ?? '').trim(),
   /**
    * Public origin invited users can reach, e.g. https://attendance.appnep.com.
    * In development mode, defaults to http://127.0.0.1:3000 if APP_PUBLIC_URL is not set.

@@ -7,13 +7,12 @@ import { z } from 'zod';
 import {
   Eye, EyeOff, ArrowRight, Clock, Users, BarChart3, Lock, ArrowLeft, Search, Check, Mail, CheckCircle2,
 } from 'lucide-react';
-import { useAuth, ALLOWED_ADMIN_EMAIL, OWNER_SIGNIN_EMAILS, formatEmailList, hydrateCloudAuthUsers } from '../../contexts/AuthContext';
+import { useAuth, hydrateCloudAuthUsers } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { EmployeeAPI } from '../../data/store';
 import { deviceApi } from '../../api/deviceApi';
 import { authApi } from '../../api/authApi';
 import { describeSmtpFailure } from '../../api/apiErrors';
-import { sendOwnerVerificationCode as requestOwnerVerificationCode, verifyOwnerVerificationCode } from '../../lib/ownerOtp';
 import { markClientAdminInviteAccepted, saveInvitedClientAdminAccount } from '../../lib/clientAdminInvite';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { cn } from '../../lib/utils';
@@ -65,7 +64,16 @@ const accountantSignupSchema = z.object({
   path: ['confirmPassword'],
 });
 
-const ownerSignupSchema = accountantSignupSchema;
+const ownerSignupSchema = z.object({
+  name: z.string().min(2, 'Name is required'),
+  email: z.string().email('Please enter a valid email'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  confirmPassword: z.string().min(8, 'Confirm your password'),
+  setupCode: z.string().optional(),
+}).refine((d) => d.password === d.confirmPassword, {
+  message: 'Passwords do not match',
+  path: ['confirmPassword'],
+});
 
 type LoginForm = z.infer<typeof loginSchema>;
 type AdminSignupForm = z.infer<typeof adminSignupSchema>;
@@ -95,7 +103,6 @@ function isMachineEmployee(e: Employee) {
 export default function LoginPage() {
   const {
     login,
-    loginOwner,
     logout,
     signupAdmin,
     signupEmployee,
@@ -113,9 +120,7 @@ export default function LoginPage() {
   const [ownerMode, setOwnerMode] = useState<'intro' | 'code'>('intro');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [ownerCode, setOwnerCode] = useState('');
-  const [ownerCodeSentAt, setOwnerCodeSentAt] = useState<number | null>(null);
-  const [ownerResendSeconds, setOwnerResendSeconds] = useState(0);
+  const [ownerSetup, setOwnerSetup] = useState<{ ownerExists: boolean; setupCodeRequired: boolean } | null>(null);
 
   const [adminStep, setAdminStep] = useState<AdminStep>('details');
   const [verificationCode, setVerificationCode] = useState('');
@@ -157,7 +162,7 @@ export default function LoginPage() {
   });
   const adminForm = useForm<AdminSignupForm>({
     resolver: zodResolver(adminSignupSchema),
-    defaultValues: { email: ALLOWED_ADMIN_EMAIL, name: '', password: '', confirmPassword: '' },
+    defaultValues: { email: '', name: '', password: '', confirmPassword: '' },
   });
   const employeeForm = useForm<EmployeeSignupForm>({
     resolver: zodResolver(employeeSignupSchema),
@@ -167,7 +172,7 @@ export default function LoginPage() {
   });
   const ownerForm = useForm<OwnerSignupForm>({
     resolver: zodResolver(ownerSignupSchema),
-    defaultValues: { name: '', email: '', password: '', confirmPassword: '' },
+    defaultValues: { name: '', email: '', password: '', confirmPassword: '', setupCode: '' },
   });
 
   const adminUserName = useMemo(() => {
@@ -177,11 +182,12 @@ export default function LoginPage() {
 
   useEffect(() => {
     hydrateCloudAuthUsers();
+    authApi.getOwnerBootstrapStatus().then(setOwnerSetup);
   }, []);
 
   useEffect(() => {
     if (selectedRole === 'admin' && mode === 'login') {
-      loginForm.setValue('email', adminUserName || ALLOWED_ADMIN_EMAIL);
+      loginForm.setValue('email', adminUserName);
       loginForm.setValue('password', '');
     } else if (mode === 'login' && selectedRole && selectedRole !== 'admin' && selectedRole !== 'owner') {
       loginForm.setValue('email', '');
@@ -213,19 +219,6 @@ export default function LoginPage() {
 
     return () => { cancelled = true; };
   }, [mode]);
-
-  useEffect(() => {
-    if (!ownerCodeSentAt) return;
-    const tick = () => {
-      const remaining = Math.max(0, 60 - Math.floor((Date.now() - ownerCodeSentAt) / 1000));
-      setOwnerResendSeconds(remaining);
-      if (remaining === 0) return;
-      const id = window.setTimeout(tick, 1000);
-      return () => window.clearTimeout(id);
-    };
-    const id = window.setTimeout(tick, 1000);
-    return () => window.clearTimeout(id);
-  }, [ownerCodeSentAt]);
 
   const availableEmployees = useMemo(() => {
     const q = employeeSearch.trim().toLowerCase();
@@ -536,7 +529,7 @@ export default function LoginPage() {
     if (!valid) return;
 
     const values = adminForm.getValues();
-    const signupEmail = (values.email || ALLOWED_ADMIN_EMAIL).trim().toLowerCase();
+    const signupEmail = values.email.trim().toLowerCase();
     setLoading(true);
     setOtpSendError(null);
     // Open the verification popup immediately so code entry is always visible.
@@ -573,65 +566,6 @@ export default function LoginPage() {
     }
   };
 
-  const sendOwnerVerificationCode = async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const res = await requestOwnerVerificationCode(OWNER_SIGNIN_EMAILS);
-      if (!res.success || !res.emailSent) {
-        toast('error', 'Verification failed', res.message || 'Could not send the owner verification code.');
-        return;
-      }
-      setOwnerCode('');
-      setOwnerCodeSentAt(Date.now());
-      setOwnerResendSeconds(60);
-      setOwnerMode('code');
-      toast('success', 'Verification code sent', res.message || `A verification code was sent to ${formatEmailList(OWNER_SIGNIN_EMAILS)}.`);
-      if (res.devCode) {
-        toast('info', `Verification Code: ${res.devCode}`, `Dev Mode: code is ${res.devCode}`);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not reach the server.';
-      const title = /network error|not reachable|unreachable|timed out/i.test(message)
-        ? 'Network error'
-        : 'Verification failed';
-      toast('error', title, message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const verifyOwnerCode = async () => {
-    const trimmed = ownerCode.trim();
-    if (!/^\d{6}$/.test(trimmed)) {
-      toast('error', 'Invalid code', 'Enter the 6-digit verification code.');
-      return;
-    }
-    setLoading(true);
-    try {
-      const verified = await verifyOwnerVerificationCode(OWNER_SIGNIN_EMAILS, trimmed);
-      if (!verified.success || !verified.verified) {
-        toast('error', 'Verification failed', verified.message || 'Invalid or expired code.');
-        return;
-      }
-      const result = await loginOwner();
-      if (!result.success) {
-        toast('error', 'Owner sign in failed', result.error || 'Could not sign in as owner.');
-        return;
-      }
-      toast('success', 'Welcome back!', 'Owner sign in completed.');
-      navigate('/dashboard');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Could not verify the code.';
-      const title = /network error|not reachable|unreachable|timed out/i.test(message)
-        ? 'Network error'
-        : 'Verification failed';
-      toast('error', title, message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const onAdminSignup = async (data: AdminSignupForm) => {
     if (adminStep === 'details') {
       await sendAdminVerificationCode();
@@ -651,7 +585,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const verified = await authApi.verifyAdminCode({
-        email: ALLOWED_ADMIN_EMAIL,
+        email: data.email.trim().toLowerCase(),
         code: verificationCode.trim(),
       });
       if (!verified.success || !verified.verified) {
@@ -671,7 +605,7 @@ export default function LoginPage() {
       if (result.success) {
         setCreatedAdmin({
           name: data.name.trim(),
-          email: ALLOWED_ADMIN_EMAIL,
+          email: data.email.trim().toLowerCase(),
           password: data.password,
         });
         closeOtpModal();
@@ -736,8 +670,12 @@ export default function LoginPage() {
       name: data.name,
       email: data.email,
       password: data.password,
+      setupCode: data.setupCode,
     });
     setLoading(false);
+    if (result.success || result.ownerExists) {
+      setOwnerSetup({ ownerExists: true, setupCodeRequired: false });
+    }
     if (result.success) {
       setCreatedOwner({
         name: data.name.trim(),
@@ -927,6 +865,28 @@ export default function LoginPage() {
             </p>
           </div>
 
+          {ownerSetup?.ownerExists === false && mode === 'login' && selectedRole !== 'owner' && (
+            <div className="mb-6 rounded-2xl border border-primary-200 bg-primary-50 p-4 dark:border-primary-800/60 dark:bg-primary-900/30">
+              <p className="text-sm text-slate-700 dark:text-slate-200 mb-3">
+                No Owner account exists yet. Create the first Owner account to set up this app.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRole('owner');
+                  setAuthAction('signup');
+                  setMode('signup-owner');
+                  setOwnerMode('intro');
+                  setCreatedOwner(null);
+                  ownerForm.reset({ name: '', email: '', password: '', confirmPassword: '', setupCode: '' });
+                }}
+                className="btn-primary w-full py-2.5 text-sm font-semibold"
+              >
+                Create first Owner account
+              </button>
+            </div>
+          )}
+
           {/* Role selection — Admin / Accountant / Employee */}
           {mode !== 'admin-credentials' && selectedRole !== 'owner' && (
             <div className="mb-6">
@@ -1064,80 +1024,22 @@ export default function LoginPage() {
                   )}
                 </button>
 
-                {selectedRole === 'owner' && (
-                  <div className="pt-2 space-y-3">
-                    <p className="text-center text-xs text-slate-400">or sign in with a verification code</p>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
-                      A code will be sent to {formatEmailList(OWNER_SIGNIN_EMAILS)}.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={sendOwnerVerificationCode}
-                      className="btn-secondary w-full py-2.5 text-sm font-semibold"
-                      disabled={loading}
-                    >
-                      {loading ? 'Sending...' : 'Send Verification Code'}
-                    </button>
-                  </div>
-                )}
               </motion.form>
             )}
 
-            {selectedRole === 'owner' && ownerMode === 'code' && mode === 'login' && (
-              <motion.form
-                key="owner-code"
-                className="space-y-5"
+            {mode === 'signup-owner' && ownerSetup?.ownerExists && (
+              <motion.div
+                key="signup-owner-closed"
                 initial={{ opacity: 0, x: 12 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: -12 }}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void verifyOwnerCode();
-                }}
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
               >
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Verification code</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={ownerCode}
-                    onChange={(e) => setOwnerCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="123456"
-                    className="input"
-                    autoFocus
-                  />
-                  <p className="text-xs text-slate-500 mt-1">Enter the 6-digit code from any of {formatEmailList(OWNER_SIGNIN_EMAILS)}.</p>
-                </div>
-
-                <div className="flex gap-2">
-                  <button
-                    type="submit"
-                    disabled={loading || ownerCode.length !== 6}
-                    className="btn-primary flex-1 py-2.5 text-base font-semibold disabled:opacity-60"
-                  >
-                    {loading ? 'Verifying...' : 'Verify Code'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={sendOwnerVerificationCode}
-                    disabled={loading || ownerResendSeconds > 0}
-                    className="btn-secondary px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
-                  >
-                    {ownerResendSeconds > 0 ? `Resend (${ownerResendSeconds}s)` : 'Resend Code'}
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setOwnerMode('intro')}
-                  className="text-sm text-slate-500 hover:text-slate-800"
-                >
-                  Use user name and password instead
-                </button>
-              </motion.form>
+                An Owner account already exists. Use <strong>Log in</strong> to sign in.
+              </motion.div>
             )}
 
-            {mode === 'signup-owner' && (
+            {mode === 'signup-owner' && !ownerSetup?.ownerExists && (
               <motion.form
                 key="signup-owner"
                 initial={{ opacity: 0, x: 12 }}
@@ -1208,6 +1110,17 @@ export default function LoginPage() {
                     <p className="text-xs text-rose-500 mt-1">{ownerForm.formState.errors.confirmPassword.message}</p>
                   )}
                 </div>
+                {ownerSetup?.setupCodeRequired && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Owner setup code</label>
+                    <input
+                      {...ownerForm.register('setupCode')}
+                      type="password"
+                      autoComplete="off"
+                      className="input"
+                    />
+                  </div>
+                )}
                 <button type="submit" disabled={loading} className="btn-primary w-full py-2.5 text-base font-semibold disabled:opacity-60">
                   {loading ? 'Creating account...' : 'Create owner account'}
                 </button>
@@ -1602,7 +1515,7 @@ export default function LoginPage() {
                 </h3>
                 <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">
                   {otpEmailSent
-                    ? <>We emailed a 6-digit code to <span className="font-medium text-slate-700 dark:text-slate-200">{ALLOWED_ADMIN_EMAIL}</span>. It expires in 10 minutes.</>
+                    ? <>We emailed a 6-digit code to <span className="font-medium text-slate-700 dark:text-slate-200">{adminForm.getValues('email')}</span>. It expires in 10 minutes.</>
                     : loading
                       ? 'Sending verification code…'
                       : 'Enter the code from your email once delivery succeeds.'}
