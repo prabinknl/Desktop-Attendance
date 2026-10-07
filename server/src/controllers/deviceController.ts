@@ -15,8 +15,18 @@ import {
   getCommandResult,
 } from '../models/DeviceModel.js';
 import { syncDeviceAttendance } from '../services/device/SyncService.js';
-import { scanNetwork } from '../services/device/NetworkScanner.js';
-import { isValidIpAddress, isValidPort } from '../services/crypto/passwordCrypto.js';
+import { discoverDevices } from '../services/device/DeviceDiscovery.js';
+import { withDeviceLock } from '../services/device/deviceLock.js';
+import {
+  getConnectionState,
+  notifyConnectFailed,
+  notifyDeviceConfigChanged,
+  notifyDeviceConnected,
+  notifyManualDisconnect,
+  tryReconnectOnce,
+} from '../services/device/AutoReconnectService.js';
+import { isValidIpAddress, isValidPort, decryptPassword } from '../services/crypto/passwordCrypto.js';
+import { publishDeviceProfile } from '../services/cloud/hostedDeviceProfile.js';
 import { logDeviceAction } from '../services/device/deviceLogger.js';
 import { refreshSyncScheduler } from '../services/device/BackgroundSyncService.js';
 import { computeDevicePresence, resolveConnectionMode } from '../services/connector/devicePresence.js';
@@ -27,6 +37,7 @@ import type {
   DeviceBrand,
   ConnectionMode,
   ConnectionTestResult,
+  DeviceInfo,
 } from '../types/index.js';
 
 const VALID_BRANDS: DeviceBrand[] = ['hikvision', 'zkteco', 'essl', 'suprema', 'other'];
@@ -121,6 +132,9 @@ export const deviceController = {
         message: `id=${saved.id}`,
       });
       console.log('[Device] save payload (redacted):', sanitizePayloadForLog(payload as unknown as Record<string, unknown>));
+      if (env.deviceSyncEnabled && (payload.connectionMode ?? 'local_direct') === 'local_direct') {
+        void notifyDeviceConfigChanged(saved.id);
+      }
 
       res.status(201).json({
         success: true,
@@ -186,21 +200,45 @@ export const deviceController = {
         return;
       }
 
-      await updateDeviceStatus(saved.id, 'connecting');
-      const record = await getActiveDeviceRecord();
-      if (!record) throw new Error('Device not found after save');
-      const realAdapter = getAdapterForDevice(record);
-      await realAdapter.connect();
+      const { record, info } = await withDeviceLock(async () => {
+        await updateDeviceStatus(saved.id, 'connecting');
+        const current = await getActiveDeviceRecord();
+        if (!current) throw new Error('Device not found after save');
+        const realAdapter = getAdapterForDevice(current);
+        const result = await realAdapter.testConnection();
+        if (!result.online) {
+          await updateDeviceStatus(current.id, 'offline');
+          await notifyConnectFailed(current, result.authState === 'authentication_failed', result.message);
+          throw Object.assign(new Error(result.message), { handled: true });
+        }
+        const deviceInfo = await realAdapter.getDeviceInfo().catch((): DeviceInfo => ({
+          model: result.deviceInfo?.model ?? current.model ?? 'Hikvision device',
+          serialNumber: result.deviceInfo?.serialNumber,
+          firmwareVersion: result.deviceInfo?.firmwareVersion,
+          macAddress: result.deviceInfo?.macAddress,
+        }));
+        return { record: current, info: deviceInfo };
+      });
 
-      const info = await realAdapter.getDeviceInfo();
       await updateDeviceMeta(record.id, {
         status: 'online',
         model: info.model,
         macAddress: info.macAddress,
         deviceTime: info.deviceTime,
       });
-
+      await notifyDeviceConnected(record, info);
       await refreshSyncScheduler();
+      if (payload.password) {
+        void publishDeviceProfile({
+          name: payload.name,
+          brand: payload.brand,
+          model: info.model ?? payload.model,
+          ipAddress: payload.ipAddress,
+          port: Number(payload.port),
+          username: payload.username?.trim() || 'admin',
+          password: payload.password,
+        });
+      }
 
       const updated = await getActiveDevice();
       logDeviceAction({
@@ -214,6 +252,7 @@ export const deviceController = {
       const record = await getActiveDeviceRecord().catch(() => null);
       if (record) await updateDeviceStatus(record.id, 'offline');
       const message = err instanceof Error ? err.message : 'Connection failed';
+      if (!(err as { handled?: boolean }).handled) await notifyConnectFailed(record, false, message);
       logDeviceAction({
         ip: payload.ipAddress,
         action: 'connect',
@@ -304,8 +343,10 @@ export const deviceController = {
         password: password || 'admin',
       });
 
-      const result = await testAdapter.testConnection();
-      if (result.online && record) {
+      const result = await withDeviceLock(() => testAdapter.testConnection());
+      const testedSavedDevice =
+        record && record.ip_address === payload.ipAddress && record.port === Number(payload.port);
+      if (result.online && testedSavedDevice) {
         await updateDeviceStatus(record.id, 'online');
       } else if (
         !result.online &&
@@ -339,6 +380,7 @@ export const deviceController = {
       // ignore disconnect errors
     }
     clearDeviceAdapterCache();
+    notifyManualDisconnect(device);
 
     await updateDeviceStatus(device.id, 'offline');
     await refreshSyncScheduler();
@@ -471,15 +513,20 @@ export const deviceController = {
     }
   },
 
-  /** POST /api/device/scan */
-  async scan(_req: import('express').Request, res: import('express').Response) {
+  /** POST /api/device/scan | POST /api/devices/discover — SADP + ISAPI subnet scan. */
+  async scan(req: import('express').Request, res: import('express').Response) {
     try {
-      const result = await scanNetwork();
+      const body = (req.body ?? {}) as { quick?: boolean };
+      const result = await discoverDevices({
+        includeSubnetScan: body.quick !== true,
+        subnetScanOnlyIfSadpEmpty: false,
+      });
       res.json({
         success: true,
         data: result.devices,
         message: result.message,
         discoveryAvailable: result.discoveryAvailable,
+        sadpAvailable: result.sadpAvailable,
       });
     } catch (err) {
       res.status(500).json({
@@ -551,15 +598,65 @@ export const deviceController = {
   },
 
   /**
+   * POST /api/devices/lan-profile
+   * Returns the saved machine login so another office computer can connect.
+   * The desktop server calls this. The password is not logged.
+   */
+  async lanProfile(req: import('express').Request, res: import('express').Response) {
+    const role = String(req.headers['x-user-role'] ?? '').toLowerCase();
+    const fromDesktop = req.headers['x-desktop-lan'] === '1';
+    if (!fromDesktop || (role !== 'admin' && role !== 'owner')) {
+      res.status(403).json({ success: false, message: 'Not allowed' });
+      return;
+    }
+    try {
+      const record = await getActiveDeviceRecord();
+      if (!record?.password_encrypted || !record.ip_address || !record.username) {
+        res.status(404).json({ success: false, message: 'No attendance machine is saved yet' });
+        return;
+      }
+      const password = decryptPassword(record.password_encrypted);
+      res.json({
+        success: true,
+        data: {
+          name: record.name,
+          brand: record.brand,
+          model: record.model,
+          ipAddress: record.ip_address,
+          port: record.port,
+          username: record.username,
+          password,
+        },
+      });
+    } catch {
+      res.status(409).json({ success: false, message: 'The saved machine login could not be read' });
+    }
+  },
+
+  /**
    * POST /api/device/reconnect
    * Re-authenticates the saved device (saved IP first, then local subnet scan).
    * Called on login and by the auto-reconnect watcher. Never returns 5xx.
    * Never includes passwords in the response.
    */
-  async reconnect(_req: import('express').Request, res: import('express').Response) {
+  async reconnect(req: import('express').Request, res: import('express').Response) {
     try {
-      const { tryReconnectOnce } = await import('../services/device/AutoReconnectService.js');
-      const outcome = await tryReconnectOnce();
+      const force = (req.body as { force?: boolean } | undefined)?.force === true;
+      // Answer within ~12 s; a long discovery keeps running and is visible via GET /connection.
+      const outcome = await Promise.race([
+        tryReconnectOnce({ force }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 12_000)),
+      ]);
+      if (!outcome) {
+        res.json({
+          success: true,
+          connected: false,
+          reason: 'busy',
+          message: getConnectionState().message,
+          state: getConnectionState(),
+        });
+        return;
+      }
 
       if (outcome.connected) {
         const pub = await getActiveDevice();
@@ -584,6 +681,7 @@ export const deviceController = {
         connected: false,
         reason: outcome.reason,
         message: outcome.message,
+        state: getConnectionState(),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Reconnect failed';
@@ -591,6 +689,11 @@ export const deviceController = {
       console.info(`[Device] Auto-reconnect skipped: ${message}`);
       res.json({ success: true, connected: false, reason: message });
     }
+  },
+
+  /** GET /api/devices/connection — automatic-connection status for the UI (no secrets). */
+  async connection(_req: import('express').Request, res: import('express').Response) {
+    res.json({ success: true, data: getConnectionState() });
   },
 
   /** POST /api/devices/connector-token — generate a new connector token (shown once). */

@@ -22,34 +22,23 @@ export default function AppShell() {
   const location = useLocation();
   const queryClient = useQueryClient();
 
-  // Restore saved employees + attendance after login / app reopen
+  // Restore shared attendance, then connect the office machine and import punches.
   useEffect(() => {
-    hydratePersistedStores();
     let cancelled = false;
     (async () => {
+      await hydratePersistedStores();
+      if (cancelled) return;
+      const result = await deviceApi.reconnect().catch(() => null);
+      if (cancelled || !result?.connected) return;
+      void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.device });
+      void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.status });
       try {
         const { logs } = await fetchLogsWithCache(() => deviceApi.getLogs());
-        if (!cancelled && logs.length) {
-          await importAttendanceFromDeviceLogs(logs);
-        }
+        if (!cancelled && logs.length) await importAttendanceFromDeviceLogs(logs);
       } catch {
-        /* offline — localStorage already hydrated */
+        /* machine offline — shared attendance from login is already loaded */
       }
     })();
-    return () => { cancelled = true; };
-  }, []);
-
-  // Connect the saved attendance machine as soon as the signed-in app opens,
-  // not only when the user visits Device Settings or clicks Sign in again.
-  useEffect(() => {
-    let cancelled = false;
-    deviceApi.reconnect().then((result) => {
-      if (cancelled) return;
-      if (result.connected) {
-        void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.device });
-        void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.status });
-      }
-    });
     return () => { cancelled = true; };
   }, [queryClient]);
 

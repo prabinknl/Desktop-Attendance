@@ -96,11 +96,26 @@ if (clientDistSrc) {
 
 console.log('[prepare-server-resources] Installing production server dependencies...');
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const result = spawnSync(npmCmd, ['install', '--omit=dev', '--no-fund', '--no-audit'], {
-  cwd: outDir,
-  stdio: 'inherit',
-  shell: true,
-});
+const lockSrc = path.join(serverSrc, 'package-lock.json');
+let result = { status: 1 };
+if (fs.existsSync(lockSrc)) {
+  fs.copyFileSync(lockSrc, path.join(outDir, 'package-lock.json'));
+  result = spawnSync(npmCmd, ['ci', '--omit=dev', '--no-fund', '--no-audit'], {
+    cwd: outDir,
+    stdio: 'inherit',
+    shell: true,
+  });
+  if (result.status !== 0) {
+    console.warn('[prepare-server-resources] npm ci failed (lockfile out of sync?) - falling back to npm install');
+  }
+}
+if (result.status !== 0) {
+  result = spawnSync(npmCmd, ['install', '--omit=dev', '--no-fund', '--no-audit'], {
+    cwd: outDir,
+    stdio: 'inherit',
+    shell: true,
+  });
+}
 
 if (result.status !== 0) {
   console.error('[prepare-server-resources] npm install failed');

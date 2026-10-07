@@ -1,7 +1,7 @@
 {
   "name": "attendence",
   "private": true,
-  "version": "1.0.16",
+  "version": "1.0.18",
   "type": "module",
   "main": "server/dist/index.js",
   "scripts": {
@@ -30,7 +30,8 @@
     "build:installer": "npm run electron:build",
     "dist": "npm run electron:build",
     "dist:dir": "npm run electron:pack",
-    "publish": "npm run build:desktop && node electron/scripts/build-win.mjs --publish always"
+    "publish": "npm run build:desktop && node electron/scripts/build-win.mjs --publish always",
+    "verify:release": "node scripts/verify-release.cjs release"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
@@ -129,6 +130,8 @@
       "electron/main.cjs",
       "electron/main-electron.cjs",
       "electron/preload.cjs",
+      "electron/updater.cjs",
+      "electron/secure-key.cjs",
       "package.json"
     ],
     "extraResources": [
@@ -174,8 +177,8 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Attendance Desktop v${version}",
-      "uninstallDisplayName": "Attendance Desktop v${version}",
+      "shortcutName": "Attendance Desktop",
+      "uninstallDisplayName": "Attendance Desktop",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "unicode": true,

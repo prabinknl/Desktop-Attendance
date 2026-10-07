@@ -135,8 +135,8 @@ console.log(`[electron:build-win] output -> ${outDir}`);
 
 // Keep package.json artifactName (Attendance.Desktop.Setup.${version}.${ext}) so
 // electron-updater latest.yml continues to reference the versioned installer.
-// Desktop/Start Menu shortcut name includes version via nsis.shortcutName
-// ("Attendance Desktop v${version}" in package.json).
+// Shortcut name is stable ("Attendance Desktop"); the installer renames older
+// "Attendance Desktop vX.Y.Z" shortcuts on upgrade. The version shows in the app.
 const builderArgs = ['--win', '--x64', `--config.directories.output=${outDir}`];
 if (dirMode) builderArgs.unshift('--dir');
 else builderArgs.push(`--publish=${publishMode}`);
@@ -211,6 +211,15 @@ if (!dirMode) {
   }
   if (copyResult.status !== 0) {
     process.exit(copyResult.status ?? 1);
+  }
+
+  const verifyResult = spawnSync(process.execPath, [path.join(root, 'scripts', 'verify-release.cjs'), outDir], {
+    cwd: root,
+    stdio: 'inherit',
+  });
+  if (verifyResult.status !== 0) {
+    console.error('[electron:build-win] Release verification failed - do not publish these artifacts.');
+    process.exit(verifyResult.status ?? 1);
   }
 }
 

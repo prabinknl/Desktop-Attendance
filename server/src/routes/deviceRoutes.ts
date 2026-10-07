@@ -15,8 +15,11 @@ router.get('/logs', deviceController.logs);
 router.get('/diagnostics', deviceController.diagnostics);
 router.post('/sync', deviceController.sync);
 router.post('/scan', deviceController.scan);
+router.post('/discover', deviceController.scan);
+router.get('/connection', deviceController.connection);
 router.patch('/sync-settings', deviceController.updateSyncSettings);
 router.post('/reconnect', deviceController.reconnect);
+router.post('/lan-profile', deviceController.lanProfile);
 router.post('/connector-token', deviceController.createConnectorToken);
 router.patch('/connection-mode', deviceController.patchConnectionMode);
 // Parametric routes last

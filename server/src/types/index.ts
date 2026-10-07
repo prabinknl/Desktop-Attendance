@@ -117,6 +117,14 @@ export interface DiscoveredDevice {
   macAddress: string;
   port: number;
   status: 'reachable' | 'unreachable';
+  /** Stable hardware identifier (SADP DeviceSN) when the device announces it. */
+  serialNumber?: string;
+  firmwareVersion?: string;
+  /** SADP: false means the device still needs first-time activation in Hikvision tools. */
+  activated?: boolean;
+  /** Model looks like a Hikvision access-control / attendance terminal (DS-K…). */
+  compatible?: boolean;
+  discoveredBy?: Array<'sadp' | 'isapi'>;
 }
 
 export interface AttendanceLogEntry {

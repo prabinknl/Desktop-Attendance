@@ -51,7 +51,8 @@ export function calcOvertime(workingHours: number, expectedHours = 8): number {
 
 /** Expected day hours for a shift (Dayhour). */
 export function calcDayHours(shiftWorkingHours?: number): number {
-  return shiftWorkingHours && shiftWorkingHours > 0 ? shiftWorkingHours : 8;
+  if (shiftWorkingHours === 0) return 0;
+  return typeof shiftWorkingHours === 'number' && shiftWorkingHours > 0 ? shiftWorkingHours : 8;
 }
 
 /**
@@ -90,14 +91,20 @@ export function calcOtLtHours(opts: {
   graceMinutes?: number;
   dayHours?: number;
 }): number {
-  const dayHours = calcDayHours(opts.dayHours);
+  const dayHours = typeof opts.dayHours === 'number' ? Math.max(0, opts.dayHours) : calcDayHours(opts.dayHours);
   const worked = opts.workingHours ?? 0;
   const storedOt = opts.overtime ?? 0;
 
-  const lateMins =
-    opts.lateMinutes !== undefined && opts.lateMinutes > 0
-      ? opts.lateMinutes
-      : calcLateMinutes(opts.checkIn, opts.shiftStart ?? '09:00', opts.graceMinutes ?? 15);
+  // On an off-day (dayHours === 0), no dayhours are owed and no late penalty applies
+  if (dayHours === 0) {
+    const extra = Math.max(worked, storedOt);
+    return Math.round(extra * 100) / 100;
+  }
+
+  // Calculate late minutes: if checkIn & shiftStart are available, compute live
+  const lateMins = opts.checkIn && opts.shiftStart
+    ? calcLateMinutes(opts.checkIn, opts.shiftStart, opts.graceMinutes ?? 15)
+    : (opts.lateMinutes ?? 0);
   const lateHours = Math.round((lateMins / 60) * 100) / 100;
 
   const shortfall = Math.max(0, Math.round((dayHours - worked) * 100) / 100);

@@ -3,9 +3,11 @@ import { env } from '../config/env.js';
 import {
   canResendVerificationCode,
   generateVerificationCode,
+  OWNER_VERIFICATION_EMAIL,
   sendAdminVerificationEmail,
   storeVerificationCode,
   verifyStoredCode,
+  clearVerificationCode,
   sendInvitationEmail,
 } from '../services/auth/adminVerification.js';
 import { purgeAdminAccountByEmail } from '../services/auth/purgeAdminAccount.js';
@@ -57,6 +59,26 @@ export async function bootstrapOwner(req: Request, res: Response) {
     }
 
     const { UserModel } = await import('../models/UserModel.js');
+    if (await UserModel.ownerExists()) {
+      return res.status(409).json({
+        success: false,
+        code: 'owner_exists',
+        message: 'An Owner account already exists. Sign in instead.',
+      });
+    }
+    if (await UserModel.getByEmail(email)) {
+      return res.status(409).json({
+        success: false,
+        message: 'This email is already registered to another account.',
+      });
+    }
+
+    const verificationCode = String(req.body?.verificationCode ?? '').trim();
+    const verification = verifyStoredCode(OWNER_VERIFICATION_EMAIL, verificationCode);
+    if (!verification.ok) {
+      return res.status(400).json({ success: false, message: verification.message });
+    }
+
     const created = await UserModel.createFirstOwner({
       id: `u-owner-${Date.now()}`,
       name,
@@ -79,6 +101,54 @@ export async function bootstrapOwner(req: Request, res: Response) {
     }
     console.error('[Auth] bootstrapOwner failed:', err instanceof Error ? err.message : err);
     return res.status(503).json({ success: false, message: 'Could not create the Owner account. Try again shortly.' });
+  }
+}
+
+/** Email the first-Owner verification code to the fixed mailbox only. */
+export async function sendOwnerSetupCode(_req: Request, res: Response) {
+  try {
+    const { UserModel } = await import('../models/UserModel.js');
+    if (await UserModel.ownerExists()) {
+      return res.status(409).json({
+        success: false,
+        code: 'owner_exists',
+        message: 'An Owner account already exists. Sign in instead.',
+      });
+    }
+    if (!canResendVerificationCode(OWNER_VERIFICATION_EMAIL)) {
+      return res.status(429).json({
+        success: false,
+        emailSent: false,
+        message: 'Please wait 60 seconds before requesting a new verification code.',
+      });
+    }
+
+    const code = generateVerificationCode();
+    storeVerificationCode(OWNER_VERIFICATION_EMAIL, code);
+    const mail = await sendAdminVerificationEmail({
+      to: OWNER_VERIFICATION_EMAIL,
+      name: 'Owner',
+      code,
+      purpose: 'owner',
+    });
+    if (!mail.sent) {
+      clearVerificationCode(OWNER_VERIFICATION_EMAIL);
+      return res.status(503).json({
+        success: false,
+        emailSent: false,
+        message: mail.error || 'Could not send the verification code.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      emailSent: true,
+      email: OWNER_VERIFICATION_EMAIL,
+      message: `Verification code sent to ${OWNER_VERIFICATION_EMAIL}.`,
+    });
+  } catch (err) {
+    console.error('[Auth] sendOwnerSetupCode failed:', err instanceof Error ? err.message : err);
+    return res.status(503).json({ success: false, message: 'Could not send the verification code. Try again shortly.' });
   }
 }
 

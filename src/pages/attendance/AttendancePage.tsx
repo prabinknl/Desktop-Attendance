@@ -13,7 +13,7 @@ import {
 import { format, parseISO } from 'date-fns';
 import { AttendanceAPI, EmployeeAPI, DepartmentAPI, ShiftAPI, LeaveAPI, filterAttendance, hydratePersistedStores } from '../../data/store';
 import type { Attendance, Employee, Department, Shift, AttendanceStatus, LeaveRequest } from '../../types';
-import { attendanceStatusLabel, formatDate, formatTime, cn, calcDayHours, calcOtLtHours, formatHoursMinutes, formatOtLt, generateId, isApprovedLeaveDay } from '../../lib/utils';
+import { attendanceStatusLabel, formatDate, formatTime, cn, calcDayHours, calcOtLtHours, formatHoursMinutes, formatOtLt, generateId, isApprovedLeaveDay, getEffectiveAttendanceTimes, calcLateMinutes } from '../../lib/utils';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -351,7 +351,7 @@ export default function AttendancePage() {
       header: 'Dayhour',
       cell: ({ row }) => (
         <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
-          {formatHoursMinutes(getDayHours(row.original))}
+          {getDayHours(row.original) > 0 ? formatHoursMinutes(getDayHours(row.original)) : '—'}
         </span>
       ),
     },
@@ -622,11 +622,16 @@ export default function AttendancePage() {
 
       for (const record of visibleSaved) {
         const shift = shiftMap[record.shiftId];
-        const dayHours = calcDayHours(shift?.workingHours);
+        const schedule = resolveEmployeeSchedule(record.employeeId, shift, [], record.date);
+        const eff = getEffectiveAttendanceTimes(record);
+        const emp = empMap[record.employeeId];
+        const aliases = [emp?.id, emp?.employeeId].filter((id): id is string => Boolean(id));
+        const isOff = !schedule.isWorkingDay || isApprovedLeaveDay(leaves, record.employeeId, record.date, aliases);
+        const lateMins = isOff || !eff.effectiveIn ? 0 : calcLateMinutes(eff.effectiveIn, schedule.shiftStart, schedule.graceMinutes);
         const otLt = getOtLt(record);
         await AttendanceAPI.update(record.id, {
-          lateMinutes: otLt < 0 ? Math.round(Math.abs(otLt) * 60) : record.lateMinutes,
-          overtime: otLt > 0 ? otLt : Math.max(0, record.workingHours - dayHours),
+          lateMinutes: lateMins,
+          overtime: otLt > 0 ? otLt : Math.max(0, record.workingHours - schedule.dayHours),
         });
       }
 

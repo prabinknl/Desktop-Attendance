@@ -51,6 +51,7 @@ interface AuthContextType {
     email: string;
     password: string;
     setupCode?: string;
+    verificationCode?: string;
   }) => Promise<{ success: boolean; error?: string; ownerExists?: boolean }>;
   logout: () => void;
   updateProfile: (patch: Partial<Pick<User, 'name' | 'email' | 'phone' | 'timezone' | 'avatar'>>) => void;
@@ -564,6 +565,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string;
     password: string;
     setupCode?: string;
+    verificationCode?: string;
   }) => {
     try {
       const res = await authApi.bootstrapOwner({
@@ -571,6 +573,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         email: input.email.trim().toLowerCase(),
         password: input.password,
         setupCode: input.setupCode?.trim() || undefined,
+        verificationCode: input.verificationCode?.trim() || undefined,
       });
       if (!res.success) {
         return {

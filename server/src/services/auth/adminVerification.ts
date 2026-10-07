@@ -23,6 +23,9 @@ function hashCode(code: string): string {
   return crypto.createHash('sha256').update(String(code).trim()).digest('hex');
 }
 
+/** Owner registration codes are delivered here, not to the address typed in the form. */
+export const OWNER_VERIFICATION_EMAIL = 'noreply@appnep.com';
+
 export function generateVerificationCode(): string {
   return String(crypto.randomInt(100000, 999999));
 }
@@ -188,6 +191,7 @@ export async function sendAdminVerificationEmail(input: {
   to: string | string[];
   name: string;
   code: string;
+  purpose?: 'admin' | 'owner';
 }): Promise<{ sent: boolean; devFallback?: boolean; error?: string }> {
   if (!smtpConfigured()) {
     console.log('\n==========================================================');
@@ -206,22 +210,28 @@ export async function sendAdminVerificationEmail(input: {
     const transporter = createMailTransporter();
 
     const from = mailFromAddress();
+    const ownerMail = input.purpose === 'owner';
+    const greeting = input.name || (ownerMail ? 'Owner' : 'Admin');
+    const subject = ownerMail ? 'Owner registration verification code' : 'Admin signup verification code';
+    const lead = ownerMail
+      ? 'Your owner registration verification code is:'
+      : 'Your admin signup verification code is:';
     await sendMailConfirmed(transporter, {
       from: `"PACE Attendance" <${from}>`,
       to: input.to,
-      subject: 'Admin signup verification code',
+      subject,
       text: [
-        `Hello ${input.name || 'Admin'},`,
+        `Hello ${greeting},`,
         '',
-        `Your verification code is: ${input.code}`,
+        `${lead} ${input.code}`,
         '',
         'This code expires in 10 minutes.',
         '',
         'If you did not request this, ignore this email.',
       ].join('\n'),
       html: `
-      <p>Hello ${input.name || 'Admin'},</p>
-      <p>Your admin signup verification code is:</p>
+      <p>Hello ${greeting},</p>
+      <p>${lead}</p>
       <p style="font-size:28px;font-weight:700;letter-spacing:6px">${input.code}</p>
       <p>This code expires in 10 minutes.</p>
     `,

@@ -21,12 +21,14 @@ import {
   getInvitationsByRole,
   getOwnerBootstrapStatus,
   bootstrapOwner,
+  sendOwnerSetupCode,
 } from '../controllers/authController.js';
 
 const router = Router();
 
 // First-Owner setup; refuses once any Owner exists
 router.get('/owner/bootstrap', getOwnerBootstrapStatus);
+router.post('/owner/send-code', sendOwnerSetupCode);
 router.post('/owner/bootstrap', bootstrapOwner);
 
 router.post('/admin/send-code', sendAdminCode);

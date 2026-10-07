@@ -1,4 +1,7 @@
 import { authApi } from '../api/authApi';
+
+/** Owner registration codes are sent only to this mailbox. */
+export const OWNER_VERIFICATION_EMAIL = 'noreply@appnep.com';
 import { getInsforgeBrowserClient, useInsforgeOtp } from './insforgeClient';
 
 function otpErrorMessage(error: unknown): string {

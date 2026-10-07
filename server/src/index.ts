@@ -3,11 +3,49 @@ import { env, logStartupEnvironment, validateStartupEnvironment } from './config
 import { runMigrations } from './db/migrate.js';
 import { getPoolDriver } from './db/pool.js';
 import { isExplicitMemoryStore, isMemoryMode, setMemoryMode } from './models/DeviceModel.js';
-import { refreshSyncScheduler, startSyncSettingsWatcher } from './services/device/BackgroundSyncService.js';
-import { autoReconnectDevice, tryReconnectOnce } from './services/device/AutoReconnectService.js';
+import type { Server } from 'http';
+import {
+  refreshSyncScheduler,
+  startSyncSettingsWatcher,
+  stopSyncScheduler,
+} from './services/device/BackgroundSyncService.js';
+import {
+  autoReconnectDevice,
+  handleSystemResume,
+  handleSystemSuspend,
+  stopAutoReconnectWatcher,
+  tryReconnectOnce,
+} from './services/device/AutoReconnectService.js';
+import { waitForSyncIdle } from './services/device/SyncService.js';
 import { getInsForgeStatus } from './services/insforge/insforgeClient.js';
 
 const DB_BOOT_TIMEOUT_MS = 10_000;
+const SHUTDOWN_SYNC_WAIT_MS = 15_000;
+
+let httpServer: Server | null = null;
+let shuttingDown = false;
+
+/** Stop scheduling work, let an in-progress attendance sync finish, then exit. */
+async function gracefulShutdown(reason: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Server] Shutting down (${reason})`);
+  stopAutoReconnectWatcher();
+  stopSyncScheduler();
+  const idle = await waitForSyncIdle(SHUTDOWN_SYNC_WAIT_MS);
+  if (!idle) console.warn('[Server] Attendance sync still running at shutdown; unsynced punches remain on the machine and download next time');
+  httpServer?.close();
+  process.exit(0);
+}
+
+// Messages from the Electron main process (IPC channel exists only when spawned by the desktop app).
+process.on('message', (message: unknown) => {
+  const type = (message as { type?: string } | null)?.type;
+  if (type === 'shutdown') void gracefulShutdown((message as { reason?: string }).reason ?? 'desktop');
+  else if (type === 'system-suspend') handleSystemSuspend();
+  else if (type === 'system-resume') handleSystemResume();
+});
+process.on('disconnect', () => void gracefulShutdown('desktop app closed'));
 
 function dbLabel(): string {
   return getPoolDriver() === 'mysql' ? 'MySQL/MariaDB' : 'PostgreSQL';
@@ -97,6 +135,7 @@ async function start() {
   // while the database / legacy InsForge probe are still connecting.
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(env.port, env.host, () => {
+      httpServer = server;
       console.log(`[Server] API listening on http://${env.host}:${env.port}`);
       console.log(`[Server] Database driver: ${dbLabel()}`);
       logStartupEnvironment();

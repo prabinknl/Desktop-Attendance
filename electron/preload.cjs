@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld(
     getCloudApiBaseUrl: () => ipcRenderer.invoke('desktop:get-cloud-api-base-url'),
     platform: process.platform,
     getAppVersion: () => ipcRenderer.invoke('desktop:get-app-version'),
+    getUpdateState: () => ipcRenderer.invoke('desktop:get-update-state'),
     checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
     restartAndInstall: () => ipcRenderer.invoke('desktop:restart-and-install'),
     onUpdateStatus: (callback) => {

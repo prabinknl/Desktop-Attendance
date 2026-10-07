@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -37,6 +37,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   useAutoReconnect,
   useDevice,
+  useDeviceConnectionState,
   useDeviceLogs,
   useDeviceMutations,
   useDeviceStatus,
@@ -44,6 +45,7 @@ import {
   deviceQueryKeys,
   cachedLogsForRange,
 } from '../../hooks/useDeviceSettings';
+import AutoConnectionCard from './AutoConnectionCard';
 import { deviceApi } from '../../api/deviceApi';
 import {
   DEVICE_BRANDS,
@@ -138,6 +140,7 @@ export default function DeviceSettingsPage() {
   const connectionMode: ConnectionMode =
     device?.connectionMode ?? status?.connectionMode ?? 'local_direct';
   const isCloudMode = connectionMode === 'cloud_connector';
+  const { data: connectionState } = useDeviceConnectionState(!isCloudMode);
   const isOnline = Boolean(status?.deviceOnline);
   const connectorOnline = Boolean(status?.connectorOnline);
   const logsBusy = loadingSavedLogs || (logsLoading && logs.length === 0);
@@ -197,7 +200,7 @@ export default function DeviceSettingsPage() {
 
   // Stable callback reference prevents useAutoReconnect from re-firing on every render
   const stableReconnect = useStableCallback(() => {
-    void reconnect.mutateAsync();
+    void reconnect.mutateAsync({});
   });
 
   // Fire reconnect exactly once per mount after device data loads (offline + local_direct only).
@@ -216,12 +219,12 @@ export default function DeviceSettingsPage() {
   useEffect(() => {
     const handleNetworkOnline = () => {
       if (device && !isOnline && !reconnect.isPending) {
-        void reconnect.mutateAsync();
+        void reconnect.mutateAsync({});
       }
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && device && !isOnline && !reconnect.isPending) {
-        void reconnect.mutateAsync();
+        void reconnect.mutateAsync({});
       }
     };
     window.addEventListener('online', handleNetworkOnline);
@@ -499,7 +502,7 @@ export default function DeviceSettingsPage() {
     setScanResults([]);
     setScanMessage(undefined);
     try {
-      const results = await scan.mutateAsync();
+      const results = await scan.mutateAsync({});
       setScanResults(results.devices);
       setScanMessage(results.message);
       if (!results.devices.length && results.message) {
@@ -511,15 +514,60 @@ export default function DeviceSettingsPage() {
   };
 
   const handleConnectFromScan = (row: DiscoveredDevice) => {
+    const genericModel = /^Hikvision( device| \(ISAPI\))?$/i.test(row.model);
     form.setFieldsValue({
       brand: row.brand,
-      model: row.model,
+      ...(genericModel ? {} : { model: row.model }),
       ipAddress: row.ipAddress,
       port: row.port,
     });
+    if (!form.getFieldValue('name')) form.setFieldValue('name', row.model || 'Attendance machine');
     setScanOpen(false);
-    notify('success', 'Device Selected', `${row.model} at ${row.ipAddress} loaded into the form.`);
+    if (row.activated === false) {
+      notify(
+        'info',
+        'Machine not activated',
+        `${row.model} at ${row.ipAddress} must be activated (admin password set) on the machine or with Hikvision SADP / iVMS-4200 before it can connect.`,
+      );
+      return;
+    }
+    notify(
+      'success',
+      'Device Selected',
+      `${row.model} at ${row.ipAddress} loaded into the form. Enter the machine's username and password, then click Connect.`,
+    );
   };
+
+  const handleRetryNow = async () => {
+    const result = await reconnect.mutateAsync({ force: true });
+    if (result.connected) notify('success', 'Connected', 'The attendance machine is connected.');
+    else if (result.message) notify('info', 'Not connected yet', result.message);
+  };
+
+  // First run: exactly one machine found on the LAN → prefill it (credentials are still required).
+  const prefilledCandidateRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!deviceLoaded || device || isCloudMode || connectionState?.phase !== 'not_configured') return;
+    const compatible = connectionState.candidates.filter((c) => c.compatible);
+    if (compatible.length !== 1) return;
+    const only = compatible[0];
+    const key = `${only.ipAddress}:${only.port}`;
+    if (prefilledCandidateRef.current === key || form.getFieldValue('ipAddress')) return;
+    prefilledCandidateRef.current = key;
+    form.setFieldsValue({
+      brand: only.brand,
+      model: only.model,
+      ipAddress: only.ipAddress,
+      port: only.port,
+      name: form.getFieldValue('name') || only.model,
+    });
+    notify(
+      'info',
+      'Attendance machine found',
+      `${only.model} at ${only.ipAddress} was filled in. Enter its username and password, then click Connect.`,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionState, device, deviceLoaded, isCloudMode, form]);
 
   const handleSyncSettingsChange = async (autoSync: boolean, interval: number) => {
     try {
@@ -574,8 +622,29 @@ export default function DeviceSettingsPage() {
       key: 'brand',
       render: (b: DeviceBrand) => brandLabels[b],
     },
-    { title: 'Model', dataIndex: 'model', key: 'model' },
-    { title: 'IP Address', dataIndex: 'ipAddress', key: 'ipAddress' },
+    {
+      title: 'Model',
+      dataIndex: 'model',
+      key: 'model',
+      render: (m: string, row) => (
+        <Space size={4} wrap>
+          <span>{m}</span>
+          {row.compatible && <Tag color="green">Attendance terminal</Tag>}
+          {row.activated === false && <Tag color="orange">Not activated</Tag>}
+        </Space>
+      ),
+    },
+    {
+      title: 'IP Address',
+      key: 'ipAddress',
+      render: (_, row) => `${row.ipAddress}:${row.port}`,
+    },
+    {
+      title: 'Serial',
+      dataIndex: 'serialNumber',
+      key: 'serialNumber',
+      render: (s?: string) => s || '—',
+    },
     {
       title: 'MAC Address',
       dataIndex: 'macAddress',
@@ -586,8 +655,11 @@ export default function DeviceSettingsPage() {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      render: (s: string) => (
-        <Badge status={s === 'reachable' ? 'processing' : 'error'} text={s} />
+      render: (s: string, row) => (
+        <Badge
+          status={s === 'reachable' ? 'processing' : 'error'}
+          text={row.discoveredBy?.includes('sadp') ? `${s} (SADP)` : s}
+        />
       ),
     },
     {
@@ -749,6 +821,19 @@ export default function DeviceSettingsPage() {
             </Col>
           </Row>
         </Card>
+
+        {!isCloudMode && (
+          <AutoConnectionCard
+            state={connectionState}
+            hasDevice={Boolean(device?.id)}
+            retrying={reconnect.isPending}
+            scanning={scan.isPending}
+            readOnly={isReadOnly}
+            onRetry={() => void handleRetryNow()}
+            onFindMachine={() => void handleScan()}
+            onUseCandidate={handleConnectFromScan}
+          />
+        )}
 
         {isCloudMode && !connectorOnline && (
           <Alert
@@ -1192,7 +1277,7 @@ export default function DeviceSettingsPage() {
         </Form>
 
         <Modal
-          title="Network Scan — Hikvision ISAPI"
+          title="Find attendance machine on the local network"
           open={scanOpen}
           onCancel={() => setScanOpen(false)}
           footer={
@@ -1207,13 +1292,14 @@ export default function DeviceSettingsPage() {
                   </Button>,
                 ]
           }
-          width={800}
+          width={960}
         >
           {scan.isPending ? (
             <div className="text-center py-8">
               <Progress type="circle" percent={undefined} status="active" />
               <Paragraph className="mt-4">
-                Scanning local network for Hikvision ISAPI devices…
+                Searching the local network for Hikvision attendance machines (SADP, then an ISAPI
+                subnet scan). This can take up to a minute…
               </Paragraph>
             </div>
           ) : (

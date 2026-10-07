@@ -8,6 +8,7 @@ import type {
   DiscoveredDevice,
   SyncResult,
   ConnectionMode,
+  DeviceConnectionState,
 } from '../types/device';
 
 interface ApiResponse<T> {
@@ -95,20 +96,28 @@ export const deviceApi = {
     return data.data;
   },
 
-  scanNetwork: async (): Promise<{
+  scanNetwork: async (opts?: { quick?: boolean }): Promise<{
     devices: DiscoveredDevice[];
     message?: string;
     discoveryAvailable?: boolean;
+    sadpAvailable?: boolean;
   }> => {
     const { data } = await apiClient.post<ApiResponse<DiscoveredDevice[]> & {
       message?: string;
       discoveryAvailable?: boolean;
-    }>('/devices/scan');
+      sadpAvailable?: boolean;
+    }>('/devices/scan', { quick: opts?.quick === true }, { timeout: 90_000 });
     return {
       devices: data.data ?? [],
       message: data.message,
       discoveryAvailable: data.discoveryAvailable,
+      sadpAvailable: data.sadpAvailable,
     };
+  },
+
+  getConnectionState: async (): Promise<DeviceConnectionState> => {
+    const { data } = await apiClient.get<ApiResponse<DeviceConnectionState>>('/devices/connection');
+    return data.data;
   },
 
   updateSyncSettings: async (
@@ -131,13 +140,18 @@ export const deviceApi = {
    * Silently re-authenticate the saved device using its stored credentials.
    * Always resolves — never throws — so it can safely be called fire-and-forget.
    */
-  reconnect: async (): Promise<{ connected: boolean; data?: DevicePublic; reason?: string }> => {
+  reconnect: async (opts?: {
+    force?: boolean;
+  }): Promise<{ connected: boolean; data?: DevicePublic; reason?: string; message?: string }> => {
     try {
-      const { data } = await apiClient.post<{ success: boolean; connected: boolean; data?: DevicePublic; reason?: string }>(
-        '/devices/reconnect',
-        {},
-      );
-      return { connected: data.connected, data: data.data, reason: data.reason };
+      const { data } = await apiClient.post<{
+        success: boolean;
+        connected: boolean;
+        data?: DevicePublic;
+        reason?: string;
+        message?: string;
+      }>('/devices/reconnect', { force: opts?.force === true }, { timeout: 20_000 });
+      return { connected: data.connected, data: data.data, reason: data.reason, message: data.message };
     } catch {
       return { connected: false, reason: 'api_unreachable' };
     }

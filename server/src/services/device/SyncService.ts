@@ -267,6 +267,22 @@ export async function syncDeviceAttendance(options: SyncOptions = {}): Promise<S
   return run;
 }
 
+/** Resolves true once queued syncs finish, false if they are still running after timeoutMs. */
+export async function waitForSyncIdle(timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  let observed: Promise<unknown>;
+  do {
+    observed = syncChain;
+    const settled = await Promise.race([observed.then(() => true as const), timeout]);
+    if (!settled) return false;
+  } while (observed !== syncChain);
+  clearTimeout(timer);
+  return true;
+}
+
 async function runSyncDeviceAttendance(options: SyncOptions = {}): Promise<SyncResult> {
   const device = await getActiveDeviceRecord();
   if (!device) throw new Error('No device configured');

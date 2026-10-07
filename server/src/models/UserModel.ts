@@ -449,15 +449,16 @@ export const UserModel = {
     const userId = existing?.id?.trim();
 
     try {
-      await query(
-        `DELETE FROM app_users
-         WHERE LOWER(email) = $1
-            OR ($2 <> '' AND (client_id = $2 OR id = $2))
-            OR ($3 <> '' AND (client_id = $3 OR id = $3))`,
-        [key, userId ?? '', clientId ?? ''],
-      );
+      await query('DELETE FROM app_users WHERE LOWER(email) = $1', [key]);
+      if (userId) {
+        await query('DELETE FROM app_users WHERE id = $1 OR client_id = $1', [userId]);
+      }
+      if (clientId && clientId !== userId) {
+        await query('DELETE FROM app_users WHERE id = $1 OR client_id = $1', [clientId]);
+      }
     } catch (err) {
       console.warn('[UserModel] purgeOrganizationByEmail error:', err instanceof Error ? err.message : err);
+      throw err;
     }
 
     memoryStore.deleteUserByEmail(key);

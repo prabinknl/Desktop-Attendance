@@ -4,9 +4,9 @@ name: Build & Release Attendance Desktop
 # Separate from InsForge web deploy (deploy-insforge.yml).
 #
 # Release process:
-#   1. Bump "version" in package.json (e.g. 1.0.4)
+#   1. Bump "version" in package.json (e.g. 1.0.18)
 #   2. Commit and push to main
-#   3. Create and push a matching tag: git tag v1.0.4 && git push origin v1.0.4
+#   3. Create and push a matching tag: git tag v1.0.18 && git push origin v1.0.18
 #   4. This workflow builds NSIS installer and publishes a GitHub Release
 #      Assets: versioned .exe + .blockmap + latest.yml (updater) and
 #      Attendance-Desktop-Setup.exe (stable website download URL).
@@ -116,6 +116,12 @@ jobs:
         shell: bash
         run: node scripts/create-stable-installer.cjs
 
+      - name: Verify installer, latest.yml checksums and packaged secrets
+        shell: bash
+        # Fails before the draft release is published if latest.yml does not
+        # match the installer or any secret/.env file was packaged.
+        run: node scripts/verify-release.cjs release
+
       - name: Upload website installer and updater blockmap
         shell: bash
         env:
@@ -177,9 +183,13 @@ jobs:
           # releaseType is "release". Only undraft when still draft so this
           # step stays idempotent (avoids HTTP 422 on already-published tags).
           IS_DRAFT="$(gh release view "${GITHUB_REF_NAME}" --json isDraft -q .isDraft 2>/dev/null || echo true)"
+          # --latest: electron-updater reads /releases/latest, so this release
+          # must be GitHub's "latest" (older malformed tags like V1.0.17 must
+          # not keep that flag).
           if [ "$IS_DRAFT" = "true" ]; then
-            gh release edit "${GITHUB_REF_NAME}" --draft=false
+            gh release edit "${GITHUB_REF_NAME}" --draft=false --latest
             echo "Published ${GITHUB_REF_NAME} - electron-updater can now see latest.yml"
           else
-            echo "${GITHUB_REF_NAME} is already published - electron-updater can see latest.yml"
+            gh release edit "${GITHUB_REF_NAME}" --latest
+            echo "${GITHUB_REF_NAME} is already published - marked as latest"
           fi

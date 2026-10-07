@@ -6,14 +6,26 @@
  */
 'use strict';
 
-const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
-const { autoUpdater } = require('electron-updater');
+const { app, BrowserWindow, shell, dialog, ipcMain, powerMonitor, safeStorage } = require('electron');
 const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { URL } = require('url');
 const { spawn, execFile } = require('child_process');
+const { createUpdater } = require('./updater.cjs');
+const {
+  loadDeviceCredentialKey,
+  stripPlaintextKeyFromEnvFile,
+  isValidKey,
+} = require('./secure-key.cjs');
+
+// Isolated profile for test runs of a packaged build; never set for normal users.
+const USER_DATA_OVERRIDE = (process.env.ATTENDANCE_USER_DATA_DIR || '').trim();
+if (USER_DATA_OVERRIDE) {
+  app.setPath('userData', path.resolve(USER_DATA_OVERRIDE));
+}
 
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.ELECTRON_DEV_URL || 'http://127.0.0.1:3000';
@@ -56,7 +68,16 @@ const SERVER_SECRET_DENYLIST = [
   'SMTP_USER',
   'SMTP_PASS',
   'SMTP_FROM',
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'CSC_LINK',
+  'CSC_KEY_PASSWORD',
+  'WIN_CSC_LINK',
+  'WIN_CSC_KEY_PASSWORD',
 ];
+
+/** Time the local API gets to finish an in-flight attendance sync before a forced stop. */
+const API_SHUTDOWN_TIMEOUT_MS = 25_000;
 
 let mainWindow = null;
 /** @type {import('child_process').ChildProcess | null} */
@@ -146,14 +167,14 @@ function getDesktopDataDir() {
 }
 
 function resolveEnvFilePaths() {
-  const candidates = [];
-  candidates.push(getUserServerEnvPath());
-  if (!isDev) {
-    candidates.push(path.join(process.resourcesPath, 'server', '.env'));
-  }
-  candidates.push(path.join(__dirname, '..', 'server', '.env'));
-  candidates.push(path.join(__dirname, '..', '.env'));
-  return candidates;
+  // Installed builds read settings only from the per-user server.env so nothing
+  // from a developer machine or the install folder can leak into production.
+  if (!isDev) return [getUserServerEnvPath()];
+  return [
+    getUserServerEnvPath(),
+    path.join(__dirname, '..', 'server', '.env'),
+    path.join(__dirname, '..', '.env'),
+  ];
 }
 
 function parseEnvFile(text) {
@@ -178,7 +199,48 @@ function parseEnvFile(text) {
 }
 
 function generateEncryptionKey() {
-  return require('crypto').randomBytes(32).toString('hex');
+  return crypto.randomBytes(32).toString('hex');
+}
+
+/**
+ * Key for the stored attendance-machine password. Kept with Windows DPAPI
+ * (safeStorage); an older plaintext ENCRYPTION_KEY in server.env is migrated
+ * so existing saved device passwords keep working.
+ */
+function resolveDeviceCredentialKey(userEnvPath, legacyKey) {
+  try {
+    const result = loadDeviceCredentialKey({
+      safeStorage,
+      userDataDir: app.getPath('userData'),
+      legacyKey,
+      log: appendStartupLog,
+    });
+    if (result.osProtected) {
+      try {
+        stripPlaintextKeyFromEnvFile(userEnvPath, appendStartupLog);
+      } catch (err) {
+        appendStartupLog(`[SecureKey] Could not update server.env: ${err.message}`);
+      }
+    } else if (!isValidKey(legacyKey)) {
+      persistPlaintextKey(userEnvPath, result.key);
+    }
+    return result.key;
+  } catch (err) {
+    appendStartupLog(`[SecureKey] Protected key unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    if (isValidKey(legacyKey)) return legacyKey;
+    const key = generateEncryptionKey();
+    persistPlaintextKey(userEnvPath, key);
+    return key;
+  }
+}
+
+/** Fallback when OS protection is unavailable: keep the key so saved passwords survive restarts. */
+function persistPlaintextKey(userEnvPath, key) {
+  try {
+    fs.appendFileSync(userEnvPath, `ENCRYPTION_KEY=${key}\n`, 'utf8');
+  } catch (err) {
+    appendStartupLog(`[SecureKey] Could not persist fallback key: ${err.message}`);
+  }
 }
 
 /**
@@ -197,7 +259,7 @@ function ensureDesktopServerEnv() {
   const devEnvPath = path.join(__dirname, '..', 'server', '.env');
 
   let seedText = '';
-  if (fs.existsSync(devEnvPath)) {
+  if (isDev && fs.existsSync(devEnvPath)) {
     try {
       seedText = fs.readFileSync(devEnvPath, 'utf8');
       appendStartupLog(`[Electron] Seeding desktop server.env from ${devEnvPath}`);
@@ -219,22 +281,21 @@ function ensureDesktopServerEnv() {
   }
 
   const parsed = seedText ? parseEnvFile(seedText) : {};
-  if (!parsed.ENCRYPTION_KEY || parsed.ENCRYPTION_KEY.length !== 64) {
-    parsed.ENCRYPTION_KEY = generateEncryptionKey();
-  }
   parsed.DEVICE_SYNC_ENABLED = 'true';
   if (!parsed.DATABASE_URL && !parsed.DB_HOST) {
     parsed.USE_MEMORY_STORE = 'true';
   }
 
+  // ENCRYPTION_KEY is not written here: resolveDeviceCredentialKey() keeps it
+  // in OS-protected storage.
   const lines = [
     '# Auto-created by Attendance desktop on first launch.',
     '# Edit this file or replace it with your server/.env to share the same database.',
     `# Path: ${userEnvPath}`,
     '',
     `DEVICE_SYNC_ENABLED=${parsed.DEVICE_SYNC_ENABLED}`,
-    `ENCRYPTION_KEY=${parsed.ENCRYPTION_KEY}`,
   ];
+  if (isValidKey(parsed.ENCRYPTION_KEY)) lines.push(`ENCRYPTION_KEY=${parsed.ENCRYPTION_KEY}`);
   if (parsed.DB_HOST) lines.push(`DB_HOST=${parsed.DB_HOST}`);
   if (parsed.DB_PORT) lines.push(`DB_PORT=${parsed.DB_PORT}`);
   if (parsed.DB_NAME) lines.push(`DB_NAME=${parsed.DB_NAME}`);
@@ -260,7 +321,7 @@ function ensureDesktopServerEnv() {
 }
 
 function loadDesktopEnv() {
-  ensureDesktopServerEnv();
+  const userEnvPath = ensureDesktopServerEnv();
 
   const dataDir = getDesktopDataDir();
   try {
@@ -309,10 +370,8 @@ function loadDesktopEnv() {
   env.ATTENDANCE_DATA_DIR = dataDir;
   if (!env.DEVICE_SYNC_ENABLED) env.DEVICE_SYNC_ENABLED = 'true';
   if (!env.CORS_ORIGINS) env.CORS_ORIGINS = '*';
-  if (!env.ENCRYPTION_KEY || String(env.ENCRYPTION_KEY).length !== 64) {
-    env.ENCRYPTION_KEY = generateEncryptionKey();
-    appendStartupLog('[Electron] Generated ephemeral ENCRYPTION_KEY (server.env was incomplete)');
-  }
+  env.ENCRYPTION_KEY = resolveDeviceCredentialKey(userEnvPath, env.ENCRYPTION_KEY);
+  env.ATTENDANCE_APP_VERSION = app.getVersion();
 
   // The local server handles LAN devices only; email goes through the hosted
   // API. Drop any inherited mail credentials so they cannot be used or logged.
@@ -628,7 +687,8 @@ async function ensureApiServer() {
   apiProcess = spawn(command, args, {
     cwd,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    // IPC channel: graceful shutdown and sleep/resume notifications.
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
   });
   apiStartedByUs = true;
@@ -671,14 +731,63 @@ async function ensureApiServer() {
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     appendStartupLog(`[Electron] API startup failed: ${detail}`);
-    stopApiServer();
+    forceStopApiServer();
     throw new Error(`${detail}\n\nResolved entry: ${entry}\nPort: ${apiPort}\nLog: ${getApiLogPath()}`);
   }
 
   appendStartupLog(`[Electron] Local API ready at ${getLocalApiOrigin()}/api`);
 }
 
-function stopApiServer() {
+function sendToApi(message) {
+  const child = apiProcess;
+  if (!apiStartedByUs || !child || child.exitCode != null || !child.connected) return false;
+  try {
+    child.send(message);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @type {Promise<void> | null} */
+let apiShutdownPromise = null;
+
+/**
+ * Ask the local API to stop: it finishes an in-flight attendance sync, stops
+ * its timers and exits. Forced stop only if it does not exit in time.
+ */
+function shutdownApiServer(reason, timeoutMs = API_SHUTDOWN_TIMEOUT_MS) {
+  if (apiShutdownPromise) return apiShutdownPromise;
+  const child = apiProcess;
+  if (!apiStartedByUs || !child || child.exitCode != null) {
+    forceStopApiServer();
+    return Promise.resolve();
+  }
+  appendStartupLog(`[Electron] Stopping local API (${reason})`);
+  apiShutdownPromise = new Promise((resolve) => {
+    let settled = false;
+    const finish = (how) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      appendStartupLog(`[Electron] Local API stopped (${how})`);
+      closeApiLogStream();
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      forceStopApiServer();
+      finish('forced after timeout');
+    }, timeoutMs);
+    child.once('exit', () => finish('graceful'));
+    if (!sendToApi({ type: 'shutdown', reason })) {
+      forceStopApiServer();
+      finish('forced, no IPC channel');
+    }
+  });
+  return apiShutdownPromise;
+}
+
+function forceStopApiServer() {
   if (!apiStartedByUs || !apiProcess) {
     apiProcess = null;
     closeApiLogStream();
@@ -787,202 +896,59 @@ ipcMain.handle('desktop:get-local-api-origin', () => getLocalApiOrigin());
 
 ipcMain.handle('desktop:get-cloud-api-base-url', () => getCloudApiBaseUrl());
 
-/** @type {boolean} */
-let updateDownloadedPromptOpen = false;
-/** @type {boolean} */
-let autoUpdaterSetup = false;
-/** @type {boolean} */
-let launchUpdateCheckStarted = false;
-
-function setupAutoUpdater() {
-  // Never run updater wiring in unpackaged/dev sessions.
-  if (!app.isPackaged) {
-    appendStartupLog('[AutoUpdater] Skipping setup (app is not packaged)');
-    return;
-  }
-  if (autoUpdaterSetup) return;
-  autoUpdaterSetup = true;
-
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.allowDowngrade = false;
-
-  autoUpdater.setFeedURL({
-    provider: 'github',
-    owner: 'prabinknl',
-    repo: 'Desktop-Attendance',
-  });
-
-  const sendStatus = (status, data = {}) => {
-    // Log status keys only - never tokens, passwords, or full error stacks with secrets.
-    const safe = { ...data };
-    if (typeof safe.error === 'string') {
-      safe.error = safe.error.replace(/(gh[pousr]_|github_pat_|token)[^\s]+/gi, '[redacted]');
-    }
-    appendStartupLog(`[AutoUpdater] ${status} ${JSON.stringify(safe)}`);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('updater:status', { status, ...safe });
-    }
-  };
-
-  autoUpdater.on('checking-for-update', () => {
-    sendStatus('checking-for-update');
-  });
-
-  autoUpdater.on('update-available', (info) => {
-    sendStatus('update-available', {
-      version: info?.version,
-      releaseDate: info?.releaseDate,
-    });
-  });
-
-  autoUpdater.on('update-not-available', (info) => {
-    sendStatus('update-not-available', {
-      version: info?.version,
-    });
-  });
-
-  autoUpdater.on('error', (err) => {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    appendStartupLog(`[AutoUpdater Error] ${errorMsg}`);
-    sendStatus('error', { error: errorMsg });
-  });
-
-  autoUpdater.on('download-progress', (progressObj) => {
-    sendStatus('download-progress', {
-      bytesPerSecond: progressObj.bytesPerSecond,
-      percent: progressObj.percent,
-      transferred: progressObj.transferred,
-      total: progressObj.total,
-    });
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    sendStatus('update-downloaded', {
-      version: info?.version,
-      releaseDate: info?.releaseDate,
-    });
-    void promptInstallUpdate(info?.version);
-  });
-}
-
-/**
- * Native restart prompt after a successful download.
- * "Later" keeps the app running; autoInstallOnAppQuit installs on next quit.
- */
-async function promptInstallUpdate(version) {
-  if (updateDownloadedPromptOpen) return;
-  updateDownloadedPromptOpen = true;
-  try {
-    const detail = version ? `Version ${version} is ready.` : undefined;
-    const options = {
-      type: 'info',
-      title: 'Update Ready',
-      message:
-        'A new version of Attendance Desktop has been downloaded. Restart the application to install the update.',
-      detail,
-      buttons: ['Restart and Update', 'Later'],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    };
-    const { response } =
-      mainWindow && !mainWindow.isDestroyed()
-        ? await dialog.showMessageBox(mainWindow, options)
-        : await dialog.showMessageBox(options);
-    if (response === 0) {
-      appendStartupLog('[AutoUpdater] User chose Restart and Update');
-      setImmediate(() => {
-        try {
-          autoUpdater.quitAndInstall(false, true);
-        } catch (err) {
-          appendStartupLog(
-            `[AutoUpdater quitAndInstall error] ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      });
-    } else {
-      appendStartupLog(
-        '[AutoUpdater] User chose Later - update will install on quit when possible',
-      );
-    }
-  } catch (err) {
-    appendStartupLog(
-      `[AutoUpdater prompt error] ${err instanceof Error ? err.message : String(err)}`,
-    );
-  } finally {
-    updateDownloadedPromptOpen = false;
-  }
-}
-
-function checkAutoUpdateOnLaunch() {
-  if (!app.isPackaged) {
-    appendStartupLog('[AutoUpdater] Skipping auto update check (not packaged / development)');
-    return;
-  }
-  if (launchUpdateCheckStarted) return;
-  launchUpdateCheckStarted = true;
-  try {
-    appendStartupLog(
-      `[AutoUpdater] Checking GitHub Releases (current version ${app.getVersion()})...`,
-    );
-    // Non-blocking: network failures must never prevent the app from opening.
-    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-      appendStartupLog(`[AutoUpdater check error] ${err?.message || String(err)}`);
-    });
-  } catch (err) {
-    appendStartupLog(`[AutoUpdater launch error] ${err?.message || String(err)}`);
-  }
-}
+const updater = createUpdater({
+  log: appendStartupLog,
+  getWindow: () => mainWindow,
+  prepareForInstall: async () => {
+    isQuitting = true;
+    await shutdownApiServer('installing update');
+  },
+});
 
 ipcMain.handle('desktop:get-app-version', () => app.getVersion());
 
-ipcMain.handle('desktop:check-for-updates', async () => {
-  if (!app.isPackaged) {
-    return { status: 'dev-mode', version: app.getVersion(), isDev: true };
-  }
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    return { status: 'checking', version: app.getVersion(), updateInfo: result?.updateInfo };
-  } catch (err) {
-    return { status: 'error', error: err instanceof Error ? err.message : String(err) };
-  }
-});
+ipcMain.handle('desktop:get-update-state', () => updater.getState());
 
-ipcMain.handle('desktop:restart-and-install', () => {
-  if (!app.isPackaged) {
-    return { status: 'dev-mode' };
-  }
-  try {
-    autoUpdater.quitAndInstall(false, true);
-    return { status: 'installing' };
-  } catch (err) {
-    return { status: 'error', error: err instanceof Error ? err.message : String(err) };
-  }
-});
+ipcMain.handle('desktop:check-for-updates', () => updater.check());
+
+ipcMain.handle('desktop:restart-and-install', () => updater.restartAndInstall());
+
+let powerEventsWired = false;
+
+/** Tell the local API about sleep/resume so the device connection is re-verified promptly. */
+function wirePowerEvents() {
+  if (powerEventsWired) return;
+  powerEventsWired = true;
+  powerMonitor.on('suspend', () => {
+    appendStartupLog('[Electron] System suspending');
+    sendToApi({ type: 'system-suspend' });
+  });
+  const onResume = (kind) => () => {
+    appendStartupLog(`[Electron] System ${kind}`);
+    sendToApi({ type: 'system-resume' });
+  };
+  powerMonitor.on('resume', onResume('resumed'));
+  powerMonitor.on('unlock-screen', onResume('unlocked'));
+}
+
+let bootstrapped = false;
 
 async function bootstrap() {
+  if (bootstrapped) return;
+  bootstrapped = true;
   try {
     ensureLogsDir();
-    setupAutoUpdater();
-    // Start the GitHub update check shortly after ready — do not wait for API boot.
-    setTimeout(() => {
-      try {
-        checkAutoUpdateOnLaunch();
-      } catch (err) {
-        appendStartupLog(
-          `[AutoUpdater deferred error] ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }, 1500);
+    appendStartupLog(`[Electron] Attendance Desktop ${app.getVersion()} starting (userData ${app.getPath('userData')})`);
+    // Update checks never wait for, or block, the local API.
+    updater.start();
     await ensureApiServer();
+    wirePowerEvents();
     const startUrl = await resolveStartUrl();
     appendStartupLog(`[Electron] UI start URL: ${startUrl}`);
     appendStartupLog(
       '[Electron] Renderer API base: /api (same origin as UI)',
     );
     createWindow(startUrl);
-    checkAutoUpdateOnLaunch();
   } catch (err) {
     console.error('[Electron] Startup failed:', err);
     appendStartupLog(`[Electron] Startup failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1010,9 +976,12 @@ if (!gotLock) {
   app.whenReady().then(bootstrap);
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      bootstrap();
+    if (BrowserWindow.getAllWindows().length > 0) return;
+    if (!bootstrapped) {
+      void bootstrap();
+      return;
     }
+    void resolveStartUrl().then(createWindow);
   });
 }
 
@@ -1022,14 +991,26 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+let apiStoppedForQuit = false;
+
+app.on('before-quit', (event) => {
   isQuitting = true;
-  stopApiServer();
+  updater.stop();
+  if (apiStoppedForQuit) return;
+  if (apiStartedByUs && apiProcess && apiProcess.exitCode == null) {
+    // Let an in-flight attendance sync finish before exiting (and before any
+    // pending update installer replaces the files).
+    event.preventDefault();
+    void shutdownApiServer('app quit').finally(() => {
+      apiStoppedForQuit = true;
+      app.quit();
+    });
+  }
 });
 
 app.on('will-quit', () => {
   isQuitting = true;
-  stopApiServer();
+  forceStopApiServer();
 });
 
 app.on('web-contents-created', (_event, contents) => {

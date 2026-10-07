@@ -9,7 +9,22 @@ export const deviceQueryKeys = {
   device: ['device'] as const,
   status: ['device', 'status'] as const,
   logs: ['device', 'logs'] as const,
+  connection: ['device', 'connection'] as const,
 };
+
+/** Automatic-connection state; polls faster while a connection attempt is running. */
+export function useDeviceConnectionState(enabled = true) {
+  return useQuery({
+    queryKey: deviceQueryKeys.connection,
+    queryFn: () => deviceApi.getConnectionState(),
+    enabled,
+    refetchInterval: (query) => {
+      const phase = query.state.data?.phase;
+      return phase === 'connecting' || phase === 'discovering' || query.state.data?.busy ? 2_000 : 5_000;
+    },
+    retry: false,
+  });
+}
 
 /** Instant paint from last saved punches — do not wait for API/device. */
 export function cachedLogsForRange(range?: { from?: string; to?: string }): AttendanceLogEntry[] {
@@ -73,6 +88,7 @@ export function useDeviceMutations() {
     void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.device });
     void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.status });
     void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.logs });
+    void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.connection });
   };
 
   const connect = useMutation({
@@ -103,7 +119,7 @@ export function useDeviceMutations() {
   });
 
   const scan = useMutation({
-    mutationFn: () => deviceApi.scanNetwork(),
+    mutationFn: (opts?: { quick?: boolean }) => deviceApi.scanNetwork(opts),
   });
 
   const updateSyncSettings = useMutation({
@@ -128,8 +144,11 @@ export function useDeviceMutations() {
   });
 
   const reconnect = useMutation({
-    mutationFn: () => deviceApi.reconnect(),
-    onSuccess: invalidateAll,
+    mutationFn: (opts?: { force?: boolean }) => deviceApi.reconnect(opts),
+    onSuccess: () => {
+      invalidateAll();
+      void queryClient.invalidateQueries({ queryKey: deviceQueryKeys.connection });
+    },
   });
 
   return {

@@ -4,12 +4,12 @@ import { motion } from 'framer-motion';
 import {
   Building2, Clock, Calendar, Shield, Bell, Palette, Save,
   Upload, Plus, Trash2, CalendarPlus, FileUp, Cpu, ExternalLink,
-  Sparkles, RefreshCw, CheckCircle2, Info,
+  Sparkles, RefreshCw, CheckCircle2, Info, Copy,
 } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { useDateSettings } from '../../contexts/DateSettingsContext';
-import { HolidayAPI, EmployeeAPI } from '../../data/store';
+import { HolidayAPI, EmployeeAPI, AttendanceAPI, ShiftAPI } from '../../data/store';
 import { parseHolidayFile } from '../../lib/holidayImport';
 import {
   DEFAULT_APP_SETTINGS,
@@ -80,6 +80,7 @@ export default function SettingsPage() {
 
   const [appVersion, setAppVersion] = useState(FALLBACK_APP_VERSION);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [updateStatusMsg, setUpdateStatusMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -109,12 +110,29 @@ export default function SettingsPage() {
     setUpdateStatusMsg('Checking GitHub Releases for updates...');
     try {
       const res = await window.attendanceDesktop.checkForUpdates();
-      if (res.isDev) {
-        setUpdateStatusMsg('Development Mode: Auto-updater runs in production packaged app builds.');
-      } else if (res.status === 'error') {
-        setUpdateStatusMsg(`Check failed: ${res.error || 'Unknown error'}`);
-      } else {
-        setUpdateStatusMsg('Update check initiated in background. You will be notified if an update is found.');
+      switch (res.status) {
+        case 'dev-mode':
+          setUpdateStatusMsg('Development Mode: Auto-updater runs in production packaged app builds.');
+          break;
+        case 'error':
+          setUpdateStatusMsg(res.error || 'Update check failed. The app will try again later.');
+          break;
+        case 'update-not-available':
+          setUpdateStatusMsg(`You are on the latest version (${res.currentVersion ?? appVersion}).`);
+          break;
+        case 'update-available':
+        case 'download-progress':
+          setUpdateStatusMsg(
+            `Downloading version ${res.version ?? 'update'} in the background${
+              res.percent != null ? ` (${Math.round(res.percent)}%)` : ''
+            }.`,
+          );
+          break;
+        case 'update-downloaded':
+          setUpdateStatusMsg(`Version ${res.version ?? ''} is downloaded and ready. Use "Restart and Update" to install.`);
+          break;
+        default:
+          setUpdateStatusMsg('Update check started. You will be notified if an update is found.');
       }
     } catch (err: any) {
       setUpdateStatusMsg(`Check failed: ${err?.message || 'Error checking for update'}`);
@@ -135,11 +153,29 @@ export default function SettingsPage() {
         ...o,
         ...fallback,
         byDay,
-        workingDays: o.workingDays.includes(dayIdx)
-          ? o.workingDays
-          : [...o.workingDays, dayIdx].sort(),
+        workingDays: o.workingDays,
       };
     });
+  };
+
+  const copyHoursToAllWorkingDays = (sourceIdx: number) => {
+    const src = getDayOfficeHours(officeHours, sourceIdx);
+    setOfficeHours((o) => {
+      const byDay = { ...o.byDay };
+      for (const d of o.workingDays) {
+        byDay[d] = { ...src };
+      }
+      return {
+        ...o,
+        ...src,
+        byDay,
+      };
+    });
+    toast(
+      'info',
+      'Hours Copied',
+      `Copied ${DAY_LABELS[sourceIdx]} hours (${src.startTime} – ${src.endTime}) to all working days. Click Save Changes to save and apply to all records.`,
+    );
   };
 
   const toggleWorkingDay = (idx: number) => {
@@ -158,7 +194,7 @@ export default function SettingsPage() {
       const day = getDayOfficeHours(o, idx);
       return {
         ...o,
-        workingDays: [...o.workingDays, idx].sort(),
+        workingDays: [...o.workingDays, idx].sort((a, b) => a - b),
         byDay: { ...o.byDay, [idx]: day },
       };
     });
@@ -171,17 +207,41 @@ export default function SettingsPage() {
     }
   }, [activeTab]);
 
-  const handleSave = () => {
-    const payload: AppSettings = {
-      company,
-      officeHours,
-      attendanceRules,
-      notifications,
-      employeeOfficeHours,
-    };
-    saveAppSettings(payload);
-    setSettings(dateSettings);
-    toast('success', 'Settings Saved', 'Your settings have been saved and will persist after refresh.');
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const payload: AppSettings = {
+        company,
+        officeHours,
+        attendanceRules,
+        notifications,
+        employeeOfficeHours,
+      };
+      saveAppSettings(payload);
+      setSettings(dateSettings);
+
+      // 1. Sync default / general shift(s) with new office hours & working days
+      const updatedShifts = await ShiftAPI.syncWithOfficeHours(officeHours);
+
+      // 2. Recalculate & save all attendance records across the system
+      const updatedRecordsCount = await AttendanceAPI.recalculateWithSettings(
+        payload,
+        updatedShifts,
+        holidays,
+      );
+
+      toast(
+        'success',
+        'Settings Saved',
+        updatedRecordsCount > 0
+          ? `Settings saved and ${updatedRecordsCount} attendance record${updatedRecordsCount === 1 ? '' : 's'} updated with the new office hours.`
+          : 'Settings saved and applied to all records.',
+      );
+    } catch (err: any) {
+      toast('error', 'Save Failed', err?.message || 'Could not save settings.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const selectEmployeeForOffice = (empId: string) => {
@@ -199,27 +259,48 @@ export default function SettingsPage() {
     );
   };
 
-  const saveEmployeeOfficeOverride = () => {
+  const saveEmployeeOfficeOverride = async () => {
     if (!selectedEmpId || !empOfficeDraft) {
       toast('error', 'Select employee', 'Choose an employee to configure custom office hours.');
       return;
     }
     const emp = employees.find((e) => e.id === selectedEmpId);
-    setEmployeeOfficeHours((prev) => {
-      const next = { ...prev, [selectedEmpId]: { ...empOfficeDraft } };
-      // Also key by machine employeeId so attendance OT/LT resolves correctly
-      if (emp?.employeeId && emp.employeeId !== selectedEmpId) {
-        next[emp.employeeId] = { ...empOfficeDraft };
-      }
-      return next;
-    });
-    toast(
-      'success',
-      'Employee hours saved',
-      emp
-        ? `Custom office hours for ${emp.firstName} ${emp.lastName} updated. Click Save Changes to persist.`
-        : 'Custom office hours updated. Click Save Changes to persist.',
-    );
+    const nextOverrides = { ...employeeOfficeHours, [selectedEmpId]: { ...empOfficeDraft } };
+    // Also key by machine employeeId so attendance OT/LT resolves correctly
+    if (emp?.employeeId && emp.employeeId !== selectedEmpId) {
+      nextOverrides[emp.employeeId] = { ...empOfficeDraft };
+    }
+    setEmployeeOfficeHours(nextOverrides);
+
+    const payload: AppSettings = {
+      company,
+      officeHours,
+      attendanceRules,
+      notifications,
+      employeeOfficeHours: nextOverrides,
+    };
+    saveAppSettings(payload);
+
+    try {
+      const updatedCount = await AttendanceAPI.recalculateWithSettings(
+        payload,
+        undefined,
+        holidays,
+      );
+      toast(
+        'success',
+        'Employee hours saved',
+        emp
+          ? `Custom office hours for ${emp.firstName} ${emp.lastName} saved and applied to ${updatedCount} record(s).`
+          : 'Custom office hours saved and applied to records.',
+      );
+    } catch {
+      toast(
+        'success',
+        'Employee hours saved',
+        'Custom office hours saved. Click Save Changes to persist.',
+      );
+    }
   };
 
   const removeEmployeeOfficeOverride = (empId: string) => {
@@ -306,8 +387,9 @@ export default function SettingsPage() {
     <div className="max-w-4xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Settings</h1>
-        <button onClick={handleSave} className="btn-primary">
-          <Save size={16} /> Save Changes
+        <button onClick={handleSave} disabled={saving} className="btn-primary min-w-[130px] justify-center">
+          {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
+          {saving ? 'Saving & Applying…' : 'Save Changes'}
         </button>
       </div>
 
@@ -364,11 +446,24 @@ export default function SettingsPage() {
 
           {activeTab === 'office' && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Office Hours</h2>
-                <p className="text-sm text-slate-500 mt-1">
-                  Set start and end times for each day of the week. Attendance Dayhour / OT-LT uses that day’s hours.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">Office Hours</h2>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Set start and end times for each day of the week. Attendance Dayhour / OT-LT uses that day’s hours.
+                  </p>
+                </div>
+                {officeHours.workingDays.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => copyHoursToAllWorkingDays(officeHours.workingDays[0])}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-primary-700 dark:text-primary-300 bg-primary-50 dark:bg-primary-950/40 hover:bg-primary-100 dark:hover:bg-primary-900/50 border border-primary-200 dark:border-primary-800 transition-colors self-start sm:self-auto"
+                    title={`Copy ${DAY_LABELS[officeHours.workingDays[0]]} hours to all working days`}
+                  >
+                    <Copy size={13} />
+                    Apply {DAY_LABELS[officeHours.workingDays[0]]} to all working days
+                  </button>
+                )}
               </div>
 
               <div className="rounded-2xl border border-slate-200 dark:border-slate-700 overflow-hidden">

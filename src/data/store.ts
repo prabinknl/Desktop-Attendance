@@ -17,9 +17,17 @@ import type {
   Attendance, Department, Employee, LeaveRequest, PunchTimeRequest, Shift, Holiday,
   AttendanceStatus, LeaveStatus, PunchRequestStatus,
 } from '../types';
-import { generateId } from '../lib/utils';
+import { generateId, calcLateMinutes, getEffectiveAttendanceTimes } from '../lib/utils';
 import { buildHolidayMap, resolveDayOff } from '../lib/holidays';
+import {
+  type AppSettings,
+  resolveEmployeeSchedule,
+  getDayOfficeHours,
+  hoursBetween,
+  type OfficeHoursSettings,
+} from '../lib/appSettings';
 import { cloudAttendanceApi } from '../api/attendanceApi';
+import { attendanceIsShared, sharedAttendanceApi } from '../api/sharedAttendanceApi';
 import {
   cloudDepartmentApi, cloudEmployeeApi, cloudHolidayApi,
   cloudLeaveApi, cloudPunchRequestApi, cloudShiftApi,
@@ -84,8 +92,13 @@ function persistAttendanceStore() {
  */
 function syncRecordToCloud(record: Attendance) {
   cloudAttendanceApi.upsert(record).catch(() => {
-    /* server offline — localStorage copy is the fallback */
+    /* local server offline — localStorage copy is the fallback */
   });
+  if (attendanceIsShared()) {
+    sharedAttendanceApi.upsert(record).catch(() => {
+      /* shared server offline — this computer still has the row */
+    });
+  }
 }
 
 /**
@@ -93,6 +106,9 @@ function syncRecordToCloud(record: Attendance) {
  */
 function deleteRecordFromCloud(id: string) {
   cloudAttendanceApi.delete(id).catch(() => { /* offline */ });
+  if (attendanceIsShared()) {
+    sharedAttendanceApi.delete(id).catch(() => { /* offline */ });
+  }
 }
 
 function loadEmployeeStore(): Employee[] {
@@ -295,9 +311,14 @@ export async function hydratePersistedStores() {
     console.info('[Store] Cloud sync unavailable — using local data');
   }
 
-  // 3. Pull cloud attendance and merge (cloud wins for non-manual rows)
+  // 3. Pull attendance from this computer and from the shared server.
+  //    Shared rows are what other users see after they log in.
   try {
-    const cloudRecords = await cloudAttendanceApi.getAll();
+    const [localCloud, shared] = await Promise.all([
+      cloudAttendanceApi.getAll().catch(() => [] as Attendance[]),
+      attendanceIsShared() ? sharedAttendanceApi.getAll().catch(() => [] as Attendance[]) : Promise.resolve([] as Attendance[]),
+    ]);
+    const cloudRecords = [...localCloud, ...shared];
     if (cloudRecords.length > 0) {
       // Merge: keep manual-override local edits if newer, else use cloud
       const byKey = new Map<string, Attendance>();
@@ -742,6 +763,116 @@ export const AttendanceAPI = {
     syncRecordToCloud(created);
     return Promise.resolve(created);
   },
+
+  /**
+   * Recalculate late minutes, overtime, status, and remarks across ALL stored attendance records
+   * when company office hours / working days or employee overrides change.
+   * Persists to localStorage and syncs changed records to cloud.
+   */
+  recalculateWithSettings: (
+    settings: AppSettings,
+    customShifts?: Shift[],
+    customHolidays?: Holiday[],
+  ): Promise<number> => {
+    const holidays = customHolidays ?? holidayStore;
+    const holidayMap = buildHolidayMap(holidays);
+    const shifts = customShifts ?? shiftStore;
+    const shiftMap = Object.fromEntries(shifts.map((s) => [s.id, s]));
+    const empMap = new Map<string, Employee>();
+    for (const e of employeeStore) {
+      empMap.set(e.id, e);
+      empMap.set(e.employeeId, e);
+    }
+
+    const updatedRows: Attendance[] = [];
+
+    attendanceStore = attendanceStore.map((record) => {
+      // Don't touch approved leaves
+      if (record.status === 'on_leave') return record;
+
+      const emp = empMap.get(record.employeeId);
+      const shift = shiftMap[record.shiftId] ?? (emp ? shiftMap[emp.shiftId] : undefined);
+      const altIds = [emp?.id, emp?.employeeId].filter((id): id is string => Boolean(id) && id !== record.employeeId);
+
+      const schedule = resolveEmployeeSchedule(record.employeeId, shift, altIds, record.date, settings);
+      const dayOff = resolveDayOff(record.date, holidayMap, settings.officeHours.workingDays);
+
+      const eff = getEffectiveAttendanceTimes(record);
+      const effectiveIn = eff.effectiveIn;
+      const effectiveOut = eff.effectiveOut;
+      const workingHours = eff.workingHours;
+      const hasPunch = Boolean(effectiveIn || effectiveOut);
+
+      let newLateMinutes = record.lateMinutes;
+      let newOvertime = record.overtime;
+      let newStatus: AttendanceStatus = record.status;
+      let newRemarks = record.remarks;
+
+      if (dayOff.isDayOff) {
+        // Day off (Weekly off or Holiday)
+        if (hasPunch) {
+          newLateMinutes = 0; // No late penalty on an off day
+          newOvertime = workingHours; // Work on off-day is overtime
+          if (record.status === 'absent' || record.status === 'holiday') {
+            newStatus = 'present';
+          }
+          if (!newRemarks || newRemarks === 'Weekly off') newRemarks = dayOff.remark;
+        } else {
+          newLateMinutes = 0;
+          newOvertime = 0;
+          newStatus = 'holiday';
+          newRemarks = dayOff.remark;
+        }
+      } else {
+        // Working day
+        if (hasPunch && effectiveIn) {
+          newLateMinutes = calcLateMinutes(effectiveIn, schedule.shiftStart, schedule.graceMinutes);
+          newOvertime = Math.max(0, Math.round((workingHours - schedule.dayHours) * 100) / 100);
+          if (record.status === 'present' || record.status === 'late' || record.status === 'holiday') {
+            newStatus = newLateMinutes > 0 && settings.attendanceRules.latePolicy === 'mark_late' ? 'late' : 'present';
+          }
+          if (newRemarks === 'Weekly off') newRemarks = undefined;
+        } else if (!hasPunch) {
+          newLateMinutes = 0;
+          newOvertime = 0;
+          if (record.status === 'holiday') {
+            newStatus = 'absent';
+          }
+          if (newRemarks === 'Weekly off') newRemarks = undefined;
+        }
+      }
+
+      if (
+        record.lateMinutes !== newLateMinutes ||
+        record.overtime !== newOvertime ||
+        record.status !== newStatus ||
+        record.remarks !== newRemarks
+      ) {
+        const next: Attendance = {
+          ...record,
+          lateMinutes: newLateMinutes,
+          overtime: newOvertime,
+          status: newStatus,
+          remarks: newRemarks,
+          updatedAt: new Date().toISOString(),
+        };
+        updatedRows.push(next);
+        return next;
+      }
+      return record;
+    });
+
+    if (updatedRows.length > 0) {
+      persistAttendanceStore();
+      // Sync changed rows to cloud
+      cloudAttendanceApi.bulkUpsert(updatedRows).catch(() => {
+        updatedRows.forEach(syncRecordToCloud);
+      });
+      notifyAttendanceListeners();
+    }
+
+    return Promise.resolve(updatedRows.length);
+  },
 };
 
 // ─── Employee API ──────────────────────────────────────────────────────────────
@@ -1008,6 +1139,36 @@ export const ShiftAPI = {
     persistShiftStore();
     removeFromCloud(cloudShiftApi, id);
     return Promise.resolve();
+  },
+
+  /**
+   * Synchronize default / company shifts with the updated Office Hours settings.
+   */
+  syncWithOfficeHours: (officeHours: OfficeHoursSettings): Promise<Shift[]> => {
+    const workingDay = officeHours.workingDays[0] ?? 1;
+    const primary = getDayOfficeHours(officeHours, workingDay);
+    const dayHours = hoursBetween(primary.startTime, primary.endTime);
+
+    const updatedShifts = shiftStore.map((s) => {
+      // Synchronize primary default shift s1 or shifts named Morning / General / Standard / Regular
+      const isDefault =
+        s.id === 's1' ||
+        /morning|general|standard|regular|default/i.test(s.name);
+      if (!isDefault) return s;
+      return {
+        ...s,
+        startTime: primary.startTime,
+        endTime: primary.endTime,
+        graceMinutes: primary.graceMinutes,
+        workingHours: dayHours,
+        workingDays: [...officeHours.workingDays].sort((a, b) => a - b),
+      };
+    });
+
+    shiftStore = updatedShifts;
+    persistShiftStore();
+    updatedShifts.forEach(s => pushToCloud(cloudShiftApi, s));
+    return Promise.resolve([...shiftStore]);
   },
 };
 

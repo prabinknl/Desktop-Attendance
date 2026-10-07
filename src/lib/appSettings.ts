@@ -233,7 +233,7 @@ export function saveAppSettings(settings: AppSettings): void {
   );
 }
 
-function hoursBetween(start: string, end: string): number {
+export function hoursBetween(start: string, end: string): number {
   const [sh, sm] = start.split(':').map(Number);
   const [eh, em] = end.split(':').map(Number);
   let mins = eh * 60 + em - (sh * 60 + sm);
@@ -241,7 +241,7 @@ function hoursBetween(start: string, end: string): number {
   return Math.round((mins / 60) * 100) / 100;
 }
 
-function dayOfWeekFromDate(date?: string): number {
+export function dayOfWeekFromDate(date?: string): number {
   if (!date) return new Date().getDay();
   // Noon avoids DST / timezone edge cases for YYYY-MM-DD
   const d = new Date(`${date}T12:00:00`);
@@ -254,45 +254,62 @@ export function resolveEmployeeSchedule(
   shift?: { startTime: string; graceMinutes: number; workingHours: number; workingDays?: number[] },
   alternateIds: string[] = [],
   date?: string,
-): { shiftStart: string; graceMinutes: number; dayHours: number; source: 'employee' | 'company' | 'shift' } {
-  const app = getAppSettings();
+  customSettings?: AppSettings,
+): {
+  shiftStart: string;
+  graceMinutes: number;
+  dayHours: number;
+  source: 'employee' | 'company' | 'shift';
+  isWorkingDay: boolean;
+} {
+  const app = customSettings ?? getAppSettings();
   const ids = [employeeId, ...alternateIds].filter(Boolean);
   const override = ids.map((id) => app.employeeOfficeHours[id]).find((o) => o?.enabled);
   const dow = dayOfWeekFromDate(date);
+  const global = normalizeOfficeHours(app.officeHours);
 
   if (override?.enabled) {
+    const isWorking = override.workingDays?.length
+      ? override.workingDays.includes(dow)
+      : global.workingDays.includes(dow);
     return {
       shiftStart: override.startTime,
       graceMinutes: override.graceMinutes,
-      dayHours: hoursBetween(override.startTime, override.endTime),
+      dayHours: isWorking ? hoursBetween(override.startTime, override.endTime) : 0,
       source: 'employee',
+      isWorkingDay: isWorking,
     };
   }
 
-  const global = normalizeOfficeHours(app.officeHours);
+  const isWorking = global.workingDays.includes(dow);
   const day = getDayOfficeHours(global, dow);
   if (day.startTime && day.endTime) {
     return {
       shiftStart: day.startTime,
       graceMinutes: day.graceMinutes,
-      dayHours: hoursBetween(day.startTime, day.endTime),
+      dayHours: isWorking ? hoursBetween(day.startTime, day.endTime) : 0,
       source: 'company',
+      isWorkingDay: isWorking,
     };
   }
 
   if (shift) {
+    const shiftWorking = shift.workingDays?.length ? shift.workingDays.includes(dow) : isWorking;
     return {
       shiftStart: shift.startTime,
       graceMinutes: shift.graceMinutes,
-      dayHours: shift.workingHours,
+      dayHours: shiftWorking ? shift.workingHours : 0,
       source: 'shift',
+      isWorkingDay: shiftWorking,
     };
   }
 
   return {
     shiftStart: '09:00',
     graceMinutes: 15,
-    dayHours: 8,
+    dayHours: isWorking ? 8 : 0,
     source: 'company',
+    isWorkingDay: isWorking,
   };
 }
+

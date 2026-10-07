@@ -73,6 +73,50 @@ export interface DiscoveredDevice {
   macAddress: string;
   port: number;
   status: 'reachable' | 'unreachable';
+  serialNumber?: string;
+  firmwareVersion?: string;
+  /** false: the machine still needs first-time activation (SADP / iVMS-4200). */
+  activated?: boolean;
+  /** Hikvision DS-K… access-control / attendance terminal. */
+  compatible?: boolean;
+  discoveredBy?: Array<'sadp' | 'isapi'>;
+}
+
+export type ConnectionPhase =
+  | 'disabled'
+  | 'not_configured'
+  | 'needs_credentials'
+  | 'paused'
+  | 'connecting'
+  | 'discovering'
+  | 'online'
+  | 'offline'
+  | 'auth_failed'
+  | 'needs_selection';
+
+/** Automatic-connection status from GET /devices/connection (never contains secrets). */
+export interface DeviceConnectionState {
+  phase: ConnectionPhase;
+  message: string;
+  detail: string | null;
+  attempt: number;
+  nextRetryAt: string | null;
+  lastAttemptAt: string | null;
+  lastOnlineAt: string | null;
+  lastChangeAt: string;
+  deviceId: string | null;
+  deviceName: string | null;
+  ipAddress: string | null;
+  port: number | null;
+  model: string | null;
+  serialNumber: string | null;
+  macAddress: string | null;
+  firmwareVersion: string | null;
+  paired: boolean;
+  candidates: DiscoveredDevice[];
+  discoveryAt: string | null;
+  sadpAvailable: boolean | null;
+  busy: boolean;
 }
 
 export interface AttendanceLogEntry {

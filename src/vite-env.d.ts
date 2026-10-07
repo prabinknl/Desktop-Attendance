@@ -33,16 +33,27 @@ interface UpdateProgress {
 
 interface UpdateStatusPayload {
   status:
+    | 'idle'
+    | 'dev-mode'
     | 'checking-for-update'
     | 'update-available'
     | 'update-not-available'
     | 'download-progress'
     | 'update-downloaded'
+    | 'installing'
     | 'error';
+  currentVersion?: string;
+  /** Version being downloaded / ready to install. */
   version?: string;
+  /** Newest published version when already up to date. */
+  latestVersion?: string;
   releaseDate?: string;
   releaseNotes?: string | Array<{ version: string; note: string }>;
+  /** User-facing message; never contains tokens. */
   error?: string;
+  errorKind?: 'offline' | 'not-published' | 'other';
+  checkedAt?: string;
+  updatedAt?: string;
   bytesPerSecond?: number;
   percent?: number;
   transferred?: number;
@@ -58,14 +69,9 @@ interface AttendanceDesktopBridge {
   getCloudApiBaseUrl?: () => Promise<string>;
   readonly platform?: string;
   getAppVersion?: () => Promise<string>;
-  checkForUpdates?: () => Promise<{
-    status: string;
-    version?: string;
-    isDev?: boolean;
-    error?: string;
-    updateInfo?: unknown;
-  }>;
-  restartAndInstall?: () => Promise<void>;
+  getUpdateState?: () => Promise<UpdateStatusPayload>;
+  checkForUpdates?: () => Promise<UpdateStatusPayload>;
+  restartAndInstall?: () => Promise<{ status: string }>;
   onUpdateStatus?: (callback: (payload: UpdateStatusPayload) => void) => () => void;
 }
 

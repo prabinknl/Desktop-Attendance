@@ -20,6 +20,7 @@ import { useDateSettings } from '../../contexts/DateSettingsContext';
 import { AttendanceAPI, LeaveAPI } from '../../data/store';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { resolveEmployeeSchedule } from '../../lib/appSettings';
 
 const schema = z.object({
   employeeId: z.string().min(1, 'Employee is required'),
@@ -160,11 +161,12 @@ export default function AttendanceFormModal({
   }, [watchEmployee, employees, setValue]);
 
   const selectedShift = shifts.find(s => s.id === watchShift);
+  const schedule = resolveEmployeeSchedule(watchEmployee, selectedShift, [], watchDate);
   const effectiveIn = watchManualCheckIn || watchCheckIn;
   const effectiveOut = watchManualCheckOut || watchCheckOut;
   const workingHours = calcWorkingHours(effectiveIn, effectiveOut, watchBreak);
-  const lateMinutes = calcLateMinutes(effectiveIn, selectedShift?.startTime, selectedShift?.graceMinutes);
-  const overtime = calcOvertime(workingHours, selectedShift?.workingHours);
+  const lateMinutes = schedule.isWorkingDay ? calcLateMinutes(effectiveIn, schedule.shiftStart, schedule.graceMinutes) : 0;
+  const overtime = schedule.isWorkingDay ? calcOvertime(workingHours, schedule.dayHours) : workingHours;
 
   const onSubmit = async (data: FormData) => {
     const editorName = user?.name || user?.email || 'Admin';

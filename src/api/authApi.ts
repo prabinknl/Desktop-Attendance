@@ -175,7 +175,16 @@ export const authApi = {
     }
   },
 
-  bootstrapOwner: async (input: { name: string; email: string; password: string; setupCode?: string }) => {
+  sendOwnerSetupCode: async () => {
+    const { data } = await cloudClient.post<{ success: boolean; emailSent?: boolean; email?: string; message?: string }>(
+      '/auth/owner/send-code',
+      {},
+      { validateStatus: (s) => s === 200 || s === 409 || s === 429 || s === 503 },
+    );
+    return data;
+  },
+
+  bootstrapOwner: async (input: { name: string; email: string; password: string; setupCode?: string; verificationCode?: string }) => {
     const { data } = await cloudClient.post<{ success: boolean; code?: string; message?: string; data?: CloudUser }>(
       '/auth/owner/bootstrap',
       input,

@@ -12,10 +12,12 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { EmployeeAPI } from '../../data/store';
 import { deviceApi } from '../../api/deviceApi';
 import { authApi } from '../../api/authApi';
+import { OWNER_VERIFICATION_EMAIL } from '../../lib/ownerOtp';
 import { describeSmtpFailure } from '../../api/apiErrors';
 import { markClientAdminInviteAccepted, saveInvitedClientAdminAccount } from '../../lib/clientAdminInvite';
 import { upsertEmployeesFromDeviceLogs } from '../../lib/deviceEmployeeSync';
 import { cn } from '../../lib/utils';
+import { useAppVersion } from '../../hooks/useAppVersion';
 import type { Employee } from '../../types';
 
 type AuthMode = 'login' | 'signup-admin' | 'signup-employee' | 'signup-accountant' | 'signup-owner' | 'admin-credentials';
@@ -70,6 +72,7 @@ const ownerSignupSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters'),
   confirmPassword: z.string().min(8, 'Confirm your password'),
   setupCode: z.string().optional(),
+  verificationCode: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code'),
 }).refine((d) => d.password === d.confirmPassword, {
   message: 'Passwords do not match',
   path: ['confirmPassword'],
@@ -113,6 +116,7 @@ export default function LoginPage() {
   } = useAuth();
   const { toast } = useNotifications();
   const navigate = useNavigate();
+  const appVersion = useAppVersion();
 
   const [selectedRole, setSelectedRole] = useState<PortalRole | null>(null);
   const [authAction, setAuthAction] = useState<AuthAction>('login');
@@ -120,6 +124,7 @@ export default function LoginPage() {
   const [ownerMode, setOwnerMode] = useState<'intro' | 'code'>('intro');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [ownerCodeSending, setOwnerCodeSending] = useState(false);
   const [ownerSetup, setOwnerSetup] = useState<{ ownerExists: boolean; setupCodeRequired: boolean } | null>(null);
 
   const [adminStep, setAdminStep] = useState<AdminStep>('details');
@@ -172,7 +177,7 @@ export default function LoginPage() {
   });
   const ownerForm = useForm<OwnerSignupForm>({
     resolver: zodResolver(ownerSignupSchema),
-    defaultValues: { name: '', email: '', password: '', confirmPassword: '', setupCode: '' },
+    defaultValues: { name: '', email: '', password: '', confirmPassword: '', setupCode: '', verificationCode: '' },
   });
 
   const adminUserName = useMemo(() => {
@@ -671,6 +676,7 @@ export default function LoginPage() {
       email: data.email,
       password: data.password,
       setupCode: data.setupCode,
+      verificationCode: data.verificationCode,
     });
     setLoading(false);
     if (result.success || result.ownerExists) {
@@ -716,7 +722,7 @@ export default function LoginPage() {
           ? 'Review invitation details and enter your full name and password.'
           : `Enter the 6-digit verification code sent to ${verifiedInvitation?.invitedEmail || 'your email'}.`
       : mode === 'signup-owner'
-        ? 'Create an owner account, then sign in with your user name and password.'
+        ? `A verification code is sent to ${OWNER_VERIFICATION_EMAIL}. Enter it below to create the owner account.`
         : (mode === 'signup-employee' || mode === 'signup-accountant')
           ? 'Invitation link required from your Administrator.'
           : mode === 'admin-credentials' ? 'Save these details — use them to sign in.'
@@ -725,7 +731,7 @@ export default function LoginPage() {
               : selectedRole === 'owner'
                 ? authAction === 'login'
                   ? 'Log in with your owner account, or sign up if you do not have one yet.'
-                  : 'Create an owner account, then sign in with your user name and password.'
+                  : `A verification code is sent to ${OWNER_VERIFICATION_EMAIL}. Enter it below to create the owner account.`
                 : selectedRole
                   ? authAction === 'login'
                     ? 'Sign in to your account to continue'
@@ -748,6 +754,7 @@ export default function LoginPage() {
               alt="PACE Consultant (P.) Ltd."
               className="h-20 xl:h-28 w-auto object-contain"
             />
+            <p className="mt-2 text-xs font-medium text-slate-500">Version {appVersion}</p>
           </motion.div>
 
           <motion.div
@@ -841,6 +848,7 @@ export default function LoginPage() {
               alt="PACE Consultant (P.) Ltd."
               className="h-14 w-auto object-contain"
             />
+            <p className="mt-1 text-xs font-medium text-slate-500">Version {appVersion}</p>
           </div>
 
           <div className="mb-8">
@@ -878,7 +886,7 @@ export default function LoginPage() {
                   setMode('signup-owner');
                   setOwnerMode('intro');
                   setCreatedOwner(null);
-                  ownerForm.reset({ name: '', email: '', password: '', confirmPassword: '', setupCode: '' });
+                  ownerForm.reset({ name: '', email: '', password: '', confirmPassword: '', setupCode: '', verificationCode: '' });
                 }}
                 className="btn-primary w-full py-2.5 text-sm font-semibold"
               >
@@ -1121,6 +1129,46 @@ export default function LoginPage() {
                     />
                   </div>
                 )}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Verification code</label>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                    The code is emailed to {OWNER_VERIFICATION_EMAIL}.
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      {...ownerForm.register('verificationCode')}
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      placeholder="6-digit code"
+                      className={cn('input', ownerForm.formState.errors.verificationCode && 'border-rose-400')}
+                    />
+                    <button
+                      type="button"
+                      disabled={ownerCodeSending}
+                      onClick={async () => {
+                        setOwnerCodeSending(true);
+                        try {
+                          const sent = await authApi.sendOwnerSetupCode();
+                          if (sent.success && sent.emailSent) {
+                            toast('success', 'Code sent', `Check ${OWNER_VERIFICATION_EMAIL}.`);
+                          } else {
+                            toast('error', 'Code not sent', sent.message || 'Could not send the verification code.');
+                          }
+                        } catch (err) {
+                          toast('error', 'Code not sent', err instanceof Error ? err.message : 'Could not reach the server.');
+                        } finally {
+                          setOwnerCodeSending(false);
+                        }
+                      }}
+                      className="shrink-0 rounded-xl border border-slate-200 px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      {ownerCodeSending ? 'Sending...' : 'Send code'}
+                    </button>
+                  </div>
+                  {ownerForm.formState.errors.verificationCode && (
+                    <p className="text-xs text-rose-500 mt-1">{ownerForm.formState.errors.verificationCode.message}</p>
+                  )}
+                </div>
                 <button type="submit" disabled={loading} className="btn-primary w-full py-2.5 text-base font-semibold disabled:opacity-60">
                   {loading ? 'Creating account...' : 'Create owner account'}
                 </button>
