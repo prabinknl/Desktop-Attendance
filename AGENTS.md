@@ -4,6 +4,21 @@ globs: *
 alwaysApply: true
 ---
 
+# Desktop Attendance — local development
+
+This repository is the PACE attendance app: React + Vite on port 3000, an Express API on port 3002, an optional Windows Electron shell, and an optional LAN Hikvision gateway. Cloud Agents use the web app and API. They do not build the Windows installer.
+
+The environment start script starts PostgreSQL 16, creates `attendance_db`, and runs `npm run dev`.
+
+- Database URL: `postgresql://postgres:password@127.0.0.1:5432/attendance_db`. That matches the API default in `server/src/config/env.ts` when `DATABASE_URL` is unset.
+- `DEVICE_SYNC_ENABLED=false` so the API does not scan for an office Hikvision terminal. The gateway in `gateway/` needs a device on the office LAN and is not started here.
+- UI: http://127.0.0.1:3000 — API health: http://127.0.0.1:3002/api/health
+- Install from the repo root with `npm ci` (Node.js 20+). Tests: `npm test`. Production web build: `npm run build`.
+- `npm run lint` currently exits non-zero because of existing oxlint findings.
+- On the login page, Admin, Accountant, and Employee are the role buttons. Owner sign-in is a Ctrl+click or Cmd+click on the small "owner" label at the bottom of the hero. Without SMTP, development prints verification codes in the API log. The first Owner can be created from that flow while no Owner row exists.
+
+The notes below are generic InsForge SDK reference. This app's database is local PostgreSQL (or MySQL when `DB_HOST`, `DB_NAME`, and `DB_USER` are set). InsForge is an optional legacy fallback.
+
 # InsForge SDK Documentation - Overview
 
 ## What is InsForge?
